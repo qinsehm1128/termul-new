@@ -1,11 +1,16 @@
 import Foundation
 import Observation
+import UIKit
 
 private struct SavedLinkRecord: Codable {
     var id: UUID
     var title: String
     var origin: String
     var createdAt: Date
+    var deviceId: String? = nil
+    var deviceName: String? = nil
+    var scopes: [String]? = nil
+    var isRevoked: Bool? = nil
 }
 
 @MainActor
@@ -24,6 +29,9 @@ final class ConnectionStore {
     var surface: WorkspaceSurface = .chat
     var errorMessage: String?
     var isScanning = false
+    var isPairing = false
+    private var pairingGeneration = UUID()
+    private var pairingTargetID: UUID?
     /// A connected screen asked for a fresh pairing (its saved origin or its
     /// credential can no longer open the host). Transient: the home screen
     /// consumes it by presenting the pairing sheet.
@@ -35,21 +43,63 @@ final class ConnectionStore {
 
     func connect(to raw: String) {
         do {
-            let link = try RemoteLink.parse(raw)
-            if let current = activeLink,
-               current.originHost == link.originHost,
-               current.pairingToken == link.pairingToken {
-                remember(current)
-                errorMessage = nil
-                return
+            let scanned = try RemoteLink.parse(raw)
+            // Explicit scans may rotate credentials. Leave the old workspace
+            // intentionally (detach only, never kill its host PTYs) before opening
+            // the new grant; ordinary permission/revocation updates stay mounted.
+            if let current = activeLink {
+                if current.refersToSameHost(as: scanned) { pairingTargetID = current.id }
+                disconnect()
             }
-            remember(link)
-            errorMessage = nil
-            surface = .chat
-            activeLink = link
+            Task {
+                do { _ = try await connectScanned(scanned) }
+                catch { errorMessage = error.localizedDescription }
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// The code is consumed before any record or session sees it.
+    @discardableResult
+    func connectScanned(_ link: RemoteLink, surface: WorkspaceSurface = .chat) async throws -> RemoteLink {
+        guard !isPairing else { throw PairingExchangeError.failed }
+        isPairing = true
+        let generation = UUID()
+        pairingGeneration = generation
+        defer { if pairingGeneration == generation { isPairing = false } }
+        var name = UIDevice.current.name
+        while name.utf8.count > 128 { name.removeLast() }
+        if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { name = "iOS" }
+        let targetID = pairingTargetID
+        var ready = try await PairingClient().exchange(link: link, name: name)
+        try Task.checkCancellation()
+        guard pairingGeneration == generation else { throw CancellationError() }
+        if let target = savedLinks.first(where: { $0.id == targetID }) {
+            ready = target.adoptingRescan(ready)
+        }
+        pairingTargetID = nil
+        return connect(link: ready, surface: surface)
+    }
+
+    func cancelPairing() {
+        pairingGeneration = UUID()
+        pairingTargetID = nil
+        isPairing = false
+    }
+
+    /// Erase disk credentials but keep the mounted session until the user rescans.
+    func revoke(origin: String) {
+        for index in savedLinks.indices where savedLinks[index].originURL.absoluteString == origin {
+            var link = savedLinks[index]
+            link.bearer = nil
+            link.accessURL = link.originURL
+            link.pairCode = nil
+            link.isRevoked = true
+            savedLinks[index] = link
+            KeychainStore.deleteBearer(account: link.id.uuidString)
+        }
+        persist()
     }
 
     /// Returns the saved record the session dials. A rescan of a host that moved
@@ -58,6 +108,10 @@ final class ConnectionStore {
     @discardableResult
     func connect(link: RemoteLink, surface: WorkspaceSurface = .chat) -> RemoteLink {
         let stored = remember(link)
+        guard !stored.isRevoked else {
+            requestRePairing(hostID: stored.id)
+            return stored
+        }
         errorMessage = nil
         self.surface = surface
         activeLink = stored
@@ -74,7 +128,8 @@ final class ConnectionStore {
     /// Used instead of a bare retry when the saved origin no longer reaches the
     /// host or the host refuses this device's credential: only a fresh scan can
     /// supply the other origin or the new credential.
-    func requestRePairing() {
+    func requestRePairing(hostID: UUID? = nil) {
+        pairingTargetID = hostID ?? activeLink?.id
         disconnect()
         errorMessage = nil
         pairingRequested = true
@@ -139,7 +194,7 @@ final class ConnectionStore {
         rescan link: RemoteLink,
         into saved: [RemoteLink]
     ) -> (stored: RemoteLink, saved: [RemoteLink]) {
-        let stored = saved.first { $0.refersToSameHost(as: link) }?.adoptingRescan(link) ?? link
+        let stored = saved.first { $0.id == link.id || $0.refersToSameHost(as: link) }?.adoptingRescan(link) ?? link
         let remaining = saved.filter { candidate in
             candidate.id != stored.id
                 && !candidate.refersToSameHost(as: stored)
@@ -150,14 +205,18 @@ final class ConnectionStore {
 
     private func persist() {
         let records = savedLinks.map { link in
-            if let token = link.pairingToken, !token.isEmpty {
+            if !link.isRevoked, let token = link.pairingToken, !token.isEmpty {
                 KeychainStore.saveBearer(token, account: link.id.uuidString)
+            } else {
+                KeychainStore.deleteBearer(account: link.id.uuidString)
             }
             return SavedLinkRecord(
                 id: link.id,
                 title: link.title,
                 origin: link.savedOrigin,
-                createdAt: link.createdAt
+                createdAt: link.createdAt,
+                deviceId: link.deviceId, deviceName: link.deviceName,
+                scopes: link.scopes, isRevoked: link.isRevoked
             )
         }
         guard let data = try? JSONEncoder().encode(records) else { return }
@@ -174,17 +233,16 @@ final class ConnectionStore {
             }
             return records.compactMap { record in
                 guard let origin = URL(string: record.origin) else { return nil }
-                guard let bearer = KeychainStore.loadBearer(account: record.id.uuidString), !bearer.isEmpty else {
-                    HostLog.session.error("Saved desk is missing its pairing secret; skipping")
-                    return nil
-                }
-                return RemoteLink(
-                    id: record.id,
-                    title: record.title,
-                    accessURL: origin,
-                    bearer: bearer,
-                    createdAt: record.createdAt
+                let bearer = KeychainStore.loadBearer(account: record.id.uuidString)
+                var link = RemoteLink(
+                    id: record.id, title: record.title, accessURL: origin,
+                    bearer: bearer, createdAt: record.createdAt
                 )
+                link.deviceId = record.deviceId
+                link.deviceName = record.deviceName
+                link.scopes = record.scopes
+                link.isRevoked = record.isRevoked == true || bearer?.isEmpty != false
+                return link
             }
         }
         guard let legacy = try? JSONDecoder().decode([RemoteLink].self, from: data) else { return [] }
@@ -209,7 +267,9 @@ private enum ConnectionStorePlaceholder {
                 id: $0.id,
                 title: $0.title,
                 origin: $0.savedOrigin,
-                createdAt: $0.createdAt
+                createdAt: $0.createdAt,
+                deviceId: $0.deviceId, deviceName: $0.deviceName,
+                scopes: $0.scopes, isRevoked: $0.isRevoked
             )
         }
     }

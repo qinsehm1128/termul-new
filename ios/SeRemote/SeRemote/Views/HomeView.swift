@@ -81,6 +81,11 @@ struct HomeView: View {
                     .padding(.horizontal, 18)
                     .padding(.top, 4)
 
+                    if store.isPairing {
+                        ProgressView("Pairing device…")
+                            .font(SeNocturneType.font(12))
+                            .padding(.horizontal, 22)
+                    }
                     if let error = store.errorMessage {
                         SeErrorBanner(message: error)
                             .padding(.horizontal, 18)
@@ -276,9 +281,16 @@ struct HomeView: View {
     }
 
     private func connectPendingLink() {
-        guard let link = pendingLink else { return }
+        guard let link = pendingLink else { store.cancelPairing(); return }
         pendingLink = nil
-        open(link)
+        Task {
+            do {
+                let stored = try await store.connectScanned(link)
+                activity.recordOpen(stored)
+            } catch {
+                store.errorMessage = error.localizedDescription
+            }
+        }
     }
 
     private func consumePairingRequest() {

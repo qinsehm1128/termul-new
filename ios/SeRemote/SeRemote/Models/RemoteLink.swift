@@ -13,6 +13,12 @@ struct RemoteLink: Identifiable, Hashable, Codable {
     var title: String
     var accessURL: URL
     var bearer: String?
+    var deviceId: String? = nil
+    var deviceName: String? = nil
+    var scopes: [String]? = nil
+    var isRevoked = false
+    /// One-time code: never encoded or saved to Keychain.
+    var pairCode: String? = nil
     var createdAt: Date
 
     init(id: UUID = UUID(), title: String? = nil, accessURL: URL, bearer: String? = nil, createdAt: Date = .now) {
@@ -21,6 +27,7 @@ struct RemoteLink: Identifiable, Hashable, Codable {
         self.accessURL = RemoteLink.attaching(token: bearer ?? RemoteLink.accessToken(in: accessURL), to: accessURL)
         self.bearer = bearer ?? RemoteLink.accessToken(in: self.accessURL)
         self.createdAt = createdAt
+        self.pairCode = Self.fragmentValue("pair", in: accessURL.fragment)
     }
 
     var originHost: String {
@@ -85,13 +92,19 @@ struct RemoteLink: Identifiable, Hashable, Codable {
     /// become the ones that were just scanned.
     func adoptingRescan(_ fresh: RemoteLink) -> RemoteLink {
         let userNamed = title != RemoteLink.displayTitle(for: accessURL)
-        return RemoteLink(
+        var merged = RemoteLink(
             id: id,
             title: userNamed && !fresh.title.isEmpty ? title : fresh.title,
             accessURL: fresh.accessURL,
-            bearer: fresh.pairingToken,
+            bearer: fresh.deviceId != nil ? fresh.pairingToken : (deviceId != nil ? pairingToken : fresh.pairingToken ?? pairingToken),
             createdAt: createdAt
         )
+        merged.deviceId = fresh.deviceId ?? deviceId
+        merged.deviceName = fresh.deviceName ?? deviceName
+        merged.scopes = fresh.scopes ?? scopes
+        merged.isRevoked = fresh.deviceId != nil ? false : isRevoked
+        merged.pairCode = fresh.pairCode
+        return merged
     }
 
     func url(for surface: WorkspaceSurface) -> URL {
@@ -111,7 +124,7 @@ struct RemoteLink: Identifiable, Hashable, Codable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, title, accessURL, accessURLString, bearer, createdAt
+        case id, title, accessURL, accessURLString, bearer, createdAt, deviceId, deviceName, scopes, isRevoked
     }
 
     init(from decoder: Decoder) throws {
@@ -128,16 +141,30 @@ struct RemoteLink: Identifiable, Hashable, Codable {
         let storedBearer = try container.decodeIfPresent(String.self, forKey: .bearer)
         accessURL = RemoteLink.attaching(token: storedBearer ?? RemoteLink.accessToken(in: raw), to: raw)
         bearer = storedBearer ?? RemoteLink.accessToken(in: accessURL)
+        deviceId = try container.decodeIfPresent(String.self, forKey: .deviceId)
+        deviceName = try container.decodeIfPresent(String.self, forKey: .deviceName)
+        scopes = try container.decodeIfPresent([String].self, forKey: .scopes)
+        isRevoked = try container.decodeIfPresent(Bool.self, forKey: .isRevoked) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(title, forKey: .title)
-        try container.encode(accessURL, forKey: .accessURL)
-        try container.encode(accessURL.absoluteString, forKey: .accessURLString)
+        var components = URLComponents(url: accessURL, resolvingAgainstBaseURL: false)
+        if let fragment = components?.fragment {
+            let retained = fragment.split(separator: "&").filter { !$0.hasPrefix("pair=") }.joined(separator: "&")
+            components?.fragment = retained.isEmpty ? nil : retained
+        }
+        let storedURL = components?.url ?? originURL
+        try container.encode(storedURL, forKey: .accessURL)
+        try container.encode(storedURL.absoluteString, forKey: .accessURLString)
         try container.encodeIfPresent(pairingToken, forKey: .bearer)
         try container.encode(createdAt, forKey: .createdAt)
+        try container.encodeIfPresent(deviceId, forKey: .deviceId)
+        try container.encodeIfPresent(deviceName, forKey: .deviceName)
+        try container.encodeIfPresent(scopes, forKey: .scopes)
+        try container.encode(isRevoked, forKey: .isRevoked)
     }
 
     /// Deep-link schemes this build owns, read out of its own `CFBundleURLTypes`
@@ -171,7 +198,7 @@ struct RemoteLink: Identifiable, Hashable, Codable {
         try parse(raw, fallbackToken: nil)
     }
 
-    private static func parse(_ raw: String, fallbackToken: String?) throws -> RemoteLink {
+    private static func parse(_ raw: String, fallbackToken: String?, fallbackPair: String? = nil) throws -> RemoteLink {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() else {
             throw RemoteLinkError.invalidURL
@@ -179,7 +206,7 @@ struct RemoteLink: Identifiable, Hashable, Codable {
         if deepLinkSchemes.contains(scheme) {
             return try parseDeepLink(url)
         }
-        return try parseAccessURL(url, fallbackToken: fallbackToken)
+        return try parseAccessURL(url, fallbackToken: fallbackToken, fallbackPair: fallbackPair)
     }
 
     private static func parseDeepLink(_ url: URL) throws -> RemoteLink {
@@ -187,6 +214,7 @@ struct RemoteLink: Identifiable, Hashable, Codable {
         let embedded = components?.queryItems?.first(where: { $0.name == "url" })?.value
         let queryToken = components?.queryItems?.first(where: { $0.name == "access_token" })?.value
         let outerToken = accessToken(inFragment: url.fragment)
+        let outerPair = fragmentValue("pair", in: url.fragment)
         guard let embedded, !embedded.isEmpty else {
             throw RemoteLinkError.invalidURL
         }
@@ -197,17 +225,17 @@ struct RemoteLink: Identifiable, Hashable, Codable {
         let fallbackToken = [queryToken, outerToken]
             .compactMap { $0 }
             .first { !$0.isEmpty }
-        var link = try parse(embedded, fallbackToken: fallbackToken)
+        var link = try parse(embedded, fallbackToken: fallbackToken, fallbackPair: outerPair)
         if link.pairingToken == nil, let token = queryToken ?? outerToken, !token.isEmpty {
             link = RemoteLink(id: link.id, title: link.title, accessURL: link.accessURL, bearer: token, createdAt: link.createdAt)
         }
-        guard let token = link.pairingToken, !token.isEmpty else {
+        guard link.pairCode != nil || link.pairingToken?.isEmpty == false else {
             throw RemoteLinkError.missingToken
         }
         return link
     }
 
-    private static func parseAccessURL(_ url: URL, fallbackToken: String? = nil) throws -> RemoteLink {
+    private static func parseAccessURL(_ url: URL, fallbackToken: String? = nil, fallbackPair: String? = nil) throws -> RemoteLink {
         guard let scheme = url.scheme?.lowercased(), let host = url.host(), !host.isEmpty else {
             throw RemoteLinkError.invalidURL
         }
@@ -215,13 +243,17 @@ struct RemoteLink: Identifiable, Hashable, Codable {
             throw RemoteLinkError.httpsRequired
         }
         let embeddedToken = accessToken(in: url).flatMap { $0.isEmpty ? nil : $0 }
-        guard let token = embeddedToken ?? fallbackToken, !token.isEmpty else {
+        let token = embeddedToken ?? fallbackToken
+        let pair = fragmentValue("pair", in: url.fragment).flatMap { $0.isEmpty ? nil : $0 } ?? fallbackPair
+        guard pair?.isEmpty == false || token?.isEmpty == false else {
             throw RemoteLinkError.missingToken
         }
         // HTTP is allowed for operator-shared pairing URLs (LAN or an HTTP
         // reverse tunnel). The bearer in the fragment is the access secret;
         // scheme is not a substitute for it.
-        return RemoteLink(accessURL: url, bearer: token)
+        var link = RemoteLink(accessURL: url, bearer: token)
+        link.pairCode = pair
+        return link
     }
 
     static func accessToken(in url: URL) -> String? {
@@ -233,11 +265,15 @@ struct RemoteLink: Identifiable, Hashable, Codable {
     }
 
     static func accessToken(inFragment fragment: String?) -> String? {
+        fragmentValue("access_token", in: fragment)
+    }
+
+    static func fragmentValue(_ key: String, in fragment: String?) -> String? {
         guard let fragment, !fragment.isEmpty else { return nil }
         let pairs = fragment.split(separator: "&")
         for pair in pairs {
             let parts = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
-            guard parts.count == 2, parts[0] == "access_token" else { continue }
+            guard parts.count == 2, parts[0] == Substring(key) else { continue }
             let raw = String(parts[1])
             return raw.removingPercentEncoding ?? raw
         }
