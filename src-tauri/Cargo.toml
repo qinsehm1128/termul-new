@@ -244,6 +244,14 @@ base64 = "0.22"
 cron = "0.17.0"
 chrono-tz = "0.10.4"
 
+# Remote desktop codecs (MIT OR Apache-2.0); native engines are target-gated below.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+# Apache-2.0 / MIT. Never resolve their Linux X11/Wayland backends for se-server.
+xcap = { version = "0.9.9", default-features = false }
+enigo = { version = "0.6.1", default-features = false }
+
 [dev-dependencies]
 se-foundation = { path = "crates/se-foundation", features = ["test-support"] }
 se-pty = { path = "crates/se-pty", features = ["test-support"] }
