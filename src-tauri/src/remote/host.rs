@@ -28,6 +28,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::Serialize;
 use tokio::process::Child;
@@ -41,6 +42,12 @@ use crate::web::auth::{DesktopCredentialLease, IngressProvenance};
 use crate::web::config::MAX_EVENT_LOG_CAPACITY;
 use crate::web::sink::WsRelaySink;
 use crate::web::{serve_router, ProjectRegistry, RemoteAccessAuthority, ServerConfig};
+
+/// How often the LAN-Origin watchdog re-reads the machine's LAN address.
+///
+/// Five seconds keeps the post-network-switch rejection window short without
+/// enumerating interfaces more than once per tick.
+const LAN_ORIGIN_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Which network interface(s) the in-process web server binds to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -228,6 +235,10 @@ struct RemoteServer {
     /// is reaped via `kill_on_drop` — the child is NOT held here directly,
     /// which keeps `status()` sync (no try_wait-across-`.await` dance).
     tunnel_watchdog: Option<tokio::task::JoinHandle<()>>,
+    /// Polls the machine's LAN address for the listener's lifetime and admits
+    /// the new `http://<ip>:<port>` Origin when the desktop changes networks.
+    /// `None` for loopback binds. Aborted on `stop()`/`Drop`.
+    lan_watchdog: Option<tokio::task::JoinHandle<()>>,
     /// Exactly one raw desktop credential generation, owned only while this
     /// server is active. The authority stores generation metadata + digest.
     credential_lease: Option<DesktopCredentialLease>,
@@ -287,6 +298,12 @@ impl RemoteServer {
 
 impl Drop for RemoteServer {
     fn drop(&mut self) {
+        // Stop the LAN-Origin watchdog first: it must not re-admit an Origin
+        // after `retire_credential` clears the set. Detaching it would also
+        // keep polling interfaces after the server is gone.
+        if let Some(handle) = self.lan_watchdog.take() {
+            handle.abort();
+        }
         self.retire_credential("drop");
         // Best-effort graceful shutdown on drop (e.g. app exit). Signal the
         // serve task to drain; the JoinHandle is left to the runtime to reap
@@ -680,12 +697,21 @@ impl RemoteServerState {
             tunnel_provider: None,
             tunnel_dead: None,
             tunnel_watchdog: None,
+            lan_watchdog: None,
             credential_lease: Some(pending_credential.into_lease()),
             authority: Arc::clone(&self.authority),
             publish_mode: crate::remote::PublishMode::Tunnel,
         });
         if bind_mode.is_lan_exposed() {
-            register_lan_origin(&self.authority, addr.port());
+            // Admit the current LAN Origin before the QR can advertise it, then
+            // keep following the address for as long as this listener lives.
+            refresh_lan_origin(&self.authority, addr.port());
+            if let Some(server) = slot.as_mut() {
+                server.lan_watchdog = Some(spawn_lan_origin_watchdog(
+                    Arc::clone(&self.authority),
+                    addr.port(),
+                ));
+            }
         }
         Ok(status)
     }
@@ -708,6 +734,17 @@ impl RemoteServerState {
 
     async fn stop_inner(&self, retire: bool) -> Result<RemoteStatus, String> {
         let _lifecycle = self.lifecycle.lock().await;
+        // Stop the LAN-Origin watchdog before the retirement below clears
+        // Origins, so a tick cannot re-admit an Origin for a generation that
+        // is about to be retired.
+        let lan_watchdog = {
+            let mut slot = self.inner.lock().unwrap();
+            slot.as_mut().and_then(|server| server.lan_watchdog.take())
+        };
+        if let Some(handle) = lan_watchdog {
+            handle.abort();
+            let _ = handle.await;
+        }
         let receipt = {
             let mut slot = self.inner.lock().unwrap();
             match slot.as_mut() {
@@ -960,9 +997,12 @@ impl RemoteServerState {
 }
 
 fn compose_running_status(server: &RemoteServer) -> RemoteStatus {
+    // The QR and the Origin policy must never disagree: admit the Origin for
+    // the address we are about to publish, in the same call. Otherwise a
+    // rescan after the desktop changes networks points the phone at an Origin
+    // `/ws` rejects (`FORBIDDEN`) until remote access is restarted.
     let lan_url = if server.bind_mode.is_lan_exposed() {
-        crate::remote::lan::discover_lan_ipv4()
-            .map(|ip| crate::remote::lan::lan_http_origin(ip, server.addr.port()))
+        refresh_lan_origin(&server.authority, server.addr.port())
     } else {
         None
     };
@@ -977,18 +1017,83 @@ fn compose_running_status(server: &RemoteServer) -> RemoteStatus {
     .with_publish_mode(server.publish_mode)
 }
 
-fn register_lan_origin(authority: &RemoteAccessAuthority, port: u16) {
-    if let Some(ip) = crate::remote::lan::discover_lan_ipv4() {
-        if let Ok(origin) = url::Url::parse(&crate::remote::lan::lan_http_origin(ip, port)) {
-            if let Err(error) = authority.set_public_origin(origin) {
-                log::warn!(
-                    target: "se_manager::remote::host",
-                    "operation=lan_origin_register stable_code=REJECTED error_kind={}",
-                    error.code()
-                );
+/// Admit `http://<ip>:<port>` as a LAN Origin.
+///
+/// Returns `Ok(true)` when it was newly admitted, `Ok(false)` when it was
+/// already allowed, and `Err(())` when the Origin is malformed or the policy
+/// rejected it.
+fn register_lan_ip(
+    authority: &RemoteAccessAuthority,
+    ip: std::net::Ipv4Addr,
+    port: u16,
+) -> Result<bool, ()> {
+    let origin = crate::remote::lan::lan_http_origin(ip, port);
+    let parsed = url::Url::parse(&origin).map_err(|_| ())?;
+    authority.register_lan_origin(parsed).map_err(|error| {
+        log::warn!(
+            target: "se_manager::remote::host",
+            "operation=lan_origin_refresh stable_code=REJECTED error_kind={}",
+            error.code()
+        );
+    })
+}
+
+/// Discover the machine's current LAN address, admit its Origin, and return
+/// the Origin string for publishing.
+///
+/// `None` when no LAN address is discoverable or admission failed: publishing
+/// a URL whose Origin the policy rejects would recreate the "rescan does not
+/// help" failure this exists to prevent.
+fn refresh_lan_origin(authority: &RemoteAccessAuthority, port: u16) -> Option<String> {
+    let ip = crate::remote::lan::discover_lan_ipv4()?;
+    match register_lan_ip(authority, ip, port) {
+        Ok(true) => {
+            // No IP, host name, or secret in this line — only that the Origin
+            // set followed the machine's current address.
+            log::info!(
+                target: "se_manager::remote::host",
+                "operation=lan_origin_refresh lifecycle_phase=register_origin stable_code=OK"
+            );
+            Some(crate::remote::lan::lan_http_origin(ip, port))
+        }
+        Ok(false) => Some(crate::remote::lan::lan_http_origin(ip, port)),
+        Err(()) => None,
+    }
+}
+
+/// Follow the machine's LAN address for as long as the listener lives and
+/// admit the new Origin when it changes.
+///
+/// `compose_running_status` already covers a status/QR poll, but a phone with
+/// a saved record reconnects without one; the watchdog closes that window.
+/// Old Origins stay admitted (bounded by
+/// [`crate::web::auth::MAX_LAN_ORIGINS`]) so an address that comes back keeps
+/// working.
+fn spawn_lan_origin_watchdog(
+    authority: Arc<RemoteAccessAuthority>,
+    port: u16,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut current = crate::remote::lan::discover_lan_ipv4();
+        let mut ticker = tokio::time::interval(LAN_ORIGIN_POLL_INTERVAL);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // The first tick is immediate; the address admitted at start is
+        // already current, so consume it without re-registering.
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            let discovered = crate::remote::lan::discover_lan_ipv4();
+            if discovered == current {
+                continue;
+            }
+            current = discovered;
+            // `None` (no usable interface) keeps the previous Origins: the
+            // network may come back with the same address.
+            if discovered.is_some() {
+                let _ = refresh_lan_origin(&authority, port);
             }
         }
-    }
+    })
 }
 
 fn reregister_published_origins(server: &RemoteServer) {
@@ -997,7 +1102,7 @@ fn reregister_published_origins(server: &RemoteServer) {
         let _ = server.authority.set_public_origin(origin);
     }
     if server.bind_mode.is_lan_exposed() {
-        register_lan_origin(&server.authority, port);
+        refresh_lan_origin(&server.authority, port);
     }
     if let Some(tunnel) = server.tunnel_url.as_deref() {
         if let Ok(origin) = url::Url::parse(tunnel) {
@@ -1080,6 +1185,104 @@ mod tests {
             RemoteBindMode::All.ingress_provenance(),
             IngressProvenance::PublicTunnel
         );
+    }
+
+    #[test]
+    fn lan_origin_refresh_admits_new_ip_and_rejects_unrelated_origins() {
+        use axum::http::HeaderValue;
+        use std::net::Ipv4Addr;
+
+        let authority = RemoteAccessAuthority::for_tests("bootstrap-token");
+        let port = 53231;
+        // The address the Canary published at start, then the address the Mac
+        // moved to after changing networks.
+        let old = Ipv4Addr::new(192, 168, 100, 71);
+        let new = Ipv4Addr::new(192, 168, 6, 105);
+
+        assert_eq!(register_lan_ip(&authority, old, port), Ok(true));
+        assert!(authority
+            .verify_origin(Some(&HeaderValue::from_static(
+                "http://192.168.100.71:53231"
+            )))
+            .is_ok());
+
+        // Rescan / status poll: the QR now names the new address, and the
+        // Origin policy must accept it in the same breath.
+        assert_eq!(register_lan_ip(&authority, new, port), Ok(true));
+        assert!(
+            authority
+                .verify_origin(Some(&HeaderValue::from_static(
+                    "http://192.168.6.105:53231"
+                )))
+                .is_ok(),
+            "a refreshed LAN origin must pass the /ws Origin policy"
+        );
+        // Old origins are retained, so an address that comes back still works.
+        assert!(authority
+            .verify_origin(Some(&HeaderValue::from_static(
+                "http://192.168.100.71:53231"
+            )))
+            .is_ok());
+
+        // Everything unrelated stays rejected: other IPs, other ports, other
+        // schemes, lookalike hosts, and loopback.
+        for rejected in [
+            "http://192.168.6.106:53231",
+            "http://192.168.6.105:53232",
+            "https://192.168.6.105:53231",
+            "http://192.168.6.105.evil.test:53231",
+            "http://localhost:53231",
+        ] {
+            assert!(
+                authority
+                    .verify_origin(Some(&HeaderValue::from_static(rejected)))
+                    .is_err(),
+                "{rejected} must still be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn lan_origin_window_is_bounded() {
+        use axum::http::HeaderValue;
+        use std::net::Ipv4Addr;
+
+        let authority = RemoteAccessAuthority::for_tests("bootstrap-token");
+        let port = 53231;
+        let count = crate::web::auth::MAX_LAN_ORIGINS;
+        let ips: Vec<Ipv4Addr> = (1..=count + 4)
+            .map(|last| Ipv4Addr::new(10, 0, 0, u8::try_from(last).unwrap()))
+            .collect();
+        for ip in &ips {
+            assert_eq!(register_lan_ip(&authority, *ip, port), Ok(true));
+        }
+        assert_eq!(
+            authority.allowed_origin_count(),
+            count,
+            "the LAN Origin window must not grow past its bound"
+        );
+        for (index, ip) in ips.iter().enumerate() {
+            let origin = format!("http://{ip}:{port}");
+            let value = HeaderValue::from_str(&origin).unwrap();
+            if index < ips.len() - count {
+                assert!(
+                    authority.verify_origin(Some(&value)).is_err(),
+                    "evicted origin {origin} must be rejected"
+                );
+            } else {
+                assert!(
+                    authority.verify_origin(Some(&value)).is_ok(),
+                    "retained origin {origin} must still pass"
+                );
+            }
+        }
+        // Re-registering an admitted origin is not a change and does not grow
+        // the set.
+        assert_eq!(
+            register_lan_ip(&authority, *ips.last().unwrap(), port),
+            Ok(false)
+        );
+        assert_eq!(authority.allowed_origin_count(), count);
     }
 
     #[test]

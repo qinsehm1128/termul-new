@@ -6,7 +6,7 @@
 //! constant time. Credentials, digests, authorization headers, URL fragments,
 //! and recovery provenance must never be logged here.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
 use std::io::Read;
 use std::net::{IpAddr, SocketAddr};
@@ -38,6 +38,14 @@ const FAILURE_STATE_TTL: Duration = Duration::from_secs(60);
 
 /// Process-wide bound for retained unauthenticated failure state.
 pub const MAX_AUTH_FAILURE_STATES: usize = 1024;
+
+/// Upper bound on remembered LAN `http://<ip>:<port>` Origins.
+///
+/// A laptop that changes networks (Wi-Fi → another Wi-Fi) publishes a new LAN
+/// Origin each time. Keeping a small most-recent window means an address that
+/// comes back keeps verifying while the allowlist cannot grow without bound
+/// over a long-running session.
+pub const MAX_LAN_ORIGINS: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteAuthoritySource {
@@ -455,6 +463,11 @@ impl FailureLimiter {
 pub struct RemoteAccessAuthority {
     credential: RwLock<CredentialState>,
     allowed_origins: RwLock<HashSet<String>>,
+    /// Most-recent-last window of the LAN Origins admitted through
+    /// [`RemoteAccessAuthority::register_lan_origin`]. Bounded by
+    /// [`MAX_LAN_ORIGINS`]; evicted entries are also removed from
+    /// `allowed_origins`. Lock order: `allowed_origins` before `lan_origins`.
+    lan_origins: RwLock<VecDeque<String>>,
     failures: Mutex<FailureLimiter>,
     ingress: RwLock<IngressProvenance>,
     generation_tx: watch::Sender<RemoteGenerationState>,
@@ -488,6 +501,7 @@ impl RemoteAccessAuthority {
                 source: RemoteAuthoritySource::Unconfigured,
             }),
             allowed_origins: RwLock::new(HashSet::new()),
+            lan_origins: RwLock::new(VecDeque::new()),
             failures: Mutex::new(FailureLimiter::default()),
             ingress: RwLock::new(IngressProvenance::LocalOperator),
             generation_tx,
@@ -509,6 +523,7 @@ impl RemoteAccessAuthority {
                 source: RemoteAuthoritySource::DesktopKeyring,
             }),
             allowed_origins: RwLock::new(HashSet::new()),
+            lan_origins: RwLock::new(VecDeque::new()),
             failures: Mutex::new(FailureLimiter::default()),
             ingress: RwLock::new(IngressProvenance::LocalOperator),
             generation_tx,
@@ -556,6 +571,7 @@ impl RemoteAccessAuthority {
                 source,
             }),
             allowed_origins: RwLock::new(HashSet::new()),
+            lan_origins: RwLock::new(VecDeque::new()),
             failures: Mutex::new(FailureLimiter::default()),
             ingress: RwLock::new(IngressProvenance::LocalOperator),
             generation_tx,
@@ -616,7 +632,7 @@ impl RemoteAccessAuthority {
         credential.digest = Some(digest(bearer.as_bytes()));
         let source = credential.source;
         drop(credential);
-        self.allowed_origins.write().clear();
+        self.clear_origins();
         *self.failures.lock() = FailureLimiter::default();
         let _ = self.generation_tx.send(RemoteGenerationState {
             generation,
@@ -705,7 +721,7 @@ impl RemoteAccessAuthority {
             }
         };
         if invalidated {
-            self.allowed_origins.write().clear();
+            self.clear_origins();
             *self.failures.lock() = FailureLimiter::default();
             let _ = self.generation_tx.send(RemoteGenerationState {
                 generation,
@@ -733,8 +749,7 @@ impl RemoteAccessAuthority {
             }
         };
         let origins_cleared = {
-            let mut origins = self.allowed_origins.write();
-            origins.clear();
+            self.clear_origins();
             generation_matched
         };
         *self.failures.lock() = FailureLimiter::default();
@@ -798,6 +813,62 @@ impl RemoteAccessAuthority {
         Ok(())
     }
 
+    /// Admit a LAN `http://<ip>:<port>` Origin, keeping a bounded
+    /// most-recent window of [`MAX_LAN_ORIGINS`] LAN Origins.
+    ///
+    /// A desktop that changes networks gets a new LAN Origin each time; without
+    /// this, `/ws` upgrades from the newly published QR are rejected by the
+    /// Origin policy until remote access is restarted. Older LAN Origins stay
+    /// admitted so an address that comes back still verifies, but the window
+    /// evicts (and de-allowlists) the oldest entry once it is full, so a
+    /// long-running host cannot accumulate Origins without limit.
+    ///
+    /// Returns `true` when the Origin was newly admitted and `false` when it
+    /// was already present (callers log only on change). Tunnel and loopback
+    /// Origins are registered through [`Self::set_public_origin`] and are not
+    /// part of this window.
+    pub fn register_lan_origin(&self, origin: Url) -> Result<bool, RemoteAuthError> {
+        let normalized = normalize_origin(&origin)?;
+        let (admitted, retained) = {
+            let mut allowed = self.allowed_origins.write();
+            let mut window = self.lan_origins.write();
+            let admitted = allowed.insert(normalized.clone());
+            if let Some(position) = window.iter().position(|entry| *entry == normalized) {
+                window.remove(position);
+            }
+            window.push_back(normalized);
+            while window.len() > MAX_LAN_ORIGINS {
+                if let Some(evicted) = window.pop_front() {
+                    allowed.remove(&evicted);
+                }
+            }
+            (admitted, window.len())
+        };
+        if admitted {
+            let generation = self.credential.read().generation;
+            log::info!(
+                target: "se_manager::web::auth",
+                "operation=lan_origin_register generation={} lifecycle_phase=register_origin stable_code=OK retained={}",
+                generation,
+                retained
+            );
+        }
+        Ok(admitted)
+    }
+
+    /// Clear every admitted Origin, including the bounded LAN window.
+    fn clear_origins(&self) {
+        self.allowed_origins.write().clear();
+        self.lan_origins.write().clear();
+    }
+
+    /// Number of Origins currently admitted, across all sources. Test-only:
+    /// production callers must not infer policy state from the count.
+    #[cfg(test)]
+    pub(crate) fn allowed_origin_count(&self) -> usize {
+        self.allowed_origins.read().len()
+    }
+
     pub fn set_allowed_origins<I>(&self, origins: I) -> Result<(), RemoteAuthError>
     where
         I: IntoIterator<Item = Url>,
@@ -810,6 +881,8 @@ impl RemoteAccessAuthority {
             return Err(RemoteAuthError::InvalidOrigin);
         }
         *self.allowed_origins.write() = normalized;
+        // A wholesale replacement supersedes the incremental LAN window.
+        self.lan_origins.write().clear();
         Ok(())
     }
 
@@ -1815,6 +1888,35 @@ mod tests {
             authority.verify_ws_auth(TOKEN, Some(&wrong)).unwrap_err(),
             RemoteAuthError::InvalidOrigin
         );
+    }
+
+    #[test]
+    fn lan_origin_window_is_bounded_and_leaves_tunnel_origins_alone() {
+        let authority = RemoteAccessAuthority::for_tests(TOKEN);
+        authority
+            .set_public_origin(Url::parse("https://tunnel.example.test").unwrap())
+            .unwrap();
+        let last_lan = u8::try_from(MAX_LAN_ORIGINS + 3).unwrap();
+        for octet in 1..=last_lan {
+            let origin = Url::parse(&format!("http://10.0.0.{octet}:53231")).unwrap();
+            assert!(
+                authority.register_lan_origin(origin).unwrap(),
+                "each new LAN origin is a change"
+            );
+        }
+        // The tunnel origin is not part of the LAN window and survives the
+        // address churn; the window itself is capped.
+        assert!(authority
+            .verify_origin(Some(&HeaderValue::from_static(
+                "https://tunnel.example.test"
+            )))
+            .is_ok());
+        assert_eq!(authority.allowed_origin_count(), MAX_LAN_ORIGINS + 1);
+        // Re-registering an admitted origin is not a change and does not grow
+        // the set.
+        let again = Url::parse(&format!("http://10.0.0.{last_lan}:53231")).unwrap();
+        assert!(!authority.register_lan_origin(again).unwrap());
+        assert_eq!(authority.allowed_origin_count(), MAX_LAN_ORIGINS + 1);
     }
 
     #[test]
