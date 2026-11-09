@@ -4,6 +4,7 @@ import SwiftUI
 /// real host requests; every row reports the host outcome instead of optimistic
 /// state. Run now deliberately plays no success haptic.
 struct ScheduledTasksFeatureView: View {
+    @Environment(\.remoteDeviceLink) private var deviceLink
     @Environment(\.sePalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -153,7 +154,7 @@ struct ScheduledTasksFeatureView: View {
                 ) {
                     Task { await store.run(taskId: task.taskId) }
                 }
-                .disabled(isWorking)
+                .disabled(isWorking || !(deviceLink?.allows("agent.run") ?? true))
             }
 
             toggle(for: task)
@@ -170,7 +171,7 @@ struct ScheduledTasksFeatureView: View {
 
     private func toggle(for task: ScheduledTaskWire) -> some View {
         let isOn = task.status == .active
-        let canToggle = !isWorking && (task.status == .active || task.status == .paused)
+        let canToggle = (deviceLink?.allows("agent.run") ?? true) && !isWorking && (task.status == .active || task.status == .paused)
         return Button {
             Task {
                 switch task.status {

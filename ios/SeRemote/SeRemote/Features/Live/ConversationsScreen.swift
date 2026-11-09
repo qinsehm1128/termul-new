@@ -5,6 +5,7 @@ import SwiftUI
 /// real-permission/failure behaviour and disappears when nothing needs review.
 @MainActor
 struct ConversationsScreen: View {
+    @Environment(\.remoteDeviceLink) private var deviceLink
     @Bindable var session: WorkspaceSession
     let hostName: String
     let hostMeta: String
@@ -136,6 +137,7 @@ struct ConversationsScreen: View {
                 }
                 .buttonStyle(SePressable())
                 .accessibilityLabel(String(localized: "New session"))
+                .disabled(!(deviceLink?.allows("agent.run") ?? true))
             }
         }
     }
@@ -151,8 +153,10 @@ struct ConversationsScreen: View {
             onTap: { onOpenConversation(entry.conversation) }
         )
         .contextMenu {
-            Button("Rename", systemImage: "pencil") { beginRename(entry.conversation) }
-            Button("Delete", systemImage: "trash", role: .destructive) { deleting = entry.conversation }
+            if (deviceLink?.allows("agent.run") ?? true) {
+                Button("Rename", systemImage: "pencil") { beginRename(entry.conversation) }
+                Button("Delete", systemImage: "trash", role: .destructive) { deleting = entry.conversation }
+            }
         }
         .accessibilityHint(entry.agent.isEmpty
             ? entry.project
@@ -202,6 +206,7 @@ struct ConversationsScreen: View {
 
 /// New conversation = a real host ACP session in a real project directory.
 private struct NewConversationSheet: View {
+    @Environment(\.remoteDeviceLink) private var deviceLink
     @Bindable var session: WorkspaceSession
     let onStarted: () -> Void
     let onCancel: () -> Void
@@ -238,7 +243,7 @@ private struct NewConversationSheet: View {
                                 .opacity(starting ? 0.6 : 1)
                             }
                             .buttonStyle(.plain)
-                            .disabled(starting)
+                            .disabled(starting || !(deviceLink?.allows("agent.run") ?? true))
                         }
                     }
                 }
@@ -261,7 +266,7 @@ private struct NewConversationSheet: View {
     }
 
     private func start(in project: HostProject) {
-        guard !starting else { return }
+        guard (deviceLink?.allows("agent.run") ?? true), !starting else { return }
         starting = true
         Task {
             defer { starting = false }

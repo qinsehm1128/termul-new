@@ -7,8 +7,10 @@ import SwiftUI
 /// identity-stable: it is created once per terminal id and never recreated by
 /// mode switches, rotation, size-class changes or text-scale changes.
 struct TerminalWorkspaceView: View {
+    @Environment(\.remoteDeviceLink) private var deviceLink
     @Environment(\.sePalette) private var palette
     @Bindable var session: WorkspaceSession
+    private var allowsInput: Bool { (deviceLink?.allows("terminal.input") ?? true) }
     @State private var focusToken: UInt64 = 0
     @State private var textScale = TerminalTextScale.current
     @State private var scaleHud: String?
@@ -22,19 +24,21 @@ struct TerminalWorkspaceView: View {
             if let id = session.terminals.activeId {
                 terminalMeta
                 terminalCanvas(id: id)
-                TerminalInputDock(
-                    isEnabled: true,
-                    isKeyboardVisible: session.terminalKeyboardVisible,
-                    controlModifier: $controlModifier,
-                    onSend: sendTerminalInput,
-                    onFocusTerminal: {
-                        focusToken &+= 1
-                    },
-                    onDismissKeyboard: {
-                        session.dismissTerminalKeyboard()
-                    }
-                )
-                .padding(.bottom, 8)
+                if allowsInput {
+                    TerminalInputDock(
+                        isEnabled: true,
+                        isKeyboardVisible: session.terminalKeyboardVisible,
+                        controlModifier: $controlModifier,
+                        onSend: sendTerminalInput,
+                        onFocusTerminal: {
+                            focusToken &+= 1
+                        },
+                        onDismissKeyboard: {
+                            session.dismissTerminalKeyboard()
+                        }
+                    )
+                    .padding(.bottom, 8)
+                }
             } else {
                 SeEmptyState(
                     title: String(localized: "No live terminal"),
@@ -68,7 +72,7 @@ struct TerminalWorkspaceView: View {
             case .textScaleReset:
                 applyTextScale(TerminalTextScale.defaultValue)
             case .focusTerminal:
-                focusToken &+= 1
+                if allowsInput { focusToken &+= 1 }
             default:
                 break
             }
@@ -203,10 +207,11 @@ struct TerminalWorkspaceView: View {
     }
 
     private var canSpawnTerminal: Bool {
-        session.workspace == .conversation || session.workspace == .project
+        (deviceLink?.allows("terminal.create") ?? true) && (session.workspace == .conversation || session.workspace == .project)
     }
 
     private func sendTerminalInput(_ text: String) {
+        guard allowsInput else { return }
         let input = controlModifier.apply(to: text)
         Task { await session.terminals.write(input) }
     }

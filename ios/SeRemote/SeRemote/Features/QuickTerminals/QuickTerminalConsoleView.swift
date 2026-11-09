@@ -9,8 +9,10 @@ import SwiftUI
 /// Quick terminals pass the claim `open` returned; project terminals pass no
 /// claim and attach through the claim-free `watch` op instead.
 struct QuickTerminalConsoleView: View {
+    @Environment(\.remoteDeviceLink) private var deviceLink
     @Environment(\.sePalette) private var palette
 
+    private var allowsInput: Bool { (deviceLink?.allows("terminal.input") ?? true) }
     let session: WorkspaceSession
     let terminalId: String
     let claim: String?
@@ -79,15 +81,20 @@ struct QuickTerminalConsoleView: View {
                 // that also cost a row of terminal height. Keys stay directly
                 // above the keyboard, or at the bottom safe area when it is
                 // hidden, and the canvas keeps the freed height.
-                TerminalInputDock(
-                    isEnabled: viewer.isAttached && !viewer.hasExited,
-                    isKeyboardVisible: TerminalKeyboard.isVisible(keyboardHeight),
-                    showsCommandLine: false,
-                    controlModifier: $controlModifier,
-                    onSend: { text in viewer.send(controlModifier.apply(to: text)) },
-                    onFocusTerminal: { focusToken &+= 1 },
-                    onDismissKeyboard: { session.dismissTerminalKeyboard() }
-                )
+                if allowsInput {
+                    TerminalInputDock(
+                        isEnabled: viewer.isAttached && !viewer.hasExited,
+                        isKeyboardVisible: TerminalKeyboard.isVisible(keyboardHeight),
+                        showsCommandLine: false,
+                        controlModifier: $controlModifier,
+                        onSend: { text in
+                            guard allowsInput else { return }
+                            viewer.send(controlModifier.apply(to: text))
+                        },
+                        onFocusTerminal: { focusToken &+= 1 },
+                        onDismissKeyboard: { session.dismissTerminalKeyboard() }
+                    )
+                }
                 // No extra bottom inset: the dock's own padding already keeps the
                 // keys off the home indicator, and the freed 8 pt goes to rows.
             } else {
@@ -169,7 +176,10 @@ struct QuickTerminalConsoleView: View {
                 hostCols: viewer.cols,
                 lockToHostCols: viewer.locksToHostCols,
                 textScale: textScale,
-                onSend: { text in viewer.send(controlModifier.apply(to: text)) },
+                onSend: { text in
+                    guard allowsInput else { return }
+                    viewer.send(controlModifier.apply(to: text))
+                },
                 onResize: { cols, rows in viewer.resize(cols: cols, rows: rows) },
                 onReady: { feed in viewer.install(feed) },
                 onTextScaleChange: { scale, settled in

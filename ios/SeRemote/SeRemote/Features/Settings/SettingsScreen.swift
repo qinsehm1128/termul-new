@@ -10,6 +10,8 @@ struct SettingsScreen: View {
 
     @Environment(\.sePalette) private var palette
     @Environment(\.seThemeMode) private var mode
+    @Environment(\.remoteDeviceLink) private var deviceLink
+    private var permissionLink: RemoteLink? { deviceLink ?? store?.activeLink ?? store?.savedLinks.first }
     @State private var terminalTextScale = TerminalTextScale.current
     @State private var notificationDenied = false
     @State private var hostToForget: RemoteLink?
@@ -49,6 +51,34 @@ struct SettingsScreen: View {
                     Text("Notifications are not allowed. Enable them in iOS Settings to receive background alerts.")
                         .font(SeNocturneType.font(10))
                         .foregroundStyle(palette.warning)
+                        .padding(.horizontal, 18)
+                        .padding(.top, 8)
+                }
+
+                if let link = permissionLink {
+                    SeGroupLabel(title: String(localized: "Device access"), count: nil)
+                    SeGroupCard {
+                        SeRowItem(icon: .lock, title: String(localized: "Device name"),
+                                  detail: link.deviceName ?? String(localized: "This device")) {
+                            EmptyView()
+                        }
+                        if let scopes = link.scopes {
+                            if scopes.isEmpty {
+                                SeRowItem(title: String(localized: "No permissions granted")) { EmptyView() }
+                            } else {
+                                ForEach(Array(Set(scopes)).sorted(), id: \.self) { scope in
+                                    SeRowItem(title: DeviceScope.label(for: scope)) { EmptyView() }
+                                }
+                            }
+                        } else {
+                            SeRowItem(title: String(localized: "Legacy pairing"),
+                                      detail: String(localized: "No scope restrictions")) { EmptyView() }
+                        }
+                    }
+                    .padding(.horizontal, 18)
+                    Text("Permissions are managed on the host.")
+                        .font(SeNocturneType.font(10))
+                        .foregroundStyle(palette.inkTertiary)
                         .padding(.horizontal, 18)
                         .padding(.top, 8)
                 }

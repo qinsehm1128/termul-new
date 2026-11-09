@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct AgentConfigSheet: View {
+    @Environment(\.remoteDeviceLink) private var deviceLink
     @Bindable var session: WorkspaceSession
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
@@ -91,6 +92,7 @@ struct AgentConfigSheet: View {
                 }
             }
             .listStyle(.insetGrouped)
+            .disabled(!(deviceLink?.allows("agent.run") ?? true))
             .scrollContentBackground(.hidden)
             .background(SeTheme.canvas)
             .tint(SeTheme.accent)

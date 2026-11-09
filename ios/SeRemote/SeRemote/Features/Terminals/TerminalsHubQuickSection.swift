@@ -6,6 +6,7 @@ import SwiftUI
 /// offers the same create / rename / close / delete actions. Opening a record
 /// still asks the host for its claim and attaches the existing PTY.
 struct TerminalsHubQuickSection: View {
+    @Environment(\.remoteDeviceLink) private var deviceLink
     @Environment(\.sePalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -23,6 +24,8 @@ struct TerminalsHubQuickSection: View {
     @State private var notice: String?
 
     private var store: QuickTerminalStore { session.quickTerminals }
+    private var allowsCreation: Bool { (deviceLink?.allows("terminal.create") ?? true) }
+    private var allowsInput: Bool { (deviceLink?.allows("terminal.input") ?? true) }
 
     private var loaded: Bool {
         store.state == .loaded || store.state == .empty
@@ -149,16 +152,19 @@ struct TerminalsHubQuickSection: View {
             NocturneRunButton(title: String(localized: "Open"), systemImage: "arrow.up.forward.app") {
                 Task { await open(record) }
             }
-            .disabled(busy)
+            .disabled(busy || !allowsCreation)
 
             Menu {
                 Button(String(localized: "Rename"), systemImage: "pencil") { beginRename(record) }
+                    .disabled(!allowsCreation)
                 Button(String(localized: "Close shells"), systemImage: "xmark.circle") {
                     pending = TerminalsHubQuickDestruction(record: record, deleting: false)
                 }
+                .disabled(!allowsInput)
                 Button(String(localized: "Delete"), systemImage: "trash", role: .destructive) {
                     pending = TerminalsHubQuickDestruction(record: record, deleting: true)
                 }
+                .disabled(!allowsCreation)
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 14, weight: .regular))
@@ -206,7 +212,7 @@ struct TerminalsHubQuickSection: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(busy)
+        .disabled(busy || !allowsCreation)
     }
 
     private func meta(_ record: QuickTerminalRecordWire) -> String {
@@ -269,13 +275,14 @@ struct TerminalsHubQuickSection: View {
                                     .strokeBorder(palette.strokeStrong, lineWidth: 1)
                             }
                         Button(String(localized: "Create")) { Task { await create() } }
+                            .disabled(!allowsCreation)
                             .font(SeNocturneType.font(12, weight: .semibold))
                             .frame(maxWidth: .infinity, minHeight: NocturneToolMetrics.minimumTarget)
                             .foregroundStyle(palette.onAccent)
                             .background(palette.ink, in: RoundedRectangle(cornerRadius: NocturneToolMetrics.controlRadius))
                     }
                     .buttonStyle(.plain)
-                    .disabled(busy)
+                    .disabled(busy || !allowsCreation)
                 }
                 .padding(.horizontal, NocturneToolMetrics.gutter)
                 .padding(.bottom, 24)
@@ -325,7 +332,7 @@ struct TerminalsHubQuickSection: View {
     // MARK: - Actions
 
     private func create() async {
-        guard !busy else { return }
+        guard allowsCreation, !busy else { return }
         busy = true
         errorMessage = nil
         notice = nil
@@ -349,7 +356,7 @@ struct TerminalsHubQuickSection: View {
     }
 
     private func open(_ record: QuickTerminalRecordWire) async {
-        guard !busy else { return }
+        guard allowsCreation, !busy else { return }
         busy = true
         errorMessage = nil
         notice = nil
@@ -374,6 +381,7 @@ struct TerminalsHubQuickSection: View {
     }
 
     private func rename() {
+        guard allowsCreation else { return }
         guard let record = renaming else { return }
         renaming = nil
         Task {
@@ -392,6 +400,7 @@ struct TerminalsHubQuickSection: View {
     }
 
     private func destroy(_ item: TerminalsHubQuickDestruction) async {
+        guard item.deleting ? allowsCreation : allowsInput else { return }
         pending = nil
         busy = true
         errorMessage = nil

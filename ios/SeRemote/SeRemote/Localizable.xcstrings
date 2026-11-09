@@ -9958,6 +9958,266 @@
           }
         }
       }
+    },
+    "View host" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看主机"
+          }
+        }
+      }
+    },
+    "Terminal input" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "终端输入"
+          }
+        }
+      }
+    },
+    "Create terminals" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建终端"
+          }
+        }
+      }
+    },
+    "Run agents" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "运行 Agent"
+          }
+        }
+      }
+    },
+    "Write files" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写入文件"
+          }
+        }
+      }
+    },
+    "Git write" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Git 写入"
+          }
+        }
+      }
+    },
+    "View screen" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看屏幕"
+          }
+        }
+      }
+    },
+    "Control screen" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "控制屏幕"
+          }
+        }
+      }
+    },
+    "Manage host" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "管理主机"
+          }
+        }
+      }
+    },
+    "Additional permission" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "其他权限"
+          }
+        }
+      }
+    },
+    "Pairing code expired. Scan a new QR code on the host." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配对码已过期，请重新扫描主机上的二维码。"
+          }
+        }
+      }
+    },
+    "The host device limit has been reached." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机已达到设备数量上限。"
+          }
+        }
+      }
+    },
+    "Pairing failed. Try a new QR code on the host." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配对失败，请重新扫描主机上的二维码。"
+          }
+        }
+      }
+    },
+    "This device has been removed by the host" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此设备已被主机移除"
+          }
+        }
+      }
+    },
+    "Scan QR code again" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新扫码"
+          }
+        }
+      }
+    },
+    "Permission required: %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "缺少权限：%@"
+          }
+        }
+      }
+    },
+    "Pairing device…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在配对设备…"
+          }
+        }
+      }
+    },
+    "This device's access was revoked. Pair again to reconnect." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此设备已被主机移除，请重新扫码配对。"
+          }
+        }
+      }
+    },
+    "This device does not have permission for %@." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此设备没有%@权限。"
+          }
+        }
+      }
+    },
+    "Device access" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设备权限"
+          }
+        }
+      }
+    },
+    "Device name" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设备名称"
+          }
+        }
+      }
+    },
+    "This device" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此设备"
+          }
+        }
+      }
+    },
+    "No permissions granted" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未授予权限"
+          }
+        }
+      }
+    },
+    "Legacy pairing" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "旧版配对"
+          }
+        }
+      }
+    },
+    "No scope restrictions" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未限制权限"
+          }
+        }
+      }
+    },
+    "Permissions are managed on the host." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "权限由主机管理。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

@@ -4,6 +4,7 @@ import SwiftUI
 /// real host request; the screen never claims a run succeeded before the host
 /// reports it, and Run now plays no success haptic.
 struct ScheduledTaskDetailScreen: View {
+    @Environment(\.remoteDeviceLink) private var deviceLink
     @Environment(\.sePalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -149,19 +150,19 @@ struct ScheduledTaskDetailScreen: View {
                 NocturneRunButton(title: String(localized: "Run now"), systemImage: "play.fill") {
                     Task { await store.run(taskId: task.taskId) }
                 }
-                .disabled(isWorking)
+                .disabled(isWorking || !(deviceLink?.allows("agent.run") ?? true))
             }
             if task.status == .active {
                 NocturneRunButton(title: String(localized: "Pause"), systemImage: "pause.fill") {
                     Task { await store.pause(taskId: task.taskId, expectedRevision: task.revision) }
                 }
-                .disabled(isWorking)
+                .disabled(isWorking || !(deviceLink?.allows("agent.run") ?? true))
                 .accessibilityHint(String(localized: "Keeps run history."))
             } else if task.status == .paused {
                 NocturneRunButton(title: String(localized: "Resume"), systemImage: "play.circle") {
                     Task { await store.resume(taskId: task.taskId, expectedRevision: task.revision) }
                 }
-                .disabled(isWorking)
+                .disabled(isWorking || !(deviceLink?.allows("agent.run") ?? true))
                 .accessibilityHint(String(localized: "Continues from the next scheduled occurrence."))
             }
             Spacer(minLength: 0)

@@ -4,6 +4,7 @@ import SwiftUI
 /// compact add button. Terminal close has no host route on the phone, so the
 /// prototype's `x` is intentionally omitted rather than faked.
 struct TerminalTabStrip: View {
+    @Environment(\.remoteDeviceLink) private var deviceLink
     @Environment(\.sePalette) private var palette
     @Bindable var session: WorkspaceSession
 
@@ -68,6 +69,7 @@ struct TerminalTabStrip: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(Text("New Terminal"))
+                .disabled(!(deviceLink?.allows("terminal.create") ?? true))
                 .padding(.leading, 2)
             }
             .padding(.horizontal, 12)

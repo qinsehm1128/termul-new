@@ -7,6 +7,7 @@ import UIKit
 /// SwiftTerm host and the chat/files panes stay mounted across mode switches,
 /// rotation and size-class changes; only opacity/offset changes.
 struct SessionScreen: View {
+    @Environment(\.remoteDeviceLink) private var deviceLink
     @Bindable var session: WorkspaceSession
     var hostDirectory: AnyView? = nil
     var onBack: (() -> Void)? = nil
@@ -182,11 +183,13 @@ struct SessionScreen: View {
             Menu {
                 if session.workspace == .conversation {
                     Button("Agent", systemImage: "cpu") { session.chat.showAgentSheet = true }
+                        .disabled(!(deviceLink?.allows("agent.run") ?? true))
                 }
                 Button("Tools", systemImage: "wrench.and.screwdriver") { showTools = true }
                 Button("New terminal", systemImage: "plus") {
                     Task { await session.spawnTerminal() }
                 }
+                .disabled(!(deviceLink?.allows("terminal.create") ?? true))
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 14, weight: .semibold))
@@ -229,6 +232,7 @@ struct SessionScreen: View {
                 session.setWorkspaceTab(.files)
             }
         case .newTerminal:
+            guard (deviceLink?.allows("terminal.create") ?? true) else { return }
             Task { await session.spawnTerminal() }
         case .nextTerminal:
             cycleTerminal(forward: true)

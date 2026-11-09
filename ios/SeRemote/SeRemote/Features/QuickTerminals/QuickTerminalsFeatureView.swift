@@ -4,6 +4,7 @@ import SwiftUI
 /// Opening one attaches its existing host PTY in a full-screen console; the
 /// claim `open` returns is what the host's `attach` operation authorizes.
 struct QuickTerminalsFeatureView: View {
+    @Environment(\.remoteDeviceLink) private var deviceLink
     @Environment(\.sePalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -23,6 +24,8 @@ struct QuickTerminalsFeatureView: View {
     @State private var console: QuickTerminalConsoleRequest?
 
     private var store: QuickTerminalStore { session.quickTerminals }
+    private var allowsCreation: Bool { (deviceLink?.allows("terminal.create") ?? true) }
+    private var allowsInput: Bool { (deviceLink?.allows("terminal.input") ?? true) }
 
     var body: some View {
         NocturneToolScreen(
@@ -202,16 +205,19 @@ struct QuickTerminalsFeatureView: View {
             NocturneRunButton(title: String(localized: "Open"), systemImage: "arrow.up.forward.app") {
                 Task { await open(record) }
             }
-            .disabled(busy)
+            .disabled(busy || !allowsCreation)
 
             Menu {
                 Button(String(localized: "Rename"), systemImage: "pencil") { beginRename(record) }
+                    .disabled(!allowsCreation)
                 Button(String(localized: "Close shells"), systemImage: "xmark.circle") {
                     pending = QuickDestruction(record: record, deleting: false)
                 }
+                .disabled(!allowsInput)
                 Button(String(localized: "Delete"), systemImage: "trash", role: .destructive) {
                     pending = QuickDestruction(record: record, deleting: true)
                 }
+                .disabled(!allowsCreation)
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 14, weight: .regular))
@@ -258,6 +264,7 @@ struct QuickTerminalsFeatureView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(!allowsCreation)
     }
 
     private func meta(_ record: QuickTerminalRecordWire) -> String {
@@ -316,6 +323,7 @@ struct QuickTerminalsFeatureView: View {
                                     .strokeBorder(palette.strokeStrong, lineWidth: 1)
                             }
                         Button(String(localized: "Create")) { Task { await create() } }
+                            .disabled(!allowsCreation)
                             .font(SeNocturneType.font(12, weight: .semibold))
                             .frame(maxWidth: .infinity, minHeight: NocturneToolMetrics.minimumTarget)
                             .foregroundStyle(palette.onAccent)
@@ -372,7 +380,7 @@ struct QuickTerminalsFeatureView: View {
     // MARK: Actions
 
     private func create() async {
-        guard !busy else { return }
+        guard allowsCreation, !busy else { return }
         busy = true
         errorMessage = nil
         notice = nil
@@ -394,7 +402,7 @@ struct QuickTerminalsFeatureView: View {
     }
 
     private func open(_ record: QuickTerminalRecordWire) async {
-        guard !busy else { return }
+        guard allowsCreation, !busy else { return }
         busy = true
         errorMessage = nil
         notice = nil
@@ -419,6 +427,7 @@ struct QuickTerminalsFeatureView: View {
     }
 
     private func rename() {
+        guard allowsCreation else { return }
         guard let record = renaming else { return }
         renaming = nil
         Task {
@@ -437,6 +446,7 @@ struct QuickTerminalsFeatureView: View {
     }
 
     private func destroy(_ item: QuickDestruction) async {
+        guard item.deleting ? allowsCreation : allowsInput else { return }
         pending = nil
         busy = true
         errorMessage = nil

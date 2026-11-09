@@ -3,6 +3,9 @@ import SwiftUI
 import UIKit
 
 struct TerminalScreen: UIViewRepresentable {
+    @Environment(\.remoteDeviceLink) private var deviceLink
+    private var allowsInput: Bool { deviceLink?.allows("terminal.input") ?? true }
+
     var terminalId: String
     var buffered: Data
     var hostCols: Int
@@ -21,6 +24,8 @@ struct TerminalScreen: UIViewRepresentable {
 
     func makeUIView(context: Context) -> PhoneTerminalView {
         let view = PhoneTerminalView(frame: .zero)
+        view.allowsInput = allowsInput
+        context.coordinator.allowsInput = allowsInput
         view.terminalDelegate = context.coordinator
         view.inputAccessoryView = nil
         view.hostCols = hostCols
@@ -40,6 +45,8 @@ struct TerminalScreen: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: PhoneTerminalView, context: Context) {
+        uiView.allowsInput = allowsInput
+        context.coordinator.allowsInput = allowsInput
         context.coordinator.onSend = onSend
         context.coordinator.onResize = onResize
         context.coordinator.onTextScaleChange = onTextScaleChange
@@ -73,6 +80,7 @@ struct TerminalScreen: UIViewRepresentable {
         var onResize: (Int, Int) -> Void
         var onTextScaleChange: (CGFloat, Bool) -> Void
         var lastFocusToken: UInt64 = 0
+        var allowsInput = true
         var lastBlurToken: UInt64 = 0
         private var lastCols = 0
         private var lastRows = 0
@@ -109,6 +117,7 @@ struct TerminalScreen: UIViewRepresentable {
         func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
 
         func send(source: TerminalView, data: ArraySlice<UInt8>) {
+            guard allowsInput else { return }
             onSend(String(decoding: data, as: UTF8.self))
         }
 
@@ -135,6 +144,19 @@ struct TerminalScreen: UIViewRepresentable {
 
 /// Phone mode sizes the live grid to the viewport. Desktop mode fits host columns.
 final class PhoneTerminalView: TerminalView {
+    var allowsInput = true {
+        didSet {
+            if !allowsInput, isFirstResponder { resignFirstResponder() }
+        }
+    }
+
+    override var canBecomeFirstResponder: Bool { allowsInput && super.canBecomeFirstResponder }
+
+    override func paste(_ sender: Any?) {
+        guard allowsInput else { return }
+        super.paste(sender)
+    }
+
     var hostCols: Int = 80 {
         didSet {
             if hostCols != oldValue {

@@ -8,11 +8,13 @@ import SwiftUI
 /// transcript, streaming, permission acknowledgement and retry behavior stays
 /// owned by ChatStore; this view only renders and forwards intent.
 struct ChatView: View {
+    @Environment(\.remoteDeviceLink) private var deviceLink
     @Environment(\.sePalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Bindable var session: WorkspaceSession
+    private var allowsAgentRun: Bool { (deviceLink?.allows("agent.run") ?? true) }
     var embedded = false
     @State private var draft = ""
     @State private var isAtBottom = true
@@ -71,7 +73,9 @@ struct ChatView: View {
                     .padding(.bottom, SeSpace.xs)
             }
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) { composer }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if allowsAgentRun { composer }
+        }
         .background(palette.surface)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { containerWidth = $0 }
         .seHaptic(.send, trigger: sendHaptic)
@@ -106,7 +110,7 @@ struct ChatView: View {
             renderedTimeline = session.chat.timeline
         }
         .onReceive(ShortcutCenter.shortcuts) { shortcut in
-            if shortcut == .focusChat {
+            if shortcut == .focusChat && allowsAgentRun {
                 composerFocused = true
             }
         }
@@ -145,6 +149,7 @@ struct ChatView: View {
                             .id(item.id)
                     }
                     permissionCards
+                        .disabled(!allowsAgentRun)
                     if session.chat.isLoading {
                         ProgressView()
                             .frame(maxWidth: .infinity)
@@ -260,19 +265,19 @@ struct ChatView: View {
         case .user(let message):
             MessageBubble(
                 message: message,
-                onEdit: {
+                onEdit: allowsAgentRun ? {
                     draft = message.text
                     composerFocused = true
-                },
-                onRetry: {
+                } : nil,
+                onRetry: allowsAgentRun ? {
                     performSend { await session.chat.retry(message, in: session.conversations.active) }
-                }
+                } : nil
             )
         case .agent(let message):
             MessageBubble(
                 message: message,
                 agentName: session.chat.agentLabel,
-                onRetry: message.id == lastAgentId
+                onRetry: allowsAgentRun && message.id == lastAgentId
                     ? { performSend { await session.chat.regenerateLastTurn(in: session.conversations.active) } }
                     : nil
             )
@@ -298,7 +303,7 @@ struct ChatView: View {
             VStack(spacing: 12) {
                 ForEach(renderedPermissions) { card in
                     PermissionCardView(card: card, submission: session.chat.permissionSubmissions[card.id]) { option in
-                        guard session.chat.permissionSubmissions[card.id] != .submitting else { return }
+                        guard allowsAgentRun, session.chat.permissionSubmissions[card.id] != .submitting else { return }
                         Task {
                             let acknowledged = await session.chat.respond(permission: card, optionId: option)
                             guard let feedback = WorkspaceChatPresentation.acknowledgedPermissionFeedback(
@@ -318,7 +323,7 @@ struct ChatView: View {
                 }
                 ForEach(session.chat.questions) { card in
                     QuestionCardView(card: card, submission: session.chat.questionSubmissions[card.id]) { value in
-                        guard session.chat.questionSubmissions[card.id] != .submitting else { return }
+                        guard allowsAgentRun, session.chat.questionSubmissions[card.id] != .submitting else { return }
                         Task {
                             if await session.chat.answer(question: card, values: [value]) {
                                 cardHaptic = .success
@@ -376,6 +381,7 @@ struct ChatView: View {
     }
 
     private func performSend(_ action: @escaping @MainActor () async -> Void) {
+        guard allowsAgentRun else { return }
         let existing = Set(session.chat.messages.map(\.id))
         let conversationID = session.chat.activeSessionId
         sendRequested = true
