@@ -3706,6 +3706,15 @@ pub fn run() {
                 },
             )
             .map_err(std::io::Error::other)?;
+            #[cfg(desktop)]
+            match app
+                .handle()
+                .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+            {
+                Ok(()) => desktop_service.install_emergency_shortcut(app.handle().clone()),
+                Err(error) => log::warn!(target: "se_manager::remote::desktop",
+                    "operation=desktop_emergency_shortcut_init stable_code=SHORTCUT_FAILED error={error}; app-local emergency stop remains available"),
+            }
             app.manage(desktop_service);
             let remote_authority = Arc::new(provision_desktop_remote_authority()?);
             remote_authority.configure_device_store(

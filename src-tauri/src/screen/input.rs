@@ -203,10 +203,43 @@ enum Action {
     Text(String),
 }
 
+/// Per-controller revocation barrier, independent of the host consent generation.
+/// The optional principal check runs at the last possible point before every
+/// native call (including each character of a queued Text request).
+struct ControllerToken {
+    valid: Mutex<bool>,
+    authorized: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
+}
+impl ControllerToken {
+    fn new(authorized: Option<Arc<dyn Fn() -> bool + Send + Sync>>) -> Self {
+        Self {
+            valid: Mutex::new(true),
+            authorized,
+        }
+    }
+
+    fn emit<T>(&self, call: impl FnOnce() -> T) -> Result<T, ScreenError> {
+        let mut valid = self
+            .valid
+            .lock()
+            .map_err(|_| failed("controller token poisoned"))?;
+        if !*valid || self.authorized.as_ref().is_some_and(|check| !check()) {
+            *valid = false;
+            return Err(failed("desktop controller revoked"));
+        }
+        Ok(call())
+    }
+
+    fn invalidate(&self) {
+        *self.valid.lock().unwrap_or_else(|e| e.into_inner()) = false;
+    }
+}
+
 struct Request {
     display: String,
     action: Action,
     start: Instant,
+    token: Arc<ControllerToken>,
 }
 
 impl Request {
@@ -288,11 +321,19 @@ pub struct InputController {
     snapshot: Arc<Vec<DisplayInfo>>,
     generation: u64,
     worker: Option<JoinHandle<()>>,
+    token: Arc<ControllerToken>,
 }
 
 impl InputController {
     pub fn new() -> Result<Self, ScreenError> {
+        Self::with_authorization(None)
+    }
+
+    pub fn with_authorization(
+        authorized: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
+    ) -> Result<Self, ScreenError> {
         access()?;
+        let token = Arc::new(ControllerToken::new(authorized));
         let snapshot = Arc::new(list_displays()?);
         let queue = Arc::new(Queue::default());
         let generation = {
@@ -331,11 +372,12 @@ impl InputController {
                 snapshot,
                 generation,
                 worker: Some(worker),
+                token,
             })
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
-            let _ = (queue, snapshot, generation);
+            let _ = (queue, snapshot, generation, token);
             Err(ScreenError::Unsupported)
         }
     }
@@ -345,6 +387,7 @@ impl InputController {
             display: display.to_owned(),
             action,
             start: Instant::now(),
+            token: Arc::clone(&self.token),
         };
         let operation = request.operation();
         let start = request.start;
@@ -353,7 +396,7 @@ impl InputController {
             validate_display(&self.snapshot, &list_displays()?, display)?;
             let gate = global().lock().map_err(|_| failed("input gate poisoned"))?;
             gate.check(self.generation)?;
-            self.queue.push(request)
+            self.token.emit(|| self.queue.push(request))?
         })();
         if result.is_err() {
             audit(operation, start, &result);
@@ -417,16 +460,63 @@ impl InputController {
     }
 }
 
+impl InputController {
+    /// Synchronous, controller-local barrier: flush queued work without revoking
+    /// other devices or the host's consent generation.
+    pub fn invalidate(&self) {
+        let _gate = global().lock().unwrap_or_else(|e| e.into_inner());
+        self.queue.stop();
+        self.token.invalidate();
+    }
+}
+
 impl Drop for InputController {
     fn drop(&mut self) {
-        // Serialize cancellation with any in-flight native call before joining.
-        {
-            let _gate = global().lock().unwrap_or_else(|e| e.into_inner());
-            self.queue.stop();
-        }
+        self.invalidate();
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct InputTestProbe {
+    queue: Arc<Queue>,
+    token: Arc<ControllerToken>,
+}
+#[cfg(test)]
+impl InputTestProbe {
+    pub(crate) fn queued(&self) -> usize {
+        self.queue.pending.lock().unwrap().requests.len()
+    }
+    pub(crate) fn emit(&self) -> bool {
+        self.token.emit(|| ()).is_ok()
+    }
+}
+#[cfg(test)]
+impl InputController {
+    /// Exercise the real queue and native-call barrier without injecting OS input.
+    pub(crate) fn for_tests(
+        authorized: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
+    ) -> (Self, InputTestProbe) {
+        let queue = Arc::new(Queue::default());
+        let token = Arc::new(ControllerToken::new(authorized));
+        queue
+            .push(Request {
+                display: "old-display".into(),
+                action: Action::Text("queued text".repeat(100)),
+                start: Instant::now(),
+                token: token.clone(),
+            })
+            .unwrap();
+        let controller = Self {
+            queue: queue.clone(),
+            snapshot: Arc::new(vec![]),
+            generation: 0,
+            worker: None,
+            token: token.clone(),
+        };
+        (controller, InputTestProbe { queue, token })
     }
 }
 
@@ -575,7 +665,7 @@ mod native {
         queue: &Queue,
         snapshot: &[DisplayInfo],
         generation: u64,
-        display: &str,
+        request: &Request,
         cost: usize,
         call: impl FnOnce() -> enigo::InputResult<()>,
     ) -> Result<(), ScreenError> {
@@ -591,10 +681,18 @@ mod native {
                 return Err(failed("input worker stopped"));
             }
             access()?;
-            validate_display(snapshot, &list_displays()?, display)?;
+            validate_display(snapshot, &list_displays()?, &request.display)?;
             let delay = gate.limiter.delay(Instant::now(), cost);
             if delay.is_zero() {
-                let result = call().map_err(|_| failed("native desktop input failed"));
+                let result = match request.token.emit(call) {
+                    Ok(result) => result.map_err(|_| failed("native desktop input failed")),
+                    Err(error) => {
+                        // Principal revocation is controller-local, not a reason
+                        // for the worker to disarm every other controller.
+                        queue.stop();
+                        Err(error)
+                    }
+                };
                 // Timestamp after return: even a slow OS call cannot weaken the
                 // rolling-window guarantee. Failed/partial calls consume budget.
                 gate.limiter.record(Instant::now(), cost);
@@ -623,9 +721,7 @@ mod native {
         request: &Request,
     ) -> Result<(), ScreenError> {
         let mut send = |cost, call: &mut dyn FnMut(&mut Enigo) -> enigo::InputResult<()>| {
-            emit(queue, snapshot, generation, &request.display, cost, || {
-                call(enigo)
-            })
+            emit(queue, snapshot, generation, request, cost, || call(enigo))
         };
         match &request.action {
             Action::Pointer(u, v) => {
@@ -796,6 +892,7 @@ mod tests {
             snapshot: Arc::new(vec![display()]),
             generation: 0,
             worker: None,
+            token: Arc::new(ControllerToken::new(None)),
         };
         for count in [0, 4, u8::MAX] {
             assert!(controller
@@ -872,6 +969,7 @@ mod tests {
                 display: "retina".into(),
                 action: Action::Pointer(0.5, 0.5),
                 start: Instant::now(),
+                token: Arc::new(ControllerToken::new(None)),
             })
             .unwrap();
         gate.disarm();
@@ -884,7 +982,8 @@ mod tests {
             .push(Request {
                 display: "retina".into(),
                 action: Action::Click(MouseButton::Left, 1),
-                start: Instant::now()
+                start: Instant::now(),
+                token: Arc::new(ControllerToken::new(None)),
             })
             .is_err());
     }
@@ -939,6 +1038,37 @@ mod tests {
     }
 
     #[test]
+    fn invalidated_controller_token_blocks_dequeued_work() {
+        let (controller, probe) = InputController::for_tests(None);
+        let request = controller.queue.next().unwrap();
+        assert!(probe.emit());
+        controller.invalidate();
+        assert_eq!(probe.queued(), 0);
+        let emitted = std::sync::atomic::AtomicBool::new(false);
+        assert!(request
+            .token
+            .emit(|| emitted.store(true, std::sync::atomic::Ordering::SeqCst))
+            .is_err());
+        assert!(!emitted.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn principal_guard_stops_long_text_before_next_native_emit() {
+        let authorized = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let check = authorized.clone();
+        let (controller, probe) = InputController::for_tests(Some(Arc::new(move || {
+            check.load(std::sync::atomic::Ordering::SeqCst)
+        })));
+        assert!(probe.emit());
+        authorized.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(!probe.emit());
+        authorized.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(!probe.emit(), "scope regrant cannot revive the old token");
+        drop(controller);
+        assert_eq!(probe.queued(), 0);
+    }
+
+    #[test]
     fn pointer_coalescing_preserves_button_barriers_and_bounds() {
         let queue = Queue::default();
         let push = |action| {
@@ -946,6 +1076,7 @@ mod tests {
                 display: "retina".into(),
                 action,
                 start: Instant::now(),
+                token: Arc::new(ControllerToken::new(None)),
             })
         };
         push(Action::Pointer(0.1, 0.1)).unwrap();

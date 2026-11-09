@@ -472,13 +472,64 @@ fn send_frame(tx: &mpsc::Sender<Message>, bytes: Vec<u8>, recover: impl FnOnce()
     }
 }
 
+// Dropping a controller synchronously invalidates its native-emission token
+// and flushes all queued requests, without disturbing the viewer.
+fn drop_controller(
+    input: &mut Option<InputController>,
+    active: &mut bool,
+    service: &DesktopService,
+    id: u64,
+) {
+    if let Some(controller) = input.take() {
+        controller.invalidate();
+        drop(controller);
+    }
+    *active = false;
+    service.controller_stopped(id);
+}
+
+fn recheck_controller(
+    tx: &mpsc::Sender<Message>,
+    authority: &RemoteAccessAuthority,
+    principal: &RemotePrincipal,
+    input: &mut Option<InputController>,
+    active: &mut bool,
+    service: &DesktopService,
+    id: u64,
+) -> bool {
+    if input.is_some()
+        && authority
+            .require_scope(principal, "screen.control")
+            .is_err()
+    {
+        drop_controller(input, active, service, id);
+        return send_json(
+            tx,
+            json!({"type":"control_state","enabled":false,"active":false}),
+        ) && send_access_error(tx, AccessFailure::new("FORBIDDEN", "screen.control"));
+    }
+    true
+}
+
 async fn run(
+    socket: WebSocket,
+    authority: Arc<RemoteAccessAuthority>,
+    principal: Option<RemotePrincipal>,
+    peer: IpAddr,
+    ticket: UpgradedConnectionTicket,
+    service: Arc<DesktopService>,
+) {
+    run_with_input(socket, authority, principal, peer, ticket, service, None).await;
+}
+
+async fn run_with_input(
     socket: WebSocket,
     authority: Arc<RemoteAccessAuthority>,
     mut principal: Option<RemotePrincipal>,
     peer: IpAddr,
     ticket: UpgradedConnectionTicket,
     service: Arc<DesktopService>,
+    initial_input: Option<InputController>,
 ) {
     let id = NEXT_VIEWER.fetch_add(1, Ordering::Relaxed);
     let cancel = ticket.cancel_token();
@@ -486,6 +537,7 @@ async fn run(
         ticket.bind_device(p.device_id());
     }
     let mut stops = service.subscribe_stop();
+    let mut devices = authority.subscribe_devices();
     let (mut sink, mut source) = socket.split();
     let (tx, mut rx) = mpsc::channel(VIDEO_QUEUE);
     let (close_tx, mut close_rx) = oneshot::channel::<DesktopClose>();
@@ -526,7 +578,7 @@ async fn run(
         .await;
     });
     let mut stream: Option<LiveStream> = None;
-    let mut input: Option<InputController> = None;
+    let mut input = initial_input;
     let mut control_active = false;
     let mut last_control = service.control_enabled();
     let mut pump = tokio::time::interval(Duration::from_millis(15));
@@ -545,10 +597,18 @@ async fn run(
             _ = heartbeat.tick() => {
                 if tx.try_send(Message::Ping(vec![].into())).is_err() { break; }
             }
+            changed = devices.changed() => {
+                if changed.is_err() { break; }
+                if let Some(p) = &principal {
+                    if let Err(error)=authority.require_scope(p,"screen.view") { close=DesktopClose::failure(AccessFailure::new(error.code(),"screen.view")); break; }
+                    if !recheck_controller(&tx,&authority,p,&mut input,&mut control_active,&service,id) { break; }
+                }
+            }
             _ = pump.tick() => {
                 if writer.is_finished() { break; }
                 if let Some(p) = &principal {
                     if let Err(error)=authority.require_scope(p,"screen.view") { close=DesktopClose::failure(AccessFailure::new(error.code(),"screen.view")); break; }
+                    if !recheck_controller(&tx,&authority,p,&mut input,&mut control_active,&service,id) { break; }
                     let enabled = service.control_enabled();
                     if last_control && !enabled { close=DesktopClose::failure(AccessFailure::new("CONTROL_DISABLED","screen.control")); break; }
                     if !enabled { input = None; control_active = false; }
@@ -589,6 +649,11 @@ async fn run(
                 let Some(p) = &principal else { close=DesktopClose::failure(AccessFailure::new("UNAUTHORIZED","screen.view")); break };
                 if let Err(rejected) = if matches!(msg,ClientMessage::Stop) { Ok(()) } else { authorize(&authority,p,&service,msg.input()) } {
                     if msg.input() { log::warn!("desktop_input_rejected device_id={} display={} stable_code={}",p.device_id(),stream.as_ref().map(|s|s.display.as_str()).unwrap_or("none"),rejected.code); }
+                    if rejected.code == "FORBIDDEN" && rejected.capability == "screen.control" {
+                        drop_controller(&mut input,&mut control_active,&service,id);
+                        if !send_json(&tx,json!({"type":"control_state","enabled":false,"active":false})) || !send_access_error(&tx,rejected) { break; }
+                        continue;
+                    }
                     close=DesktopClose::failure(rejected); break;
                 }
                 let is_input=msg.input();
@@ -599,7 +664,8 @@ async fn run(
                             Err(e) => Err(e.code()),
                             Ok(displays) if !displays.iter().any(|d|d.id==display) => Err("DISPLAY_NOT_FOUND"),
                             Ok(displays) => {
-                                stop_stream(&mut stream,&service,id,&principal,"OK"); input=None; control_active=false;
+                                drop_controller(&mut input,&mut control_active,&service,id);
+                                stop_stream(&mut stream,&service,id,&principal,"OK");
                                 match StreamSession::start(StreamConfig {display:display.clone(),fps,max_width:max_width.unwrap_or(1920),quality:quality.unwrap_or(80),queue_capacity:2}) {
                                     Err(e) => Err(e.code()),
                                     Ok((session,receiver)) => {
@@ -621,8 +687,10 @@ async fn run(
                                 match live.session.switch_display(display.clone()) {
                                     Err(e) => Err(e.code()),
                                     Ok(()) => {
+                                        drop_controller(&mut input,&mut control_active,&service,id);
                                         live.display=display.clone();
                                         service.set_viewer_display(id,display.clone());
+                                        if !send_json(&tx,json!({"type":"control_state","enabled":service.control_enabled() && authority.require_scope(p,"screen.control").is_ok(),"active":false})){break}
                                         if !send_json(&tx,json!({"type":"meta","displays":displays,"display":display,"fps":live.fps})){break}
                                         Ok(())
                                     }
@@ -634,7 +702,7 @@ async fn run(
                     ClientMessage::Keyframe => { if let Some(live)=&stream {live.session.request_keyframe();Ok(())} else {Err("INVALID_REQUEST")} }
                     ClientMessage::Stop => { close=DesktopClose::stopped(); break; }
                     msg => {
-                        let result=inject(msg,&stream,&mut input);
+                        let result=inject(msg,&stream,&mut input,&authority,p);
                         if result.is_ok() && !control_active {
                             control_active=true;
                             service.controller_active(id);
@@ -692,10 +760,21 @@ fn inject(
     msg: ClientMessage,
     stream: &Option<LiveStream>,
     input: &mut Option<InputController>,
+    authority: &Arc<RemoteAccessAuthority>,
+    principal: &RemotePrincipal,
 ) -> DesktopResult<()> {
     let display = &stream.as_ref().ok_or("INVALID_REQUEST")?.display;
     if input.is_none() {
-        *input = Some(InputController::new().map_err(|e| e.code())?)
+        let authority = Arc::clone(authority);
+        let principal = principal.clone();
+        *input = Some(
+            InputController::with_authorization(Some(Arc::new(move || {
+                authority
+                    .require_scope(&principal, "screen.control")
+                    .is_ok()
+            })))
+            .map_err(|e| e.code())?,
+        )
     }
     let controller = input.as_ref().ok_or("INPUT_PERMISSION_REQUIRED")?;
     let result = match msg {

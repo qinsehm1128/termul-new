@@ -247,6 +247,10 @@ chrono-tz = "0.10.4"
 # Remote desktop codecs (MIT OR Apache-2.0); native engines are target-gated below.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
+[target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
+# Native app setup only; 2.4 raises MSRV above this crate's Rust 1.89.
+tauri-plugin-global-shortcut = "=2.3.1"
+
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 # Apache-2.0 / MIT. Never resolve their Linux X11/Wayland backends for se-server.
 xcap = { version = "0.9.9", default-features = false }

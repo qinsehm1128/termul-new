@@ -48,6 +48,8 @@ pub struct DesktopService {
     store: Option<Arc<TunnelConfigStore>>,
     state: Mutex<State>,
     stop: broadcast::Sender<()>,
+    #[cfg(desktop)]
+    activity: tokio::sync::watch::Sender<bool>,
     sink: Box<dyn Fn(DesktopState) + Send + Sync>,
     native: bool,
 }
@@ -123,6 +125,8 @@ impl DesktopService {
                 controllers: BTreeSet::new(),
             }),
             stop,
+            #[cfg(desktop)]
+            activity: tokio::sync::watch::channel(false).0,
             sink: Box::new(sink),
             native,
         })
@@ -257,6 +261,13 @@ impl DesktopService {
     }
 
     fn emit(&self, state: &State) {
+        #[cfg(desktop)]
+        self.activity.send_if_modified(|active| {
+            let next = !state.viewers.is_empty() || !state.controllers.is_empty();
+            let changed = *active != next;
+            *active = next;
+            changed
+        });
         (self.sink)(DesktopState {
             viewers: state.viewers.len(),
             controllers: state.controllers.len(),
@@ -288,12 +299,321 @@ impl DesktopService {
         }
     }
 
+    pub fn controller_stopped(&self, id: u64) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.controllers.remove(&id);
+        self.emit(&state);
+    }
+
     pub fn controller_active(&self, id: u64) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.control_enabled && state.viewers.contains_key(&id) {
             state.controllers.insert(id);
             self.emit(&state);
         }
+    }
+}
+
+/// Native desktop wiring only. The headless server never calls this installer;
+/// browser clients retain the existing app-local emergency action.
+#[cfg(desktop)]
+impl DesktopService {
+    pub fn install_emergency_shortcut(self: &Arc<Self>, app: tauri::AppHandle) {
+        emergency_shortcut::install(self, app);
+    }
+}
+
+#[cfg(desktop)]
+mod emergency_shortcut {
+    use super::*;
+    use tauri_plugin_global_shortcut::{
+        Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
+    };
+
+    fn shortcut() -> Shortcut {
+        // SUPER is Command on macOS and the Windows/Super key elsewhere.
+        Shortcut::new(
+            Some(Modifiers::CONTROL | Modifiers::ALT | Modifiers::SUPER),
+            Code::Period,
+        )
+    }
+
+    trait Plugin {
+        fn register(&self) -> Result<(), String>;
+        fn unregister(&self) -> Result<(), String>;
+    }
+
+    struct NativePlugin {
+        app: tauri::AppHandle,
+        service: std::sync::Weak<DesktopService>,
+    }
+
+    impl Plugin for NativePlugin {
+        fn register(&self) -> Result<(), String> {
+            let service = self.service.clone();
+            self.app
+                .global_shortcut()
+                .on_shortcut(shortcut(), move |_, _, event| {
+                    // Never take the service lock in the OS/main-thread callback:
+                    // unregister/register also marshal their work to that thread.
+                    let service = service.clone();
+                    let state = event.state;
+                    tauri::async_runtime::spawn_blocking(move || {
+                        if let Some(service) = service.upgrade() {
+                            trigger(&service, state);
+                        }
+                    });
+                })
+                .map_err(|error| error.to_string())
+        }
+
+        fn unregister(&self) -> Result<(), String> {
+            self.app
+                .global_shortcut()
+                .unregister(shortcut())
+                .map_err(|error| error.to_string())
+        }
+    }
+
+    #[derive(Default)]
+    struct Registration {
+        registered: bool,
+    }
+
+    impl Registration {
+        fn reconcile(&mut self, plugin: &impl Plugin, active: bool) {
+            if active == self.registered {
+                return;
+            }
+            let operation = if active {
+                "desktop_emergency_shortcut_register"
+            } else {
+                "desktop_emergency_shortcut_unregister"
+            };
+            let result = if active {
+                plugin.register()
+            } else {
+                plugin.unregister()
+            };
+            match result {
+                Ok(()) => {
+                    self.registered = active;
+                    audit(operation, "OK");
+                }
+                Err(error) => {
+                    // Retain the actual registration state and retry on the next
+                    // tick. The banner/app-local shortcut remain usable.
+                    log::warn!(target: "se_manager::remote::desktop",
+                        "operation={operation} shortcut=Ctrl+Alt+Super+Period stable_code=SHORTCUT_FAILED error={error}; app-local emergency stop remains available");
+                }
+            }
+        }
+    }
+
+    fn trigger(service: &DesktopService, state: ShortcutState) {
+        if state != ShortcutState::Pressed || !*service.activity.borrow() {
+            return;
+        }
+        audit("desktop_emergency_shortcut_trigger", "OK");
+        // Same kill-switch/release/stream-close/persistence path as the banner.
+        if let Err(error) = service.emergency_stop() {
+            log::warn!(target: "se_manager::remote::desktop",
+                "operation=desktop_emergency_shortcut_trigger stable_code=PERSIST_FAILED error={error}");
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::cell::Cell;
+
+        #[derive(Default)]
+        struct MockPlugin {
+            registers: Cell<usize>,
+            unregisters: Cell<usize>,
+            fail_register: Cell<bool>,
+            fail_unregister: Cell<bool>,
+        }
+
+        impl Plugin for MockPlugin {
+            fn register(&self) -> Result<(), String> {
+                self.registers.set(self.registers.get() + 1);
+                if self.fail_register.get() {
+                    Err("occupied".into())
+                } else {
+                    Ok(())
+                }
+            }
+            fn unregister(&self) -> Result<(), String> {
+                self.unregisters.set(self.unregisters.get() + 1);
+                if self.fail_unregister.get() {
+                    Err("OS error".into())
+                } else {
+                    Ok(())
+                }
+            }
+        }
+
+        fn sync(registration: &mut Registration, plugin: &MockPlugin, service: &DesktopService) {
+            registration.reconcile(plugin, *service.activity.borrow());
+        }
+
+        #[test]
+        fn registers_only_during_activity_until_last_viewer_and_controller_leave() {
+            let service = DesktopService::for_tests(true, true);
+            let plugin = MockPlugin::default();
+            let mut registration = Registration::default();
+            sync(&mut registration, &plugin, &service);
+            assert_eq!(
+                plugin.registers.get(),
+                0,
+                "enabled settings are not activity"
+            );
+            service.viewer_started(1, "primary".into());
+            sync(&mut registration, &plugin, &service);
+            service.viewer_started(2, "primary".into());
+            service.controller_active(2);
+            sync(&mut registration, &plugin, &service);
+            assert_eq!(plugin.registers.get(), 1);
+            service.viewer_stopped(1);
+            sync(&mut registration, &plugin, &service);
+            assert_eq!(plugin.unregisters.get(), 0);
+            service.viewer_stopped(2);
+            sync(&mut registration, &plugin, &service);
+            sync(&mut registration, &plugin, &service);
+            assert_eq!(plugin.unregisters.get(), 1);
+            assert!(!registration.registered);
+            service.viewer_started(3, "primary".into());
+            sync(&mut registration, &plugin, &service);
+            assert_eq!(plugin.registers.get(), 2, "new activity re-registers");
+            service.emergency_stop().unwrap();
+            sync(&mut registration, &plugin, &service);
+            assert_eq!(plugin.unregisters.get(), 2, "emergency stop unregisters");
+        }
+
+        #[test]
+        fn stopping_control_does_not_unregister_while_viewing() {
+            let service = DesktopService::for_tests(true, true);
+            let plugin = MockPlugin::default();
+            let mut registration = Registration::default();
+            service.viewer_started(1, "primary".into());
+            service.controller_active(1);
+            sync(&mut registration, &plugin, &service);
+            service.controller_stopped(1);
+            sync(&mut registration, &plugin, &service);
+            assert!(registration.registered, "viewer still needs emergency stop");
+            assert!(service.state.lock().unwrap().controllers.is_empty());
+            service.set_settings(true, false).unwrap();
+            sync(&mut registration, &plugin, &service);
+            assert!(registration.registered);
+            service.set_settings(false, false).unwrap();
+            sync(&mut registration, &plugin, &service);
+            assert!(!registration.registered);
+            assert_eq!(plugin.unregisters.get(), 1);
+        }
+
+        #[test]
+        fn failed_register_and_unregister_preserve_actual_state_and_retry() {
+            let plugin = MockPlugin::default();
+            let mut registration = Registration::default();
+            plugin.fail_register.set(true);
+            registration.reconcile(&plugin, true);
+            assert!(!registration.registered);
+            registration.reconcile(&plugin, false);
+            assert_eq!(plugin.unregisters.get(), 0);
+            plugin.fail_register.set(false);
+            registration.reconcile(&plugin, true);
+            assert!(registration.registered);
+            plugin.fail_unregister.set(true);
+            registration.reconcile(&plugin, false);
+            assert!(registration.registered);
+            plugin.fail_unregister.set(false);
+            registration.reconcile(&plugin, false);
+            assert!(!registration.registered);
+            assert_eq!(plugin.registers.get(), 2);
+            assert_eq!(plugin.unregisters.get(), 2);
+        }
+
+        #[test]
+        fn press_uses_shared_stop_and_unregisters_release_or_idle_does_nothing() {
+            let service = DesktopService::for_tests(true, true);
+            let plugin = MockPlugin::default();
+            let mut registration = Registration::default();
+            let mut stop = service.subscribe_stop();
+            trigger(&service, ShortcutState::Pressed);
+            assert!(
+                service.control_enabled(),
+                "idle callback must not change settings"
+            );
+            service.viewer_started(1, "primary".into());
+            service.controller_active(1);
+            sync(&mut registration, &plugin, &service);
+            trigger(&service, ShortcutState::Released);
+            assert!(service.control_enabled());
+            assert!(stop.try_recv().is_err());
+            trigger(&service, ShortcutState::Pressed);
+            assert!(!service.control_enabled());
+            assert!(service.view_enabled());
+            assert!(stop.try_recv().is_ok(), "emergency path closes streams");
+            assert!(service.state.lock().unwrap().viewers.is_empty());
+            assert!(service.state.lock().unwrap().controllers.is_empty());
+            sync(&mut registration, &plugin, &service);
+            assert_eq!(plugin.unregisters.get(), 1);
+            trigger(&service, ShortcutState::Pressed);
+            assert!(
+                stop.try_recv().is_err(),
+                "stale callback is ignored after activity ends"
+            );
+        }
+
+        #[test]
+        fn shortcut_is_exact_control_alt_super_period() {
+            let expected: Shortcut = "Ctrl+Alt+Super+Period".parse().unwrap();
+            assert_eq!(shortcut().id(), expected.id());
+        }
+    }
+
+    pub(super) fn install(service: &Arc<DesktopService>, app: tauri::AppHandle) {
+        let mut activity = service.activity.subscribe();
+        let plugin = NativePlugin {
+            app,
+            service: Arc::downgrade(service),
+        };
+        tauri::async_runtime::spawn(async move {
+            let mut registration = Registration::default();
+            let mut plugin = plugin;
+            loop {
+                let active = *activity.borrow_and_update();
+                // The Tauri plugin waits for its main-thread registration job.
+                // Run it outside both the async executor and the service lock.
+                match tauri::async_runtime::spawn_blocking(move || {
+                    registration.reconcile(&plugin, active);
+                    (registration, plugin)
+                })
+                .await
+                {
+                    Ok(next) => (registration, plugin) = next,
+                    Err(error) => {
+                        log::warn!(target: "se_manager::remote::desktop",
+                            "operation=desktop_emergency_shortcut_worker stable_code=WORKER_FAILED error={error}");
+                        break;
+                    }
+                }
+                if registration.registered == active {
+                    if activity.changed().await.is_err() {
+                        break;
+                    }
+                } else {
+                    tokio::select! {
+                        changed = activity.changed() => {
+                            if changed.is_err() { break; }
+                        }
+                        // Retry transient OS registration/unregistration failures.
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+                    }
+                }
+            }
+        });
     }
 }
 

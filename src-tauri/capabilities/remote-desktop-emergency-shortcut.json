@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "remote-desktop-emergency-shortcut",
+  "description": "Desktop-native emergency shortcut. Registration is owned by the Rust host activity lifecycle; the plugin default deliberately grants no renderer shortcut commands.",
+  "platforms": ["macOS", "windows", "linux"],
+  "windows": ["main"],
+  "permissions": ["global-shortcut:default"]
+}
