@@ -22,11 +22,17 @@ export function getRemoteAccessCredential(): string {
     ? window.location.hash.slice(1)
     : window.location.hash
   const fragment = new URLSearchParams(rawHash)
-  remoteAccessCredential = fragment.get('access_token')
-  if (fragment.has('access_token')) {
+  remoteAccessCredential = fragment.get('access_token') ?? fragment.get('token')
+  if (fragment.has('access_token') || fragment.has('token')) {
     window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`)
   }
   return remoteAccessCredential ?? ''
+}
+
+/** Install a redeemed device token before importing any authenticated transport. */
+export function setRemoteAccessCredential(credential: string): void {
+  remoteAccessCredential = credential
+  remoteAccessCredentialConsumed = true
 }
 
 /** Add the in-memory bearer credential without persisting or logging it. */
