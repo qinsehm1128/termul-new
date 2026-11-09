@@ -5371,6 +5371,7 @@ dependencies = [
  "se-pty",
  "se-quick-terminal",
  "se-terminal-core",
+ "semver",
  "serde",
  "serde_json",
  "sha2 0.10.9",

@@ -1,0 +1,96 @@
+#!/bin/sh
+# Se managed agent hooks v3: instance-bound observer, no permission decision.
+# Failures intentionally do not block the agent.
+pattern='{{endpoint_file}}'
+agent='{{agent_id}}'
+valid_uuid() {
+  uuid_rest=$1
+  uuid_a=${uuid_rest%%-*}; uuid_rest=${uuid_rest#*-}
+  uuid_b=${uuid_rest%%-*}; uuid_rest=${uuid_rest#*-}
+  uuid_c=${uuid_rest%%-*}; uuid_rest=${uuid_rest#*-}
+  uuid_d=${uuid_rest%%-*}; uuid_rest=${uuid_rest#*-}
+  [ "${#uuid_a}" = 8 ] && [ "${#uuid_b}" = 4 ] && [ "${#uuid_c}" = 4 ] && [ "${#uuid_d}" = 4 ] && [ "${#uuid_rest}" = 12 ] || return 1
+  case "$uuid_a$uuid_b$uuid_c$uuid_d$uuid_rest" in *[!0-9a-fA-F]*) return 1;; esac
+}
+safe_file() {
+  [ -f "$1" ] && [ ! -L "$1" ] || return 1
+  current=$1
+  while [ "$current" != / ] && [ -n "$current" ]; do
+    [ ! -L "$current" ] || return 1
+    current=${current%/*}
+  done
+}
+valid_uuid "${SE_AGENT_HOOK_INSTANCE:-}" || exit 0
+instance=$SE_AGENT_HOOK_INSTANCE
+endpoint=${SE_AGENT_HOOK_ENDPOINT:-}
+token=${SE_AGENT_HOOK_TOKEN:-}
+# Presence (including an empty value) is significant: a partial tuple cannot fallback.
+if [ "${SE_AGENT_HOOK_ENDPOINT+x}" = x ] || [ "${SE_AGENT_HOOK_TOKEN+x}" = x ]; then
+  [ -n "$endpoint" ] && [ -n "$token" ] || exit 0
+else
+  case "$pattern" in */instances/\{instance\}/endpoint.env) ;; *) exit 0;; esac
+  root=${pattern%/instances/*}
+  endpoint_file=$root/instances/$instance/endpoint.env
+  safe_file "$endpoint_file" || exit 0
+  endpoint_seen=0 token_seen=0 instance_seen=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      SE_AGENT_HOOK_ENDPOINT=*) [ "$endpoint_seen" = 0 ] || exit 0; endpoint_seen=1; endpoint=${line#*=};;
+      SE_AGENT_HOOK_TOKEN=*) [ "$token_seen" = 0 ] || exit 0; token_seen=1; token=${line#*=};;
+      SE_AGENT_HOOK_INSTANCE=*) [ "$instance_seen" = 0 ] || exit 0; instance_seen=1; [ "${line#*=}" = "$instance" ] || exit 0;;
+      *) exit 0;;
+    esac
+  done < "$endpoint_file"
+  [ "$endpoint_seen" = 1 ] && [ "$token_seen" = 1 ] || exit 0
+fi
+case "$token" in ''|*[!a-zA-Z0-9_-]*) exit 0;; esac
+# Endpoint is localhost only, exactly this adapter path. No config syntax injection.
+case "$endpoint" in http://127.0.0.1:*) ;; *) exit 0;; esac
+port=${endpoint#http://127.0.0.1:}
+case "$port" in ''|*[!0-9]*) exit 0;; esac
+[ "$port" -ge 1 ] && [ "$port" -le 65535 ] || exit 0
+pty=${SE_AGENT_HOOK_PTY_ID:-}
+generation=${SE_AGENT_HOOK_GENERATION:-}
+valid_uuid "$pty" || exit 0
+case "$generation" in ''|*[!0-9]*) exit 0;; esac
+[ "${#generation}" -le 20 ] || exit 0
+root=${pattern%/instances/*}
+install_file=$root/installed/$agent/install.env
+safe_file "$install_file" || exit 0
+install_seen=0 install_id=
+while IFS= read -r line || [ -n "$line" ]; do
+  case "$line" in
+    SE_AGENT_HOOK_INSTALL_ID=*) [ "$install_seen" = 0 ] || exit 0; install_seen=1; install_id=${line#*=};;
+    *) exit 0;;
+  esac
+done < "$install_file"
+[ "$install_seen" = 1 ] && valid_uuid "$install_id" || exit 0
+send() {
+  # Bearer never appears in argv, URLs or a temporary file. FD3 is private to curl.
+  curl --disable --noproxy '*' --silent --connect-timeout 0.05 --max-time 0.15 --retry 0 \
+    --output /dev/null --config /dev/fd/3 \
+    --header 'Content-Type: application/json' \
+    --header "x-se-hook-instance: $instance" \
+    --header "x-se-hook-install-id: $install_id" \
+    --header "x-se-hook-pty-id: $pty" \
+    --header "x-se-hook-generation: $generation" \
+    --data-binary @- "$endpoint/hooks/$agent" 3<<CONFIG 2>/dev/null || :
+header = "Authorization: Bearer $token"
+CONFIG
+}
+if [ "$agent" = qin-code ]; then
+  # qin exposes native event/session separately from its optional native JSON.
+  # An encoder is mandatory: never concatenate untrusted values into JSON.
+  python3 -c 'import json,os,sys
+try:
+ p=json.loads(os.environ.get("QIN_CODE_HOOK_PAYLOAD") or "{}")
+ if not isinstance(p,dict): raise ValueError()
+ p["event"]=os.environ.get("QIN_CODE_HOOK_EVENT") or p.get("event")
+ p["session_id"]=os.environ.get("QIN_CODE_HOOK_SESSION_ID") or p.get("session_id")
+ if "session_file" in p and "transcript_path" not in p: p["transcript_path"]=p.pop("session_file")
+ if p.get("event") and p.get("session_id"): sys.stdout.write(json.dumps(p,separators=(",",":")))
+except Exception: pass' 2>/dev/null | send
+else
+  send
+fi
+exit 0

@@ -1,0 +1,127 @@
+schema_version = 1
+id = "claude-code"
+display_name = "Claude Code"
+version = "3.0.0"
+[cli]
+binaries = ["claude"]
+version_args = ["--version"]
+[cli.version_parser]
+kind = "anchored-regex"
+pattern = '^(?P<version>[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?) \(Claude Code\)$'
+[[config]]
+id = "settings"
+path = "home:.claude/settings.json"
+format = "json-merge"
+[[config.ops]]
+op = "append-unique"
+key = ["hooks", "SessionStart"]
+event = "SessionStart"
+value_json = '{"matcher":"","hooks":[{"type":"command","command":"\"{{script_path}}\""}]}'
+[[config.ops]]
+op = "append-unique"
+key = ["hooks", "UserPromptSubmit"]
+event = "UserPromptSubmit"
+value_json = '{"matcher":"","hooks":[{"type":"command","command":"\"{{script_path}}\""}]}'
+[[config.ops]]
+op = "append-unique"
+key = ["hooks", "Stop"]
+event = "Stop"
+value_json = '{"matcher":"","hooks":[{"type":"command","command":"\"{{script_path}}\""}]}'
+[[config.ops]]
+op = "append-unique"
+key = ["hooks", "SessionEnd"]
+event = "SessionEnd"
+value_json = '{"matcher":"","hooks":[{"type":"command","command":"\"{{script_path}}\""}]}'
+[[config.ops]]
+op = "append-unique"
+key = ["hooks", "Notification"]
+event = "Notification"
+value_json = '{"matcher":"permission_prompt|idle_prompt","hooks":[{"type":"command","command":"\"{{script_path}}\""}]}'
+[[config.ops]]
+op = "append-unique"
+key = ["hooks", "PermissionRequest"]
+event = "PermissionRequest"
+value_json = '{"matcher":"","hooks":[{"type":"command","command":"\"{{script_path}}\""}]}'
+[[config.ops]]
+op = "append-unique"
+key = ["hooks", "PreToolUse"]
+event = "PreToolUse"
+value_json = '{"matcher":"","hooks":[{"type":"command","command":"\"{{script_path}}\""}]}'
+[[config.ops]]
+op = "append-unique"
+key = ["hooks", "PostToolUse"]
+event = "PostToolUse"
+value_json = '{"matcher":"","hooks":[{"type":"command","command":"\"{{script_path}}\""}]}'
+[payload]
+native_event = "/hook_event_name"
+session_id = "/session_id"
+transcript_path = "/transcript_path"
+tool_name = "/tool_name"
+[[native_events]]
+name = "SessionStart"
+hook_kind = "session_start"
+enabled_by_default = true
+min_schema_version = "1.0.62"
+min_delivery_version = "1.0.62"
+[[native_events]]
+name = "UserPromptSubmit"
+hook_kind = "prompt_submitted"
+enabled_by_default = true
+min_schema_version = "1.0.53"
+min_delivery_version = "1.0.53"
+[[native_events]]
+name = "Stop"
+hook_kind = "turn_done"
+enabled_by_default = true
+min_schema_version = "1.0.31"
+min_delivery_version = "1.0.31"
+[[native_events]]
+name = "SessionEnd"
+hook_kind = "session_end"
+enabled_by_default = true
+min_schema_version = "1.0.85"
+min_delivery_version = "2.1.261"
+[[native_events]]
+name = "Notification"
+enabled_by_default = true
+min_schema_version = "1.0.23"
+min_delivery_version = "1.0.23"
+[[native_events.cases]]
+pointer = "/notification_type"
+equals = "permission_prompt"
+hook_kind = "needs_approval"
+[[native_events.cases]]
+pointer = "/notification_type"
+equals = "idle_prompt"
+hook_kind = "idle"
+[[native_events]]
+name = "PermissionRequest"
+hook_kind = "needs_approval"
+enabled_by_default = true
+min_schema_version = "2.0.45"
+min_delivery_version = "2.0.45"
+[[native_events]]
+name = "PreToolUse"
+hook_kind = "tool_start"
+enabled_by_default = false
+min_schema_version = "1.0.23"
+min_delivery_version = "1.0.23"
+[[native_events]]
+name = "PostToolUse"
+hook_kind = "tool_end"
+enabled_by_default = false
+min_schema_version = "1.0.23"
+min_delivery_version = "1.0.23"
+[[files]]
+id = "hook"
+source = "files/hook.sh.tmpl"
+target = "install:claude-code-hook.sh"
+mode = "0700"
+[resume]
+requires = ["session_id"]
+path_root = "home"
+[[resume.variants]]
+id = "default"
+binary = "claude"
+argv = ["--resume", "{{session_id}}"]
+requires = ["session_id"]

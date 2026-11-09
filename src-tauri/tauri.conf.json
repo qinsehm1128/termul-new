@@ -56,6 +56,9 @@
 		}
 	},
 	"bundle": {
+		"resources": {
+			"resources/agent-hook-adapters/": "agent-hook-adapters/"
+		},
 		"active": true,
 		"targets": "all",
 		"externalBin": [

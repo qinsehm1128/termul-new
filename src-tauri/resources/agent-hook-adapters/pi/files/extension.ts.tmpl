@@ -1,0 +1,77 @@
+// Se managed agent hooks v3. Read-only observer; never returns permission decisions.
+import { spawnSync } from "node:child_process";
+import { lstatSync, readFileSync } from "node:fs";
+import { dirname, join, isAbsolute } from "node:path";
+const agent = "{{agent_id}}";
+const endpointPattern = "{{endpoint_file}}";
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function fixedFile(path: string, allowed: string[]): Record<string,string> {
+  if (!isAbsolute(path)) throw new Error("unsafe path");
+  for (let p = path; ; p = dirname(p)) {
+    const stat = lstatSync(p);
+    if (stat.isSymbolicLink()) throw new Error("unsafe path");
+    if (dirname(p) === p) break;
+  }
+  const stat = lstatSync(path);
+  if (!stat.isFile() || stat.size > 4096) throw new Error("invalid file");
+  const text = readFileSync(path, "utf8");
+  const values: Record<string,string> = Object.create(null);
+  const lines = text.endsWith("\n") ? text.slice(0,-1).split("\n") : text.split("\n");
+  for (const line of lines) {
+    const index = line.indexOf("=");
+    if (index <= 0) throw new Error("invalid fixed-key file");
+    const key = line.slice(0,index), value = line.slice(index+1);
+    if (!allowed.includes(key) || Object.hasOwn(values,key) || /[\r\n\0]/.test(value)) throw new Error("invalid fixed-key file");
+    values[key] = value;
+  }
+  return values;
+}
+function report(name: string, event: any, ctx: any): void {
+  try {
+    const env = process.env;
+    const instance = env.SE_AGENT_HOOK_INSTANCE || "";
+    const terminal = env.SE_AGENT_HOOK_PTY_ID || "";
+    const generation = env.SE_AGENT_HOOK_GENERATION || "";
+    if (!uuid.test(instance) || !uuid.test(terminal) || !/^[0-9]{1,20}$/.test(generation)) return;
+    if (!endpointPattern.endsWith("/instances/{instance}/endpoint.env")) return;
+    const root = endpointPattern.slice(0,-"/instances/{instance}/endpoint.env".length);
+    let endpoint = env.SE_AGENT_HOOK_ENDPOINT, token = env.SE_AGENT_HOOK_TOKEN;
+    // Complete spawn tuple always wins; partial/empty presence never falls back.
+    if (endpoint !== undefined || token !== undefined) {
+      if (!endpoint || !token) return;
+    } else {
+      const parsed = fixedFile(join(root,"instances",instance,"endpoint.env"), ["SE_AGENT_HOOK_ENDPOINT","SE_AGENT_HOOK_TOKEN","SE_AGENT_HOOK_INSTANCE"]);
+      if (parsed.SE_AGENT_HOOK_INSTANCE !== undefined && parsed.SE_AGENT_HOOK_INSTANCE !== instance) return;
+      endpoint = parsed.SE_AGENT_HOOK_ENDPOINT;
+      token = parsed.SE_AGENT_HOOK_TOKEN;
+    }
+    if (!endpoint || !token || !/^[A-Za-z0-9_-]+$/.test(token)) return;
+    const match = /^http:\/\/127\.0\.0\.1:([0-9]+)$/.exec(endpoint);
+    if (!match || +match[1] < 1 || +match[1] > 65535) return;
+    const installed = fixedFile(join(root,"installed",agent,"install.env"), ["SE_AGENT_HOOK_INSTALL_ID"]);
+    const installId = installed.SE_AGENT_HOOK_INSTALL_ID;
+    if (!uuid.test(installId || "")) return;
+    const sessionId = ctx?.sessionManager?.getSessionId?.();
+    const transcriptPath = ctx?.sessionManager?.getSessionFile?.();
+    if (typeof sessionId !== "string" || !sessionId) return;
+    const native: Record<string,unknown> = { event:name, session_id:sessionId };
+    if (typeof transcriptPath === "string" && transcriptPath) native.transcript_path = transcriptPath;
+    if (typeof event?.toolName === "string" && event.toolName) native.tool_name = event.toolName;
+    if (typeof event?.isError === "boolean") native.ok = !event.isError;
+    const payload = JSON.stringify(native);
+    if (Buffer.byteLength(payload) > 1048576) return;
+    // Config through stdin keeps bearer and payload out of process argv.
+    const escapedPayload = payload.replace(/\\/g,"\\\\").replace(/"/g,'\\"');
+    const config = `header = "Authorization: Bearer ${token}"\ndata-binary = "${escapedPayload}"\n`;
+    spawnSync("curl", ["--disable","--noproxy","*","--silent","--connect-timeout","0.05","--max-time","0.15","--retry","0","--output","/dev/null","--config","-","--header","Content-Type: application/json","--header",`x-se-hook-instance: ${instance}`,"--header",`x-se-hook-install-id: ${installId}`,"--header",`x-se-hook-pty-id: ${terminal}`,"--header",`x-se-hook-generation: ${generation}`,`${endpoint}/hooks/${agent}`], { input:config, stdio:["pipe","ignore","ignore"], timeout:180, windowsHide:true });
+  } catch { /* Failed observations must not interrupt pi. */ }
+}
+export default function (pi: any) {
+  // Single-line event markers are filtered by the host from the effective set.
+  pi.on("session_start", (event: any, ctx: any) => report("session_start",event,ctx)); // se-event:session_start
+  pi.on("agent_start", (event: any, ctx: any) => report("agent_start",event,ctx)); // se-event:agent_start
+  pi.on("agent_end", (event: any, ctx: any) => report("agent_end",event,ctx)); // se-event:agent_end
+  pi.on("session_shutdown", (event: any, ctx: any) => report("session_shutdown",event,ctx)); // se-event:session_shutdown
+  pi.on("tool_execution_start", (event: any, ctx: any) => report("tool_execution_start",event,ctx)); // se-event:tool_execution_start
+  pi.on("tool_execution_end", (event: any, ctx: any) => report("tool_execution_end",event,ctx)); // se-event:tool_execution_end
+}

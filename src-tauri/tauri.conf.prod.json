@@ -5,6 +5,9 @@
     "features": ["ghostty-vt"]
   },
   "bundle": {
+    "resources": {
+      "resources/agent-hook-adapters/": "agent-hook-adapters/"
+    },
     "createUpdaterArtifacts": true,
     "windows": {
       "allowDowngrades": true,

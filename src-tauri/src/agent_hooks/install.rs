@@ -1075,6 +1075,1782 @@ fn bounded_output(path: &Path, args: &[&str], limit: Duration) -> Option<Vec<u8>
     }
 }
 
+// v1/v2 renderers above remain byte-for-byte reproducible for ownership checks.
+// New service callers use only the manually confirmed v3 engine below.
+pub use v3::{
+    adapter_probe, adapters_reload, adapters_status, confirm_v3, installed_snapshot,
+    load_resume_snapshot, normalize_installed, preview_v3, set_builtin_resource_dir,
+    snapshot_ref_for, InstalledSnapshot,
+};
+
+mod v3 {
+    use super::super::contract::*;
+    use super::*;
+    use parking_lot::Mutex;
+    use sha2::{Digest, Sha256};
+    use std::collections::BTreeMap;
+    use std::io::Read;
+    use std::sync::OnceLock;
+
+    fn error(code: HookErrorCode, message: &str) -> HookErrorDto {
+        HookErrorDto {
+            code,
+            message: message.into(),
+        }
+    }
+    fn conflict(message: &str) -> HookErrorDto {
+        error(HookErrorCode::Conflict, message)
+    }
+    fn io_error(_: impl std::fmt::Display) -> HookErrorDto {
+        error(
+            HookErrorCode::Conflict,
+            "Hook filesystem changed or is not a safe regular path",
+        )
+    }
+    fn root(home: &Path) -> PathBuf {
+        home.join(".se-manager/agent-hooks")
+    }
+    fn receipt_path(home: &Path, id: &str) -> PathBuf {
+        root(home).join("installed").join(id).join("receipt.json")
+    }
+    fn digest(value: &impl Serialize) -> String {
+        format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(value).expect("serializable snapshot"))
+        )
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct FileState {
+        bytes: Option<Vec<u8>>,
+        mode: Option<u32>,
+    }
+    impl FileState {
+        fn absent() -> Self {
+            Self {
+                bytes: None,
+                mode: None,
+            }
+        }
+        fn file(bytes: Vec<u8>, mode: u32) -> Self {
+            Self {
+                bytes: Some(bytes),
+                mode: Some(mode),
+            }
+        }
+    }
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct TargetSnapshot {
+        path: PathBuf,
+        original: FileState,
+        installed: FileState,
+    }
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Change {
+        path: PathBuf,
+        before: FileState,
+        after: FileState,
+    }
+
+    // Every component is opened relative to a pinned directory FD with
+    // O_NOFOLLOW. A check followed by std::fs::rename is not sufficient here.
+    #[cfg(unix)]
+    mod safe {
+        use super::*;
+        use std::ffi::CString;
+        use std::os::fd::{AsRawFd, FromRawFd};
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::PermissionsExt;
+        fn name(s: &std::ffi::OsStr) -> Result<CString, HookErrorDto> {
+            CString::new(s.as_bytes()).map_err(io_error)
+        }
+        pub(super) fn parent(
+            path: &Path,
+            create: bool,
+        ) -> Result<Option<(fs::File, CString)>, HookErrorDto> {
+            if !path.is_absolute() {
+                return Err(io_error("absolute path required"));
+            }
+            let mut directory = fs::File::open("/").map_err(io_error)?;
+            let parts: Vec<_> = path.components().collect();
+            for component in &parts[1..parts.len().saturating_sub(1)] {
+                let std::path::Component::Normal(part) = component else {
+                    return Err(io_error("unsafe component"));
+                };
+                let part = name(part)?;
+                let mut fd = unsafe {
+                    libc::openat(
+                        directory.as_raw_fd(),
+                        part.as_ptr(),
+                        libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                    )
+                };
+                if fd < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::NotFound
+                {
+                    if !create {
+                        return Ok(None);
+                    }
+                    if unsafe { libc::mkdirat(directory.as_raw_fd(), part.as_ptr(), 0o700) } < 0
+                        && std::io::Error::last_os_error().kind()
+                            != std::io::ErrorKind::AlreadyExists
+                    {
+                        return Err(io_error("mkdir"));
+                    }
+                    fd = unsafe {
+                        libc::openat(
+                            directory.as_raw_fd(),
+                            part.as_ptr(),
+                            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                        )
+                    };
+                }
+                if fd < 0 {
+                    return Err(io_error("unsafe parent"));
+                }
+                directory = unsafe { fs::File::from_raw_fd(fd) };
+            }
+            Ok(Some((
+                directory,
+                name(path.file_name().ok_or_else(|| io_error("file name"))?)?,
+            )))
+        }
+        fn read_at(directory: &fs::File, name: &CString) -> Result<FileState, HookErrorDto> {
+            let fd = unsafe {
+                libc::openat(
+                    directory.as_raw_fd(),
+                    name.as_ptr(),
+                    libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+                )
+            };
+            if fd < 0 {
+                if std::io::Error::last_os_error().kind() == std::io::ErrorKind::NotFound {
+                    return Ok(FileState::absent());
+                }
+                return Err(io_error("open"));
+            }
+            let mut file = unsafe { fs::File::from_raw_fd(fd) };
+            let metadata = file.metadata().map_err(io_error)?;
+            if !metadata.is_file() || metadata.len() > 16 * 1024 * 1024 {
+                return Err(io_error("nonregular or oversized file"));
+            }
+            let mut bytes = Vec::new();
+            std::io::Read::by_ref(&mut file)
+                .take(16 * 1024 * 1024 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(io_error)?;
+            if bytes.len() > 16 * 1024 * 1024 {
+                return Err(io_error("oversized file"));
+            }
+            Ok(FileState::file(
+                bytes,
+                metadata.permissions().mode() & 0o7777,
+            ))
+        }
+        pub(super) fn read(path: &Path) -> Result<FileState, HookErrorDto> {
+            match parent(path, false)? {
+                Some((dir, name)) => read_at(&dir, &name),
+                None => Ok(FileState::absent()),
+            }
+        }
+        pub(super) fn replace(
+            path: &Path,
+            expected: &FileState,
+            desired: &FileState,
+        ) -> Result<(), HookErrorDto> {
+            let (directory, name) = parent(path, true)?.ok_or_else(|| io_error("parent"))?;
+            if read_at(&directory, &name)? != *expected {
+                return Err(conflict("Target changed during transaction"));
+            }
+            if let Some(bytes) = &desired.bytes {
+                let temporary =
+                    CString::new(format!(".se-hook-{}.tmp", uuid::Uuid::new_v4())).unwrap();
+                let fd = unsafe {
+                    libc::openat(
+                        directory.as_raw_fd(),
+                        temporary.as_ptr(),
+                        libc::O_WRONLY
+                            | libc::O_CREAT
+                            | libc::O_EXCL
+                            | libc::O_NOFOLLOW
+                            | libc::O_CLOEXEC,
+                        0o600,
+                    )
+                };
+                if fd < 0 {
+                    return Err(io_error("create"));
+                }
+                let mut file = unsafe { fs::File::from_raw_fd(fd) };
+                let result = (|| {
+                    file.write_all(bytes)
+                        .and_then(|_| file.sync_all())
+                        .map_err(io_error)?;
+                    file.set_permissions(fs::Permissions::from_mode(desired.mode.unwrap_or(0o600)))
+                        .map_err(io_error)?;
+                    if read_at(&directory, &name)? != *expected {
+                        return Err(conflict("Target changed during transaction"));
+                    }
+                    if unsafe {
+                        libc::renameat(
+                            directory.as_raw_fd(),
+                            temporary.as_ptr(),
+                            directory.as_raw_fd(),
+                            name.as_ptr(),
+                        )
+                    } < 0
+                    {
+                        return Err(io_error("rename"));
+                    }
+                    directory.sync_all().map_err(io_error)
+                })();
+                if result.is_err() {
+                    unsafe {
+                        libc::unlinkat(directory.as_raw_fd(), temporary.as_ptr(), 0);
+                    }
+                }
+                result
+            } else {
+                if expected.bytes.is_some()
+                    && unsafe { libc::unlinkat(directory.as_raw_fd(), name.as_ptr(), 0) } < 0
+                {
+                    return Err(io_error("unlink"));
+                }
+                directory.sync_all().map_err(io_error)
+            }
+        }
+        pub(super) fn lock(path: &Path) -> Result<fs::File, HookErrorDto> {
+            let (dir, name) = parent(path, true)?.ok_or_else(|| io_error("lock parent"))?;
+            let fd = unsafe {
+                libc::openat(
+                    dir.as_raw_fd(),
+                    name.as_ptr(),
+                    libc::O_RDWR
+                        | libc::O_CREAT
+                        | libc::O_NOFOLLOW
+                        | libc::O_NONBLOCK
+                        | libc::O_CLOEXEC,
+                    0o600,
+                )
+            };
+            if fd < 0 {
+                return Err(io_error("lock"));
+            }
+            let file = unsafe { fs::File::from_raw_fd(fd) };
+            if !file.metadata().map_err(io_error)?.is_file() {
+                return Err(io_error("lock type"));
+            }
+            fs2::FileExt::try_lock_exclusive(&file)
+                .map_err(|_| conflict("Another installer is active"))?;
+            Ok(file)
+        }
+    }
+    #[cfg(not(unix))]
+    mod safe {
+        use super::*;
+        fn unsupported() -> HookErrorDto {
+            error(
+                HookErrorCode::UnsupportedPlatform,
+                "Safe hook transactions are unavailable on this platform",
+            )
+        }
+        pub(super) fn read(_: &Path) -> Result<FileState, HookErrorDto> {
+            Err(unsupported())
+        }
+        pub(super) fn replace(_: &Path, _: &FileState, _: &FileState) -> Result<(), HookErrorDto> {
+            Err(unsupported())
+        }
+        pub(super) fn lock(_: &Path) -> Result<fs::File, HookErrorDto> {
+            Err(unsupported())
+        }
+    }
+
+    #[cfg(test)]
+    thread_local! { static FAIL_REPLACE: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) }; }
+    fn replace_change(change: &Change) -> Result<(), HookErrorDto> {
+        #[cfg(test)]
+        if FAIL_REPLACE.with(|failure| {
+            let mut failure = failure.borrow_mut();
+            if failure.as_ref() == Some(&change.path) {
+                failure.take();
+                true
+            } else {
+                false
+            }
+        }) {
+            return Err(conflict("Injected transaction write failure"));
+        }
+        safe::replace(&change.path, &change.before, &change.after)
+    }
+    fn transaction(home: &Path, changes: &[Change]) -> Result<(), HookErrorDto> {
+        let journal = root(home).join("transaction.json");
+        if safe::read(&journal)?.bytes.is_some() {
+            return Err(conflict("Unresolved hook transaction requires recovery"));
+        }
+        // Check every target before writing even the journal; never partially
+        // install when a later target has already changed.
+        for change in changes {
+            if safe::read(&change.path)? != change.before {
+                return Err(conflict("Preview targets changed"));
+            }
+        }
+        let journal_bytes = serde_json::to_vec(changes).map_err(io_error)?;
+        if journal_bytes.len() > 16 * 1024 * 1024 {
+            return Err(error(
+                HookErrorCode::ValidationError,
+                "Hook transaction recovery journal exceeds the safe size limit",
+            ));
+        }
+        let journal_state = FileState::file(journal_bytes, 0o600);
+        safe::replace(&journal, &FileState::absent(), &journal_state)?;
+        let mut applied: Vec<&Change> = Vec::new();
+        for change in changes {
+            if change.before == change.after {
+                continue;
+            }
+            if let Err(failure) = replace_change(change) {
+                let mut recovered = true;
+                match safe::read(&change.path) {
+                    Ok(current) if current == change.after => applied.push(change),
+                    Ok(current) if current == change.before => {}
+                    _ => recovered = false,
+                }
+                for applied in applied.into_iter().rev() {
+                    recovered &=
+                        safe::replace(&applied.path, &applied.after, &applied.before).is_ok();
+                }
+                if recovered {
+                    let _ = safe::replace(&journal, &journal_state, &FileState::absent());
+                }
+                return Err(if recovered {
+                    failure
+                } else {
+                    conflict("Hook rollback failed; recovery journal retained")
+                });
+            }
+            applied.push(change);
+        }
+        safe::replace(&journal, &journal_state, &FileState::absent())
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct InstalledSnapshot {
+        pub schema_version: u32,
+        pub adapter_id: AdapterId,
+        pub install_id: String,
+        pub revision: u64,
+        pub adapter_version: String,
+        pub origin: AdapterOrigin,
+        pub source_digest: String,
+        pub manifest: serde_json::Value,
+        pub effective_events: Vec<String>,
+        pub probe_version: Option<String>,
+        targets: Vec<TargetSnapshot>,
+    }
+    impl InstalledSnapshot {
+        pub fn snapshot_ref(&self) -> String {
+            format!("{}:{}", self.install_id, self.revision)
+        }
+    }
+    fn archive_path(home: &Path, id: &str, install_id: &str, revision: u64) -> PathBuf {
+        root(home)
+            .join("installed")
+            .join(id)
+            .join("snapshots")
+            .join(format!("{install_id}-{revision}.json"))
+    }
+    pub fn snapshot_ref_for(
+        home: &Path,
+        id: &str,
+        install_id: &str,
+    ) -> Result<PathBuf, HookErrorDto> {
+        let snapshot =
+            installed_snapshot(home, id)?.ok_or_else(|| conflict("Adapter is not installed"))?;
+        if snapshot.install_id != install_id {
+            return Err(conflict("Adapter installation changed"));
+        }
+        Ok(archive_path(home, id, install_id, snapshot.revision))
+    }
+    pub fn load_resume_snapshot(
+        home: &Path,
+        id: &str,
+        install_id: &str,
+        reference: &str,
+    ) -> Result<definition::LoadedAdapter, HookErrorDto> {
+        let current = installed_snapshot(home, id)?
+            .ok_or_else(|| conflict("Adapter is no longer installed"))?;
+        if current.install_id != install_id {
+            return Err(conflict("Adapter installation changed"));
+        }
+        let (expected_id, revision) = if Path::new(reference).is_absolute() {
+            let path = Path::new(reference);
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .ok_or_else(|| conflict("Invalid snapshot reference"))?;
+            let (expected_id, revision) = stem
+                .rsplit_once('-')
+                .ok_or_else(|| conflict("Invalid snapshot reference"))?;
+            let parsed = revision
+                .parse::<u64>()
+                .map_err(|_| conflict("Invalid snapshot revision"))?;
+            if path != archive_path(home, id, install_id, parsed) {
+                return Err(conflict("Snapshot path is outside its installation"));
+            }
+            (expected_id, revision)
+        } else {
+            reference
+                .split_once(':')
+                .ok_or_else(|| conflict("Invalid snapshot reference"))?
+        };
+        let revision = revision
+            .parse::<u64>()
+            .map_err(|_| conflict("Invalid snapshot revision"))?;
+        if expected_id != install_id || uuid::Uuid::parse_str(install_id).is_err() || revision == 0
+        {
+            return Err(conflict("Snapshot identity mismatch"));
+        }
+        let bytes = safe::read(&archive_path(home, id, install_id, revision))?
+            .bytes
+            .ok_or_else(|| conflict("Retained resume snapshot is missing"))?;
+        let snapshot: InstalledSnapshot = serde_json::from_slice(&bytes)
+            .map_err(|_| conflict("Retained resume snapshot is invalid"))?;
+        if snapshot.install_id != install_id
+            || snapshot.adapter_id.as_str() != id
+            || snapshot.revision != revision
+        {
+            return Err(conflict("Snapshot identity mismatch"));
+        }
+        let manifest: definition::AdapterManifest = serde_json::from_value(snapshot.manifest)
+            .map_err(|_| conflict("Resume manifest is invalid"))?;
+        let origin = if snapshot.origin == AdapterOrigin::Builtin {
+            definition::AdapterOrigin::Builtin
+        } else {
+            definition::AdapterOrigin::Custom
+        };
+        manifest
+            .validate(id, &origin)
+            .map_err(|_| conflict("Resume manifest is invalid"))?;
+        Ok(definition::LoadedAdapter {
+            manifest,
+            files: BTreeMap::new(),
+            origin,
+            source_digest: snapshot.source_digest,
+        })
+    }
+    pub fn installed_snapshot(
+        home: &Path,
+        id: &str,
+    ) -> Result<Option<InstalledSnapshot>, HookErrorDto> {
+        let _ = AdapterId::try_from(id.to_owned())
+            .map_err(|_| error(HookErrorCode::ValidationError, "Invalid adapter id"))?;
+        let Some(bytes) = safe::read(&receipt_path(home, id))?.bytes else {
+            return Ok(None);
+        };
+        let snapshot: InstalledSnapshot = serde_json::from_slice(&bytes)
+            .map_err(|_| conflict("Invalid installed hook snapshot"))?;
+        if snapshot.schema_version != 3
+            || snapshot.adapter_id.as_str() != id
+            || uuid::Uuid::parse_str(&snapshot.install_id).is_err()
+            || snapshot.revision == 0
+        {
+            return Err(conflict("Invalid installed hook snapshot"));
+        }
+        let manifest: definition::AdapterManifest =
+            serde_json::from_value(snapshot.manifest.clone())
+                .map_err(|_| conflict("Installed manifest is invalid"))?;
+        let adapter_origin = if snapshot.origin == AdapterOrigin::Builtin {
+            definition::AdapterOrigin::Builtin
+        } else {
+            definition::AdapterOrigin::Custom
+        };
+        manifest
+            .validate(id, &adapter_origin)
+            .map_err(|_| conflict("Installed manifest is invalid"))?;
+        let adapter = definition::LoadedAdapter {
+            manifest,
+            files: BTreeMap::new(),
+            source_digest: snapshot.source_digest.clone(),
+            origin: adapter_origin,
+        };
+        let mut authorized = std::collections::BTreeSet::new();
+        for config in &adapter.manifest.config {
+            authorized.insert(scoped_config(home, id, &config.path)?);
+        }
+        for file in &adapter.manifest.files {
+            authorized.insert(file_target(home, &adapter, &file.target)?);
+        }
+        authorized.insert(root(home).join("installed").join(id).join("install.env"));
+        let archive = safe::read(&archive_path(
+            home,
+            id,
+            &snapshot.install_id,
+            snapshot.revision,
+        ))?;
+        if archive.bytes.as_deref() != Some(bytes.as_slice()) || archive.mode != Some(0o600) {
+            return Err(conflict(
+                "Installed receipt disagrees with its immutable revision snapshot",
+            ));
+        }
+        // Receipt paths are not an independent path authority. A modified
+        // receipt must never turn uninstall into arbitrary filesystem writes.
+        let mut seen = std::collections::BTreeSet::new();
+        for target in &snapshot.targets {
+            if !authorized.contains(&target.path)
+                || !target.path.starts_with(home)
+                || target.path.components().any(|c| {
+                    matches!(
+                        c,
+                        std::path::Component::ParentDir | std::path::Component::CurDir
+                    )
+                })
+                || !seen.insert(target.path.clone())
+                || target.path == receipt_path(home, id)
+            {
+                return Err(conflict("Invalid installed target snapshot"));
+            }
+        }
+        Ok(Some(snapshot))
+    }
+    fn ensure_owned(snapshot: &InstalledSnapshot) -> Result<(), HookErrorDto> {
+        for target in &snapshot.targets {
+            if safe::read(&target.path)? != target.installed {
+                return Err(conflict(
+                    "Installed hook files were changed outside the installer",
+                ));
+            }
+        }
+        Ok(())
+    }
+    #[derive(Clone)]
+    struct PendingPreview {
+        home: PathBuf,
+        request: HookPreviewRequest,
+        dto: HookPreviewDto,
+        source_digest: Option<String>,
+        changes: Vec<Change>,
+        revision: u64,
+        created: Instant,
+    }
+    fn previews() -> &'static Mutex<BTreeMap<String, PendingPreview>> {
+        static CACHE: OnceLock<Mutex<BTreeMap<String, PendingPreview>>> = OnceLock::new();
+        CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
+    }
+    fn empty_capabilities() -> HookCapabilitiesDto {
+        HookCapabilitiesDto {
+            chat: false,
+            resume: false,
+            events: vec![],
+        }
+    }
+    fn diagnostic(code: &str, message: &str) -> HookDiagnosticDto {
+        HookDiagnosticDto {
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+    fn secret_key(key: &str) -> bool {
+        let key = key.to_ascii_lowercase().replace(['_', '-', '.'], "");
+        [
+            "token",
+            "password",
+            "secret",
+            "apikey",
+            "authorization",
+            "credential",
+            "bearer",
+        ]
+        .iter()
+        .any(|word| key.contains(word))
+    }
+    fn redact_preview(text: String) -> String {
+        fn collect(value: &serde_json::Value, sensitive: bool, secrets: &mut Vec<String>) {
+            match value {
+                serde_json::Value::Object(map) => {
+                    for (key, value) in map {
+                        collect(value, sensitive || secret_key(key), secrets);
+                    }
+                }
+                serde_json::Value::Array(items) => {
+                    for item in items {
+                        collect(item, sensitive, secrets);
+                    }
+                }
+                serde_json::Value::String(value) if sensitive && !value.is_empty() => {
+                    secrets.push(value.clone())
+                }
+                _ => {}
+            }
+        }
+        let parsed = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .or_else(|| {
+                toml::from_str::<toml::Value>(&text)
+                    .ok()
+                    .and_then(|v| serde_json::to_value(v).ok())
+            });
+        let mut secrets = Vec::new();
+        if let Some(value) = parsed {
+            collect(&value, false, &mut secrets);
+        }
+        secrets.sort_by_key(|secret| std::cmp::Reverse(secret.len()));
+        let mut redacted = text;
+        for secret in secrets {
+            // Replace encoded literals, not substrings in unrelated key names.
+            if let Ok(encoded) = serde_json::to_string(&secret) {
+                redacted = redacted.replace(&encoded, "\"<redacted>\"");
+            }
+            if !secret.contains('\'') {
+                redacted = redacted.replace(&format!("'{secret}'"), "'<redacted>'");
+            }
+        }
+        redacted
+    }
+    fn display_bytes(value: &FileState) -> Result<Option<String>, HookErrorDto> {
+        value
+            .bytes
+            .as_ref()
+            .map(|bytes| {
+                String::from_utf8(bytes.clone())
+                    .map(redact_preview)
+                    .map_err(|_| {
+                        error(
+                            HookErrorCode::ValidationError,
+                            "Hook configuration must be UTF-8 for a complete preview",
+                        )
+                    })
+            })
+            .transpose()
+    }
+    fn pending(
+        home: &Path,
+        request: HookPreviewRequest,
+        changes: Vec<Change>,
+        source_digest: Option<String>,
+        revision: u64,
+        capabilities: HookCapabilitiesDto,
+        diagnostics: Vec<HookDiagnosticDto>,
+    ) -> Result<PendingPreview, HookErrorDto> {
+        // Internal receipt stores source snapshots as JSON byte arrays; showing
+        // that recovery record is not a meaningful config diff. All actual
+        // target changes (including install.env) are shown in full.
+        let files = changes
+            .iter()
+            .filter(|c| {
+                c.path != receipt_path(home, request.adapter_id.as_str())
+                    && c.path.parent()
+                        != Some(
+                            root(home)
+                                .join("installed")
+                                .join(request.adapter_id.as_str())
+                                .join("snapshots")
+                                .as_path(),
+                        )
+            })
+            .map(|c| {
+                Ok(HookFileDiffDto {
+                    path: c.path.to_string_lossy().into_owned(),
+                    before: display_bytes(&c.before)?,
+                    after: display_bytes(&c.after)?,
+                    mode: c.after.mode.map(|m| format!("{m:04o}")),
+                })
+            })
+            .collect::<Result<Vec<_>, HookErrorDto>>()?;
+        let fingerprint = digest(&(&request, &source_digest, &changes, &capabilities, revision));
+        let dto = HookPreviewDto {
+            adapter_id: request.adapter_id.clone(),
+            action: request.action,
+            preview_id: uuid::Uuid::new_v4().to_string(),
+            fingerprint,
+            files,
+            keys: vec![],
+            capabilities,
+            diagnostics,
+        };
+        Ok(PendingPreview {
+            home: home.into(),
+            request,
+            dto,
+            source_digest,
+            changes,
+            revision,
+            created: Instant::now(),
+        })
+    }
+
+    fn legacy_adapter(home: &Path, id: &str) -> Option<Adapter> {
+        let kind = match id {
+            "claude-code" => AgentKind::ClaudeCode,
+            "pi" => AgentKind::Pi,
+            "qin-code" => AgentKind::QinCode,
+            _ => return None,
+        };
+        Some(Adapter::new(kind, home.into(), false))
+    }
+    fn legacy_changes(home: &Path, id: &str) -> Result<Option<Vec<Change>>, HookErrorDto> {
+        let Some(adapter) = legacy_adapter(home, id) else {
+            return Ok(None);
+        };
+        let receipt_state = safe::read(&adapter.receipt())?;
+        let script = safe::read(&adapter.script())?;
+        let config = safe::read(&adapter.config())?;
+        let known_script = script.bytes.as_deref() == Some(adapter.script_source().as_bytes());
+        let known_pi = id == "pi"
+            && config.bytes.as_deref().is_some_and(|b| {
+                b == adapter.pi_source().as_bytes() || b == adapter.pi_v1_source().as_bytes()
+            });
+        if receipt_state.bytes.is_none() && !known_script && !known_pi {
+            return Ok(None);
+        }
+        if script.bytes.is_some() && !known_script {
+            return Err(conflict("Legacy script is not byte-exact owned content"));
+        }
+        let original = if let Some(bytes) = &receipt_state.bytes {
+            let old: Receipt = serde_json::from_slice(bytes)
+                .map_err(|_| conflict("Invalid legacy recovery receipt"))?;
+            if config.bytes.as_deref() != Some(old.installed.as_slice()) {
+                return Err(conflict("Legacy configuration changed since installation"));
+            }
+            FileState {
+                bytes: old.original,
+                mode: config.mode,
+            }
+        } else if known_pi {
+            FileState::absent()
+        } else {
+            return Err(conflict(
+                "Legacy recovery receipt is required for byte-exact config restoration",
+            ));
+        };
+        let mut changes = vec![Change {
+            path: adapter.config(),
+            before: config,
+            after: if original.bytes.is_some() {
+                original
+            } else {
+                FileState::absent()
+            },
+        }];
+        if known_script {
+            changes.push(Change {
+                path: adapter.script(),
+                before: script,
+                after: FileState::absent(),
+            });
+        }
+        if receipt_state.bytes.is_some() {
+            changes.push(Change {
+                path: adapter.receipt(),
+                before: receipt_state,
+                after: FileState::absent(),
+            });
+        }
+        Ok(Some(changes))
+    }
+
+    use super::super::{adapter as definition, resources};
+    use resources::AdapterResourceReader;
+    fn builtin_directory() -> &'static Mutex<Option<PathBuf>> {
+        static DIR: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+        DIR.get_or_init(|| Mutex::new(None))
+    }
+    pub fn set_builtin_resource_dir(directory: PathBuf) {
+        *builtin_directory().lock() = Some(directory);
+    }
+    fn source(home: &Path, id: &str) -> Result<definition::LoadedAdapter, HookErrorDto> {
+        resources::validate_id(id)
+            .map_err(|_| error(HookErrorCode::ValidationError, "Invalid adapter id"))?;
+        let builtin = resources::RESERVED_IDS.contains(&id);
+        let reader: Box<dyn AdapterResourceReader> = if builtin {
+            match builtin_directory().lock().clone() {
+                Some(directory) => resources::desktop_builtin_reader(directory),
+                None => resources::builtin_reader(),
+            }
+        } else {
+            Box::new(resources::FilesystemAdapterReader::new(
+                root(home).join("adapters"),
+            ))
+        };
+        definition::load_adapter(
+            reader.as_ref(),
+            id,
+            if builtin {
+                definition::AdapterOrigin::Builtin
+            } else {
+                definition::AdapterOrigin::Custom
+            },
+        )
+        .map_err(|_| {
+            error(
+                HookErrorCode::ValidationError,
+                "Adapter source is missing or invalid; reload to inspect diagnostics",
+            )
+        })
+    }
+    fn source_digest(adapter: &definition::LoadedAdapter) -> String {
+        digest(&(&adapter.manifest, &adapter.files))
+    }
+    fn origin(id: &str) -> AdapterOrigin {
+        if resources::RESERVED_IDS.contains(&id) {
+            AdapterOrigin::Builtin
+        } else {
+            AdapterOrigin::Custom
+        }
+    }
+    fn capabilities(
+        adapter: &definition::LoadedAdapter,
+        events: &std::collections::BTreeSet<String>,
+    ) -> HookCapabilitiesDto {
+        HookCapabilitiesDto {
+            chat: resources::RESERVED_IDS.contains(&adapter.manifest.id.as_str()),
+            resume: adapter.manifest.resume.is_some(),
+            events: adapter
+                .manifest
+                .native_events
+                .iter()
+                .map(|event| HookEventCapabilityDto {
+                    native_event: event.name.clone(),
+                    hook_kinds: event
+                        .hook_kind
+                        .into_iter()
+                        .chain(event.cases.iter().flatten().map(|case| case.hook_kind))
+                        .collect(),
+                    enabled_by_default: event.enabled_by_default,
+                    available: events.contains(&event.name),
+                    min_schema_version: event.min_schema_version.as_ref().map(ToString::to_string),
+                    min_delivery_version: event
+                        .min_delivery_version
+                        .as_ref()
+                        .map(ToString::to_string),
+                })
+                .collect(),
+        }
+    }
+    fn scoped_config(home: &Path, id: &str, path: &str) -> Result<PathBuf, HookErrorDto> {
+        let (scope, relative) = path
+            .split_once(':')
+            .ok_or_else(|| error(HookErrorCode::ValidationError, "Invalid config scope"))?;
+        resources::validate_relative(relative)
+            .map_err(|_| error(HookErrorCode::ValidationError, "Unsafe config path"))?;
+        let result = match scope {
+            "home" => home.join(relative),
+            "agent" => home
+                .join(match id {
+                    "pi" => ".pi/agent",
+                    "claude-code" => ".claude",
+                    "qin-code" => ".qin-code",
+                    _ => {
+                        return Err(error(
+                            HookErrorCode::ValidationError,
+                            "Custom adapter has no registered agent root",
+                        ))
+                    }
+                })
+                .join(relative),
+            _ => {
+                return Err(error(
+                    HookErrorCode::ValidationError,
+                    "Invalid config scope",
+                ))
+            }
+        };
+        if result.starts_with(root(home)) {
+            return Err(error(
+                HookErrorCode::ValidationError,
+                "Config cannot overwrite hook manager data",
+            ));
+        }
+        Ok(result)
+    }
+    fn file_target(
+        home: &Path,
+        adapter: &definition::LoadedAdapter,
+        target: &str,
+    ) -> Result<PathBuf, HookErrorDto> {
+        if let Some(relative) = target.strip_prefix("install:") {
+            resources::validate_relative(relative)
+                .map_err(|_| error(HookErrorCode::ValidationError, "Unsafe install path"))?;
+            let first = relative.split('/').next().unwrap_or("");
+            if matches!(
+                first,
+                "installed"
+                    | "instances"
+                    | "adapters"
+                    | "identities"
+                    | "transaction.json"
+                    | ".install.lock"
+            ) || (origin(&adapter.manifest.id) == AdapterOrigin::Custom
+                && matches!(
+                    first,
+                    "claude-code-hook.sh" | "pi-hook.sh" | "qin-code-hook.sh"
+                ))
+            {
+                return Err(error(
+                    HookErrorCode::ValidationError,
+                    "Adapter target overlaps manager-owned data",
+                ));
+            }
+            let file = adapter
+                .manifest
+                .files
+                .iter()
+                .find(|file| file.target == target)
+                .ok_or_else(|| error(HookErrorCode::ValidationError, "Unknown file target"))?;
+            adapter
+                .resolve_file_path(file, home)
+                .map_err(|_| error(HookErrorCode::ValidationError, "Unsafe file target"))
+        } else if let Some(id) = target.strip_prefix("config:") {
+            let config = adapter
+                .manifest
+                .config
+                .iter()
+                .find(|c| c.id == id)
+                .ok_or_else(|| error(HookErrorCode::ValidationError, "Unknown config target"))?;
+            scoped_config(home, &adapter.manifest.id, &config.path)
+        } else {
+            Err(error(HookErrorCode::ValidationError, "Invalid file target"))
+        }
+    }
+    fn merge_op(
+        root: &mut serde_json::Value,
+        key: &[String],
+        op: &str,
+        value: serde_json::Value,
+    ) -> Result<(), HookErrorDto> {
+        let (last, parents) = key
+            .split_last()
+            .ok_or_else(|| error(HookErrorCode::ValidationError, "Empty merge key"))?;
+        let mut cursor = root;
+        for parent in parents {
+            let map = cursor
+                .as_object_mut()
+                .ok_or_else(|| conflict("Merge key crosses a non-object value"))?;
+            cursor = map.entry(parent).or_insert_with(|| serde_json::json!({}));
+        }
+        let map = cursor
+            .as_object_mut()
+            .ok_or_else(|| conflict("Merge target is not an object"))?;
+        match op {
+            "set" => {
+                map.insert(last.clone(), value);
+            }
+            "append-unique" => {
+                let list = map
+                    .entry(last)
+                    .or_insert_with(|| serde_json::json!([]))
+                    .as_array_mut()
+                    .ok_or_else(|| conflict("Append target is not an array"))?;
+                if !list.contains(&value) {
+                    list.push(value);
+                }
+            }
+            _ => {
+                return Err(error(
+                    HookErrorCode::ValidationError,
+                    "Unknown merge operation",
+                ))
+            }
+        }
+        Ok(())
+    }
+    fn render(
+        home: &Path,
+        adapter: &definition::LoadedAdapter,
+        events: &std::collections::BTreeSet<String>,
+        baseline: &BTreeMap<PathBuf, FileState>,
+    ) -> Result<BTreeMap<PathBuf, FileState>, HookErrorDto> {
+        let script = adapter
+            .manifest
+            .files
+            .iter()
+            .find(|f| f.id == "hook")
+            .ok_or_else(|| error(HookErrorCode::ValidationError, "Missing hook file"))?;
+        let context = definition::RenderContext {
+            script_path: file_target(home, adapter, &script.target)?
+                .to_string_lossy()
+                .into_owned(),
+            endpoint_file: root(home)
+                .join("instances/{instance}/endpoint.env")
+                .to_string_lossy()
+                .into_owned(),
+            agent_id: adapter.manifest.id.clone(),
+        };
+        let mut rendered = BTreeMap::new();
+        for config in adapter.filtered_ops(events) {
+            if config.format == "owned-file" {
+                continue;
+            }
+            let path = scoped_config(home, &adapter.manifest.id, &config.path)?;
+            let existing = baseline.get(&path).cloned().unwrap_or(safe::read(&path)?);
+            let mut value = match existing.bytes.as_deref() {
+                None => serde_json::json!({}),
+                Some(bytes) if config.format == "json-merge" => serde_json::from_slice(bytes)
+                    .map_err(|_| conflict("Config is not valid JSON"))?,
+                Some(bytes) => {
+                    let text = std::str::from_utf8(bytes).map_err(io_error)?;
+                    let parsed: toml::Value =
+                        toml::from_str(text).map_err(|_| conflict("Config is not valid TOML"))?;
+                    serde_json::to_value(parsed).map_err(io_error)?
+                }
+            };
+            for op in config.ops.unwrap_or_default() {
+                let value_json = serde_json::from_str(&op.value_json).map_err(io_error)?;
+                let expanded =
+                    definition::render_json_value(&value_json, &context).map_err(|_| {
+                        error(HookErrorCode::ValidationError, "Unsafe config placeholder")
+                    })?;
+                merge_op(&mut value, &op.key, &op.op, expanded)?;
+            }
+            let bytes = if config.format == "json-merge" {
+                let mut bytes = serde_json::to_vec_pretty(&value).map_err(io_error)?;
+                bytes.push(b'\n');
+                bytes
+            } else {
+                let value = toml::Value::try_from(value).map_err(|_| {
+                    error(
+                        HookErrorCode::ValidationError,
+                        "Merge value cannot be represented as TOML",
+                    )
+                })?;
+                toml::to_string_pretty(&value)
+                    .map_err(io_error)?
+                    .into_bytes()
+            };
+            rendered.insert(path, FileState::file(bytes, existing.mode.unwrap_or(0o600)));
+        }
+        let templates = adapter.render_files(&context, events).map_err(|_| {
+            error(
+                HookErrorCode::ValidationError,
+                "Cannot render adapter files",
+            )
+        })?;
+        for file in &adapter.manifest.files {
+            let path = file_target(home, adapter, &file.target)?;
+            let bytes = templates
+                .get(&file.id)
+                .ok_or_else(|| error(HookErrorCode::ValidationError, "Missing rendered file"))?
+                .as_bytes()
+                .to_vec();
+            let mode = u32::from_str_radix(&file.mode, 8).map_err(io_error)?;
+            if rendered
+                .insert(path, FileState::file(bytes, mode))
+                .is_some()
+            {
+                return Err(error(
+                    HookErrorCode::ValidationError,
+                    "Multiple adapter targets resolve to one path",
+                ));
+            }
+        }
+        Ok(rendered)
+    }
+    pub fn normalize_installed(
+        home: &Path,
+        id: &str,
+        install_id: &str,
+        raw: &serde_json::Value,
+    ) -> Result<definition::NormalizedPayload, HookErrorDto> {
+        let snapshot =
+            installed_snapshot(home, id)?.ok_or_else(|| conflict("Adapter is not installed"))?;
+        if snapshot.install_id != install_id {
+            return Err(conflict("Hook install identity changed"));
+        }
+        let manifest: definition::AdapterManifest = serde_json::from_value(snapshot.manifest)
+            .map_err(|_| conflict("Installed normalization snapshot is invalid"))?;
+        let adapter = definition::LoadedAdapter {
+            manifest,
+            files: BTreeMap::new(),
+            source_digest: snapshot.source_digest.clone(),
+            origin: if snapshot.origin == AdapterOrigin::Builtin {
+                definition::AdapterOrigin::Builtin
+            } else {
+                definition::AdapterOrigin::Custom
+            },
+        };
+        let normalized = adapter.normalize(raw).map_err(|_| {
+            error(
+                HookErrorCode::ValidationError,
+                "Payload does not match installed normalization snapshot",
+            )
+        })?;
+        // Aliases resolve to the canonical event name in normalize().
+        if !snapshot.effective_events.contains(&normalized.native_event) {
+            return Err(error(
+                HookErrorCode::ValidationError,
+                "Native event was not enabled for this installation",
+            ));
+        }
+        Ok(normalized)
+    }
+
+    #[derive(Clone, Default)]
+    struct Probe {
+        version: Option<semver::Version>,
+        diagnostics: Vec<HookDiagnosticDto>,
+    }
+    fn probe_cache() -> &'static Mutex<BTreeMap<(PathBuf, String, String), Probe>> {
+        static PROBES: OnceLock<Mutex<BTreeMap<(PathBuf, String, String), Probe>>> =
+            OnceLock::new();
+        PROBES.get_or_init(|| Mutex::new(BTreeMap::new()))
+    }
+    fn probe_key(home: &Path, adapter: &definition::LoadedAdapter) -> (PathBuf, String, String) {
+        (
+            home.into(),
+            adapter.manifest.id.clone(),
+            source_digest(adapter),
+        )
+    }
+    #[cfg(unix)]
+    fn capture(
+        binary: &Path,
+        args: &[String],
+        budget: Duration,
+        remaining_bytes: &mut usize,
+    ) -> Result<Vec<u8>, &'static str> {
+        use std::os::fd::AsRawFd;
+        let mut child = Command::new(binary)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|_| "probe_spawn_failed")?;
+        let mut stdout = child.stdout.take().unwrap();
+        let mut stderr = child.stderr.take().unwrap();
+        for fd in [stdout.as_raw_fd(), stderr.as_raw_fd()] {
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+            if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
+            {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("probe_pipe_failed");
+            }
+        }
+        let start = Instant::now();
+        let mut output = Vec::new();
+        loop {
+            for reader in [&mut stdout as &mut dyn Read, &mut stderr as &mut dyn Read] {
+                let mut chunk = [0u8; 4096];
+                loop {
+                    match reader.read(&mut chunk) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            if n > *remaining_bytes {
+                                *remaining_bytes = 0;
+                                let _ = child.kill();
+                                let _ = child.wait();
+                                return Err("probe_output_limit");
+                            }
+                            *remaining_bytes -= n;
+                            output.extend_from_slice(&chunk[..n]);
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                        Err(_) => {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            return Err("probe_read_failed");
+                        }
+                    }
+                }
+            }
+            if let Ok(Some(status)) = child.try_wait() {
+                if status.success() {
+                    return Ok(output);
+                }
+                return Err("probe_exit_failed");
+            }
+            if start.elapsed() >= budget {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("probe_timeout");
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    #[cfg(not(unix))]
+    fn capture(
+        _: &Path,
+        _: &[String],
+        _: Duration,
+        _: &mut usize,
+    ) -> Result<Vec<u8>, &'static str> {
+        Err("probe_unsupported")
+    }
+    fn perform_probe(home: &Path, adapter: &definition::LoadedAdapter) -> Probe {
+        let start = Instant::now();
+        let mut result = Probe::default();
+        let parser = match regex::Regex::new(&adapter.manifest.cli.version_parser.pattern) {
+            Ok(p) => p,
+            Err(_) => return result,
+        };
+        let mut remaining_bytes = 64 * 1024;
+        for binary in &adapter.manifest.cli.binaries {
+            if remaining_bytes == 0 {
+                break;
+            }
+            let Some(path) = std::env::var_os("PATH").and_then(|paths| {
+                std::env::split_paths(&paths)
+                    .map(|p| p.join(binary))
+                    .find(|p| p.is_file())
+            }) else {
+                continue;
+            };
+            let remaining = Duration::from_secs(5).saturating_sub(start.elapsed());
+            if remaining.is_zero() {
+                result.diagnostics.push(diagnostic(
+                    "probe_timeout",
+                    "Total CLI probe deadline exceeded",
+                ));
+                break;
+            }
+            match capture(
+                &path,
+                &adapter.manifest.cli.version_args,
+                remaining.min(Duration::from_secs(2)),
+                &mut remaining_bytes,
+            ) {
+                Ok(output) => {
+                    if let Ok(text) = std::str::from_utf8(&output) {
+                        // Match the complete output, not the first semver-like
+                        // fragment from a wrapper banner.
+                        if let Some(version) = parser
+                            .captures(text.trim_end_matches(['\r', '\n']))
+                            .and_then(|c| c.name("version"))
+                            .and_then(|m| semver::Version::parse(m.as_str()).ok())
+                        {
+                            result.version = Some(version);
+                            break;
+                        }
+                    }
+                    result.diagnostics.push(diagnostic(
+                        "unknown_version",
+                        "CLI version output did not match the declared parser",
+                    ));
+                }
+                Err(reason) => result.diagnostics.push(diagnostic(
+                    reason,
+                    "CLI probe did not produce a verified version",
+                )),
+            }
+        }
+        if result.version.is_none() && result.diagnostics.is_empty() {
+            result.diagnostics.push(diagnostic(
+                "unknown_version",
+                "No declared CLI binary was found; no version floor is assumed",
+            ));
+        }
+        let mut cache = probe_cache().lock();
+        if cache.len() >= 128 {
+            cache.clear();
+        }
+        cache.insert(probe_key(home, adapter), result.clone());
+        result
+    }
+
+    fn status_one(home: &Path, id: &str) -> Result<AdapterStatusDto, HookErrorDto> {
+        let adapter_id = AdapterId::try_from(id.to_owned())
+            .map_err(|_| error(HookErrorCode::ValidationError, "Invalid adapter id"))?;
+        let source = source(home, id);
+        let mut status = AdapterStatusDto {
+            id: adapter_id,
+            display_name: id.into(),
+            version: None,
+            origin: origin(id),
+            state: AdapterStatus::NotInstalled,
+            installed_version: None,
+            install_id: None,
+            capabilities: empty_capabilities(),
+            diagnostics: vec![],
+        };
+        let snapshot = match installed_snapshot(home, id) {
+            Ok(snapshot) => snapshot,
+            Err(e) => {
+                status.state = AdapterStatus::Conflict;
+                status
+                    .diagnostics
+                    .push(diagnostic("snapshot_conflict", &e.message));
+                return Ok(status);
+            }
+        };
+        if let Some(snapshot) = &snapshot {
+            status.installed_version = Some(snapshot.adapter_version.clone());
+            status.install_id = Some(snapshot.install_id.clone());
+            if let Ok(manifest) =
+                serde_json::from_value::<definition::AdapterManifest>(snapshot.manifest.clone())
+            {
+                status.display_name = manifest.display_name.clone();
+                let adapter = definition::LoadedAdapter {
+                    manifest,
+                    files: BTreeMap::new(),
+                    source_digest: snapshot.source_digest.clone(),
+                    origin: if snapshot.origin == AdapterOrigin::Builtin {
+                        definition::AdapterOrigin::Builtin
+                    } else {
+                        definition::AdapterOrigin::Custom
+                    },
+                };
+                status.capabilities = capabilities(
+                    &adapter,
+                    &snapshot.effective_events.iter().cloned().collect(),
+                );
+            }
+            if let Err(e) = ensure_owned(snapshot) {
+                status.state = AdapterStatus::Conflict;
+                status
+                    .diagnostics
+                    .push(diagnostic("ownership_conflict", &e.message));
+                return Ok(status);
+            }
+        }
+        match source {
+            Ok(adapter) => {
+                status.display_name = adapter.manifest.display_name.clone();
+                status.version = Some(adapter.manifest.version.to_string());
+                let probe = probe_cache()
+                    .lock()
+                    .get(&probe_key(home, &adapter))
+                    .cloned()
+                    .unwrap_or_default();
+                let events = adapter
+                    .effective_events(probe.version.as_ref(), &BTreeMap::new())
+                    .unwrap_or_default();
+                if snapshot.is_none() {
+                    status.capabilities = capabilities(&adapter, &events);
+                }
+                status.diagnostics.extend(probe.diagnostics);
+                if let Some(snapshot) = snapshot {
+                    status.state = if snapshot.source_digest == source_signature(home, &adapter)? {
+                        AdapterStatus::Installed
+                    } else {
+                        AdapterStatus::Outdated
+                    };
+                } else {
+                    match legacy_changes(home, id) {
+                        Ok(Some(_)) => {
+                            status.state = AdapterStatus::Outdated;
+                            status.installed_version = Some("legacy-v1-v2".into());
+                            status.diagnostics.push(diagnostic(
+                                "legacy_protocol",
+                                "Legacy hook requires a manual v3 upgrade",
+                            ));
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            status.state = AdapterStatus::Conflict;
+                            status
+                                .diagnostics
+                                .push(diagnostic("legacy_conflict", &e.message));
+                        }
+                    }
+                }
+            }
+            Err(_) => {
+                status.state = if snapshot.is_some() {
+                    AdapterStatus::SourceMissing
+                } else {
+                    AdapterStatus::Invalid
+                };
+                status.diagnostics.push(diagnostic("source_unavailable", "Adapter source is missing, unsafe, or invalid; installed snapshot remains independent"));
+            }
+        }
+        if safe::read(&root(home).join("transaction.json"))?
+            .bytes
+            .is_some()
+        {
+            status.state = AdapterStatus::Conflict;
+            status.diagnostics.push(diagnostic(
+                "recovery_required",
+                "Unresolved transaction blocks further mutations",
+            ));
+        }
+        Ok(status)
+    }
+    pub fn adapters_status(home: &Path) -> Result<Vec<AdapterStatusDto>, HookErrorDto> {
+        let mut ids: std::collections::BTreeSet<String> = resources::RESERVED_IDS
+            .iter()
+            .map(|id| id.to_string())
+            .collect();
+        let custom = resources::FilesystemAdapterReader::new(root(home).join("adapters"));
+        let custom_ids = custom.enumerate().map_err(io_error)?;
+        ids.extend(
+            custom_ids
+                .iter()
+                .filter(|id| resources::validate_id(id).is_ok())
+                .cloned(),
+        );
+        let installed_root = root(home).join("installed");
+        resources::reject_symlink_components(&installed_root).map_err(io_error)?;
+        if installed_root.exists() {
+            for entry in fs::read_dir(&installed_root).map_err(io_error)? {
+                let entry = entry.map_err(io_error)?;
+                if let Some(id) = entry
+                    .file_name()
+                    .to_str()
+                    .filter(|id| resources::validate_id(id).is_ok())
+                {
+                    ids.insert(id.into());
+                }
+            }
+        }
+        ids.into_iter()
+            .map(|id| {
+                let mut status = status_one(home, &id)?;
+                if resources::RESERVED_IDS.contains(&id.as_str()) && custom_ids.contains(&id) {
+                    status.diagnostics.push(diagnostic(
+                        "reserved_id",
+                        "Custom directory cannot override a reserved builtin adapter",
+                    ));
+                }
+                Ok(status)
+            })
+            .collect()
+    }
+    pub fn adapters_reload(home: &Path) -> Result<Vec<AdapterStatusDto>, HookErrorDto> {
+        adapters_status(home)
+    }
+    pub fn adapter_probe(home: &Path, id: &str) -> Result<AdapterStatusDto, HookErrorDto> {
+        let adapter = source(home, id)?;
+        perform_probe(home, &adapter);
+        status_one(home, id)
+    }
+
+    fn source_signature(
+        home: &Path,
+        adapter: &definition::LoadedAdapter,
+    ) -> Result<String, HookErrorDto> {
+        let id = &adapter.manifest.id;
+        let builtin = resources::RESERVED_IDS.contains(&id.as_str());
+        let directory = if builtin {
+            builtin_directory()
+                .lock()
+                .clone()
+                .map(|p| p.join("agent-hook-adapters"))
+        } else {
+            Some(root(home).join("adapters"))
+        };
+        let reader: Box<dyn AdapterResourceReader> = match &directory {
+            Some(dir) => Box::new(resources::FilesystemAdapterReader::new(dir)),
+            None => resources::builtin_reader(),
+        };
+        let paths = std::iter::once("adapter.toml")
+            .chain(adapter.manifest.files.iter().map(|f| f.source.as_str()));
+        let mut states = BTreeMap::new();
+        for path in paths {
+            let bytes = reader
+                .read(id, path)
+                .map_err(|_| conflict("Adapter source changed since preview"))?;
+            let mode = match &directory {
+                Some(dir) => safe::read(&dir.join(id).join(path))?.mode,
+                None => None,
+            };
+            states.insert(path.to_string(), (bytes, mode));
+        }
+        Ok(digest(&states))
+    }
+    fn build_preview(
+        home: &Path,
+        request: HookPreviewRequest,
+    ) -> Result<PendingPreview, HookErrorDto> {
+        let id = request.adapter_id.as_str();
+        let receipt_file = receipt_path(home, id);
+        let receipt_before = safe::read(&receipt_file)?;
+        let snapshot = installed_snapshot(home, id)?;
+        let snapshot_guard = snapshot
+            .as_ref()
+            .map(|snapshot| {
+                let path = archive_path(home, id, &snapshot.install_id, snapshot.revision);
+                let before = safe::read(&path)?;
+                Ok::<Change, HookErrorDto>(Change {
+                    path,
+                    before: before.clone(),
+                    after: before,
+                })
+            })
+            .transpose()?;
+        if let Some(snapshot) = &snapshot {
+            ensure_owned(snapshot)?;
+        }
+        if request.action == HookAction::Uninstall {
+            let (mut changes, revision) = if let Some(snapshot) = snapshot {
+                (
+                    snapshot
+                        .targets
+                        .into_iter()
+                        .map(|t| Change {
+                            path: t.path,
+                            before: t.installed,
+                            after: t.original,
+                        })
+                        .collect::<Vec<_>>(),
+                    snapshot.revision + 1,
+                )
+            } else {
+                (
+                    legacy_changes(home, id)?
+                        .ok_or_else(|| conflict("No owned installation exists"))?,
+                    1,
+                )
+            };
+            if let Some(guard) = snapshot_guard {
+                changes.push(guard);
+            }
+            changes.push(Change {
+                path: receipt_file,
+                before: receipt_before,
+                after: FileState::absent(),
+            });
+            return pending(
+                home,
+                request,
+                changes,
+                None,
+                revision,
+                empty_capabilities(),
+                vec![],
+            );
+        }
+        let adapter = source(home, id)?;
+        let signature = source_signature(home, &adapter)?;
+        if source_digest(&source(home, id)?) != source_digest(&adapter) {
+            return Err(conflict("Adapter source changed while building preview"));
+        }
+        let probe = perform_probe(home, &adapter);
+        let events = adapter.effective_events(probe.version.as_ref(), &request.event_options).map_err(|_| error(HookErrorCode::ValidationError, "Event choices or verified CLI version cannot guarantee required session identity events"))?;
+        // Identity cannot be inferred from a turn event. Both the subscription
+        // and payload normalization must be guaranteed before installing.
+        if !adapter.manifest.native_events.iter().any(|e| {
+            events.contains(&e.name) && e.hook_kind == Some(super::super::HookKind::SessionStart)
+        }) {
+            return Err(error(
+                HookErrorCode::ValidationError,
+                "A verified session_start identity event is required for installation",
+            ));
+        }
+        let capabilities = capabilities(&adapter, &events);
+        let mut baseline = BTreeMap::new();
+        let mut migration = BTreeMap::new();
+        let (install_id, revision) = if let Some(snapshot) = &snapshot {
+            for target in &snapshot.targets {
+                baseline.insert(target.path.clone(), target.original.clone());
+            }
+            (snapshot.install_id.clone(), snapshot.revision + 1)
+        } else {
+            if let Some(legacy) = legacy_changes(home, id)? {
+                for change in legacy {
+                    baseline.insert(change.path.clone(), change.after.clone());
+                    migration.insert(change.path.clone(), change);
+                }
+            }
+            (uuid::Uuid::new_v4().to_string(), 1)
+        };
+        let mut desired = render(home, &adapter, &events, &baseline)?;
+        // Unowned executable/config-owned files cannot be silently replaced.
+        for file in &adapter.manifest.files {
+            let path = file_target(home, &adapter, &file.target)?;
+            if !baseline.contains_key(&path) && safe::read(&path)?.bytes.is_some() {
+                return Err(conflict(
+                    "Adapter file target already contains unowned bytes",
+                ));
+            }
+        }
+        let install_env = root(home).join("installed").join(id).join("install.env");
+        if !baseline.contains_key(&install_env) && safe::read(&install_env)?.bytes.is_some() {
+            return Err(conflict("Unowned install identity file exists"));
+        }
+        desired.insert(
+            install_env.clone(),
+            FileState::file(
+                format!("SE_AGENT_HOOK_INSTALL_ID={install_id}\n").into_bytes(),
+                0o600,
+            ),
+        );
+        let mut targets = Vec::new();
+        let mut changes = BTreeMap::new();
+        for (path, installed) in desired {
+            let before = safe::read(&path)?;
+            let original = baseline
+                .get(&path)
+                .cloned()
+                .unwrap_or_else(|| before.clone());
+            targets.push(TargetSnapshot {
+                path: path.clone(),
+                original,
+                installed: installed.clone(),
+            });
+            changes.insert(
+                path.clone(),
+                Change {
+                    path,
+                    before,
+                    after: installed,
+                },
+            );
+        }
+        // A source update may remove a target. Restore it in this transaction,
+        // rather than orphaning bytes from an older snapshot.
+        if let Some(snapshot) = &snapshot {
+            for target in &snapshot.targets {
+                if !changes.contains_key(&target.path) {
+                    changes.insert(
+                        target.path.clone(),
+                        Change {
+                            path: target.path.clone(),
+                            before: target.installed.clone(),
+                            after: target.original.clone(),
+                        },
+                    );
+                }
+            }
+        }
+        for (path, change) in migration {
+            changes.entry(path).or_insert(change);
+        }
+        let snapshot = InstalledSnapshot {
+            schema_version: 3,
+            adapter_id: request.adapter_id.clone(),
+            install_id,
+            revision,
+            adapter_version: adapter.manifest.version.to_string(),
+            origin: origin(id),
+            source_digest: signature.clone(),
+            manifest: serde_json::to_value(&adapter.manifest).map_err(io_error)?,
+            effective_events: events.iter().cloned().collect(),
+            probe_version: probe.version.map(|v| v.to_string()),
+            targets,
+        };
+        let receipt_bytes = serde_json::to_vec_pretty(&snapshot).map_err(io_error)?;
+        if receipt_bytes.len() > 16 * 1024 * 1024 {
+            return Err(error(
+                HookErrorCode::ValidationError,
+                "Installed recovery snapshot exceeds the safe size limit",
+            ));
+        }
+        let receipt_after = FileState::file(receipt_bytes, 0o600);
+        let mut changes: Vec<_> = changes.into_values().collect();
+        if let Some(guard) = snapshot_guard {
+            changes.push(guard);
+        }
+        let archive = archive_path(home, id, &snapshot.install_id, revision);
+        let archive_before = safe::read(&archive)?;
+        if archive_before.bytes.is_some() {
+            return Err(conflict("Immutable snapshot revision already exists"));
+        }
+        changes.push(Change {
+            path: archive,
+            before: archive_before,
+            after: receipt_after.clone(),
+        });
+        // Receipt is the commit record and is always replaced last.
+        changes.push(Change {
+            path: receipt_file,
+            before: receipt_before,
+            after: receipt_after,
+        });
+        let mut result = pending(
+            home,
+            request,
+            changes,
+            Some(signature),
+            revision,
+            capabilities,
+            probe.diagnostics,
+        )?;
+        for config in adapter.filtered_ops(&events) {
+            if config.format == "owned-file" {
+                continue;
+            }
+            let path = scoped_config(home, &adapter.manifest.id, &config.path)?;
+            if let Some(change) = result.changes.iter().find(|c| c.path == path) {
+                let parse = |state: &FileState| -> Option<serde_json::Value> {
+                    let bytes = state.bytes.as_ref()?;
+                    if config.format == "json-merge" {
+                        serde_json::from_slice(bytes).ok()
+                    } else {
+                        toml::from_str::<toml::Value>(std::str::from_utf8(bytes).ok()?)
+                            .ok()
+                            .and_then(|v| serde_json::to_value(v).ok())
+                    }
+                };
+                let before = parse(&change.before);
+                let after = parse(&change.after);
+                for op in config.ops.unwrap_or_default() {
+                    let at = |value: &Option<serde_json::Value>| -> Option<String> {
+                        let mut value = value.as_ref()?;
+                        for segment in &op.key {
+                            value = value.get(segment)?;
+                        }
+                        if op.key.iter().any(|key| secret_key(key)) {
+                            return Some("\"<redacted>\"".into());
+                        }
+                        serde_json::to_string(value).ok().map(redact_preview)
+                    };
+                    result.dto.keys.push(HookKeyDiffDto {
+                        path: path.to_string_lossy().into_owned(),
+                        key: op.key.clone(),
+                        before: at(&before),
+                        after: at(&after),
+                    });
+                }
+            }
+        }
+        Ok(result)
+    }
+    pub fn preview_v3(
+        home: &Path,
+        request: HookPreviewRequest,
+    ) -> Result<HookPreviewDto, HookErrorDto> {
+        let preview = build_preview(home, request)?;
+        let dto = preview.dto.clone();
+        let mut cache = previews().lock();
+        cache.retain(|_, p| p.created.elapsed() < Duration::from_secs(60));
+        if cache.len() >= 128 {
+            return Err(conflict("Too many pending hook previews"));
+        }
+        cache.insert(dto.preview_id.clone(), preview);
+        Ok(dto)
+    }
+    // Authorization is deliberately transport-owned. This function only
+    // consumes a fresh manual preview, atomically, once, with filesystem CAS.
+    pub fn confirm_v3(
+        home: &Path,
+        request: HookConfirmRequest,
+        expected_action: Option<HookAction>,
+    ) -> Result<HookMutationResult, HookErrorDto> {
+        let pending = previews()
+            .lock()
+            .remove(&request.preview_id)
+            .ok_or_else(|| conflict("Preview is missing, consumed, or expired"))?;
+        if pending.created.elapsed() >= Duration::from_secs(60)
+            || pending.home != home
+            || pending.request.adapter_id != request.adapter_id
+            || pending.dto.fingerprint != request.fingerprint
+            || expected_action.is_some_and(|a| a != pending.request.action)
+        {
+            return Err(conflict("Preview identity, action, or fingerprint changed"));
+        }
+        let _lock = safe::lock(&root(home).join(".install.lock"))?;
+        if let Some(signature) = &pending.source_digest {
+            let adapter = source(home, request.adapter_id.as_str())
+                .map_err(|_| conflict("Adapter source changed since preview"))?;
+            if &source_signature(home, &adapter)? != signature {
+                return Err(conflict("Adapter source changed since preview"));
+            }
+        }
+        transaction(home, &pending.changes)?;
+        Ok(HookMutationResult {
+            status: status_one(home, request.adapter_id.as_str())?,
+            receipt_revision: pending.revision,
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        include!("tests/v3_installer.rs");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

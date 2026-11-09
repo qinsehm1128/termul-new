@@ -1,0 +1,60 @@
+schema_version = 1
+id = "pi"
+display_name = "pi"
+version = "3.0.0"
+[cli]
+binaries = ["pi"]
+version_args = ["--version"]
+[cli.version_parser]
+kind = "anchored-regex"
+pattern = '^(?P<version>[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)$'
+[[config]]
+id = "extension"
+path = "home:.pi/agent/extensions/se-agent-status.ts"
+format = "owned-file"
+[payload]
+native_event = "/event"
+session_id = "/session_id"
+transcript_path = "/transcript_path"
+tool_name = "/tool_name"
+ok = "/ok"
+[[native_events]]
+name = "session_start"
+hook_kind = "session_start"
+enabled_by_default = true
+[[native_events]]
+name = "agent_start"
+aliases = ["turn_start"]
+hook_kind = "prompt_submitted"
+enabled_by_default = true
+[[native_events]]
+name = "agent_end"
+aliases = ["turn_end"]
+hook_kind = "turn_done"
+enabled_by_default = true
+[[native_events]]
+name = "session_shutdown"
+aliases = ["session_end"]
+hook_kind = "session_end"
+enabled_by_default = true
+[[native_events]]
+name = "tool_execution_start"
+hook_kind = "tool_start"
+enabled_by_default = false
+[[native_events]]
+name = "tool_execution_end"
+hook_kind = "tool_end"
+enabled_by_default = false
+[[files]]
+id = "hook"
+source = "files/extension.ts.tmpl"
+target = "config:extension"
+mode = "0600"
+[resume]
+requires = ["transcript_path"]
+path_root = "pi-sessions"
+[[resume.variants]]
+id = "default"
+binary = "pi"
+argv = ["--session", "{{transcript_path}}"]
+requires = ["transcript_path"]

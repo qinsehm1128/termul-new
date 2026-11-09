@@ -113,6 +113,7 @@ serde = { version = "1", features = ["derive"] }
 # with their keys left in the user's order.
 serde_json = { version = "1", features = ["preserve_order"] }
 toml = "0.8"
+semver = { version = "1", features = ["serde"] }
 toml_edit = "0.25"
 chrono = "0.4"
 
