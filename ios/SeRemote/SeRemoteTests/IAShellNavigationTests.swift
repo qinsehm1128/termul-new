@@ -20,7 +20,7 @@ struct IAShellNavigationTests {
     @Test func toolHubExcludesQuickTerminals() {
         let hub = ToolDestination.hubCases
         #expect(!hub.contains(.quickTerminals))
-        #expect(hub.map(\.rawValue) == ["git", "scheduledTasks", "search", "screenText"])
+        #expect(hub.map(\.rawValue) == ["git", "scheduledTasks", "search", "screenText", "desktop"])
         // Quick terminals stay addressable (palette route), they just leave 工具.
         #expect(ToolDestination.allCases.contains(.quickTerminals))
         #expect(hub.map(\.title).allSatisfy { !$0.isEmpty })

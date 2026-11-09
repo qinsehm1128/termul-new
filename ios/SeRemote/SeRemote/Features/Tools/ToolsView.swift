@@ -68,6 +68,7 @@ struct WorkspaceToolDestinationView: View {
             case .quickTerminals: QuickTerminalsFeatureView(session: session)
             case .search: SearchFeatureView(session: session, onOpenFile: onOpenFile)
             case .screenText: ScreenTextFeatureView(session: session)
+            case .desktop: DesktopFeatureView(session: session)
             }
         }
         .toolbar(.visible, for: .navigationBar)
@@ -75,7 +76,7 @@ struct WorkspaceToolDestinationView: View {
 }
 
 enum ToolDestination: String, CaseIterable, Identifiable, Hashable {
-    case git, scheduledTasks, quickTerminals, search, screenText
+    case git, scheduledTasks, quickTerminals, search, screenText, desktop
     var id: String { rawValue }
 
     /// The 工具 tab lists tools only. Quick terminals live in the 终端 tab, so
@@ -88,6 +89,7 @@ enum ToolDestination: String, CaseIterable, Identifiable, Hashable {
         case .quickTerminals: String(localized: "Quick terminals")
         case .search: String(localized: "Search")
         case .screenText: String(localized: "Host screen text")
+        case .desktop: String(localized: "Desktop")
         }
     }
     var systemImage: String { symbol }
@@ -98,6 +100,7 @@ enum ToolDestination: String, CaseIterable, Identifiable, Hashable {
         case .quickTerminals: "terminal"
         case .search: "magnifyingglass"
         case .screenText: "text.viewfinder"
+        case .desktop: "desktopcomputer"
         }
     }
     var detail: String {
@@ -107,6 +110,7 @@ enum ToolDestination: String, CaseIterable, Identifiable, Hashable {
         case .quickTerminals: String(localized: "Host terminal shortcuts.")
         case .search: String(localized: "Find text in this workspace.")
         case .screenText: String(localized: "Read a terminal text snapshot.")
+        case .desktop: String(localized: "View, capture and control your computer.")
         }
     }
 }

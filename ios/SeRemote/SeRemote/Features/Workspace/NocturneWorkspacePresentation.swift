@@ -36,6 +36,9 @@ enum NocturneWorkspacePresentation {
         case .screenText:
             detail = destination.detail
             note = String(localized: "Matching terminal snapshot required")
+        case .desktop:
+            detail = destination.detail
+            note = String(localized: "View only")
         }
         return WorkspaceTool(id: destination.rawValue, title: destination.title,
                              detail: detail, note: note, systemImage: destination.symbol,

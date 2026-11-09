@@ -102,6 +102,8 @@ struct WorkspaceHubScreen: View {
             })
         case .screenText:
             ScreenTextFeatureView(session: session)
+        case .desktop:
+            DesktopFeatureView(session: session)
         }
     }
 

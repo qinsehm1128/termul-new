@@ -36,6 +36,54 @@ struct HostHTTP: Sendable {
         return try await decode(request)
     }
 
+    /// Desktop endpoints return raw JSON/image bytes, not an IPC envelope.
+    func desktopInfo() async throws -> DesktopInfo {
+        let data = try await desktopData(path: "/remote/desktop/info")
+        return try JSONDecoder().decode(DesktopInfo.self, from: data)
+    }
+
+    func desktopScreenshot(display: String, format: String = "png", quality: Int = 80) async throws -> Data {
+        try await desktopData(path: "/remote/desktop/screenshot", query: [
+            "display": display, "format": format, "quality": String(quality)
+        ])
+    }
+
+    private func desktopData(path: String, query: [String: String] = [:]) async throws -> Data {
+        var components = URLComponents(url: url(for: path), resolvingAgainstBaseURL: false)
+        components?.queryItems = query.isEmpty ? nil : query.map { URLQueryItem(name: $0.key, value: $0.value) }
+        guard let url = components?.url else { throw HostError.unexpected("Invalid desktop URL") }
+        var request = URLRequest(url: url, timeoutInterval: 20)
+        request.httpMethod = "GET"
+        request.assumesHTTP3Capable = false
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        credentials.apply(to: &request)
+        let (data, response) = try await HostURLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw HostError.network(String(localized: "The tunnel returned an unexpected response."))
+        }
+        if !(200 ..< 300).contains(http.statusCode) {
+            let failure = Self.desktopResponseError(statusCode: http.statusCode, data: data)
+            failure.publishAccessFailure(origin: origin)
+            throw failure
+        }
+        return data
+    }
+
+    static func desktopResponseError(statusCode: Int, data: Data) -> HostError {
+        let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        let code = object?["code"] as? String ?? "CAPTURE_FAILED"
+        let desktopCodes: Set<String> = [
+            "DESKTOP_DISABLED", "CONTROL_DISABLED", "DESKTOP_STOPPED", "SCREEN_UNSUPPORTED", "SCREEN_PERMISSION_REQUIRED",
+            "DISPLAY_NOT_FOUND", "INPUT_PERMISSION_REQUIRED", "CAPTURE_FAILED", "INPUT_FAILED", "INVALID_REQUEST"
+        ]
+        if desktopCodes.contains(code), object?["code"] != nil {
+            return .ipc(object?["error"] as? String ?? code, code)
+        }
+        if statusCode == 401 || statusCode == 403,
+           let accessError = responseError(statusCode: statusCode, data: data) { return accessError }
+        return .ipc(object?["error"] as? String ?? code, code)
+    }
+
     func post<T: Decodable>(_ path: String, body: [String: Any]) async throws -> T {
         let result: IpcResult<T> = try await sendJSON(path, method: "POST", body: body)
         return try unwrap(result)

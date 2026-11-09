@@ -44,6 +44,7 @@ final class WorkspaceSession {
     let http: HostHTTP
     let acp = AcpSocket()
     let terminalSocket = TerminalSocket()
+    let desktopSocket = DesktopSocket()
     let chat = ChatStore()
     let conversations = ConversationStore()
     let projects = ProjectStore()
@@ -100,6 +101,7 @@ final class WorkspaceSession {
         quickTerminals.attach(http: http)
         search.attach(http: http)
         terminals.attach(socket: terminalSocket, origin: origin, credentials: credentials)
+        desktopSocket.configure(http: http)
         let originString = origin.absoluteString
         revocationObserver = NotificationCenter.default.addObserver(
             forName: .hostDeviceRevoked, object: nil, queue: .main
@@ -121,6 +123,7 @@ final class WorkspaceSession {
         needsRePairing = false
         acp.revoke()
         terminalSocket.revoke()
+        desktopSocket.revoke()
         stop()
     }
 
@@ -244,6 +247,7 @@ final class WorkspaceSession {
         runningRefreshTask = nil
         acp.stop()
         terminalSocket.stop()
+        desktopSocket.close()
     }
 
     /// Poll the same 15 s cadence as the desktop agent tracker. The first tick
@@ -269,6 +273,7 @@ final class WorkspaceSession {
         isBackgrounded = isBackground
         guard phase != .revoked else { return }
         acp.handleLifecycle(isBackground: isBackground)
+        desktopSocket.handleLifecycle(isBackground: isBackground)
         if !isBackground {
             // Cached grid can match while the host PTY changed in background;
             // re-assert equal dims to converge after resume.

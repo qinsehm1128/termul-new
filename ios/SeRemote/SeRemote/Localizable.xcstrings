@@ -10218,6 +10218,896 @@
           }
         }
       }
+    },
+    "View, capture and control your computer." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看、截图和控制电脑。"
+          }
+        }
+      }
+    },
+    "Desktop connection interrupted." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "桌面连接已中断。"
+          }
+        }
+      }
+    },
+    "Trackpad" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "触控板"
+          }
+        }
+      }
+    },
+    "Direct touch" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "直接触控"
+          }
+        }
+      }
+    },
+    "Remote desktop canvas" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远程桌面画面"
+          }
+        }
+      }
+    },
+    "Use the toolbar to enable control or show gesture help." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用工具栏启用控制或查看手势帮助。"
+          }
+        }
+      }
+    },
+    "Controlling" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在控制"
+          }
+        }
+      }
+    },
+    "View only" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅查看"
+          }
+        }
+      }
+    },
+    "Left click" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "左键单击"
+          }
+        }
+      }
+    },
+    "Right click" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "右键单击"
+          }
+        }
+      }
+    },
+    "Show keyboard" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示键盘"
+          }
+        }
+      }
+    },
+    "Reconnecting… Last frame" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在重新连接… 显示上一帧"
+          }
+        }
+      }
+    },
+    "Select display" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择显示器"
+          }
+        }
+      }
+    },
+    "Desktop gesture help" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "桌面手势帮助"
+          }
+        }
+      }
+    },
+    "Control" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "控制"
+          }
+        }
+      }
+    },
+    "Control remote desktop" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "控制远程桌面"
+          }
+        }
+      }
+    },
+    "Requires host permission and this device’s screen control permission." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "需要主机授权及此设备的屏幕控制权限。"
+          }
+        }
+      }
+    },
+    "Interaction mode" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "交互模式"
+          }
+        }
+      }
+    },
+    "Share desktop screenshot" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分享桌面截图"
+          }
+        }
+      }
+    },
+    "Reconnect remote desktop" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新连接远程桌面"
+          }
+        }
+      }
+    },
+    "Your desktop appears here when the host starts sharing." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机开始共享后，桌面将显示在此处。"
+          }
+        }
+      }
+    },
+    "Screen viewing not permitted" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无屏幕查看权限"
+          }
+        }
+      }
+    },
+    "Desktop disconnected" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "桌面已断开连接"
+          }
+        }
+      }
+    },
+    "Connecting to desktop…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在连接桌面…"
+          }
+        }
+      }
+    },
+    "Viewing desktop" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在查看桌面"
+          }
+        }
+      }
+    },
+    "Desktop paused" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "桌面已暂停"
+          }
+        }
+      }
+    },
+    "Desktop access revoked" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "桌面访问权限已撤销"
+          }
+        }
+      }
+    },
+    "Ask the host owner to grant this device screen viewing permission." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请主机所有者授予此设备屏幕查看权限。"
+          }
+        }
+      }
+    },
+    "Access was revoked. Pair this device again from the host." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "访问权限已撤销。请在主机上重新配对此设备。"
+          }
+        }
+      }
+    },
+    "This host does not support remote desktop." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此主机不支持远程桌面。"
+          }
+        }
+      }
+    },
+    "Enable remote desktop viewing in the host’s settings." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请在主机设置中启用远程桌面查看。"
+          }
+        }
+      }
+    },
+    "On the Mac, allow Screen Recording in System Settings → Privacy & Security, then retry." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请在 Mac 的“系统设置 → 隐私与安全性”中允许屏幕录制，然后重试。"
+          }
+        }
+      }
+    },
+    "View only: ask the host owner to grant this device screen control permission." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅查看：请主机所有者授予此设备屏幕控制权限。"
+          }
+        }
+      }
+    },
+    "View only: enable remote mouse and keyboard control on the host." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在电脑上开启「允许控制鼠标键盘」。"
+          }
+        }
+      }
+    },
+    "View only: on the Mac, allow Accessibility in System Settings → Privacy & Security." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅查看：请在 Mac 的“系统设置 → 隐私与安全性”中允许辅助功能。"
+          }
+        }
+      }
+    },
+    "Desktop gestures" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "桌面手势"
+          }
+        }
+      }
+    },
+    "Trackpad: drag anywhere to move the cursor. Direct touch: tap the target on screen." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "触控板：在任意位置拖动以移动光标。直接触控：轻点屏幕上的目标。"
+          }
+        }
+      }
+    },
+    "Tap: left click. Double tap: double click. Two-finger tap or long press: right click." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轻点：左键单击。轻点两下：双击。双指轻点或长按：右键单击。"
+          }
+        }
+      }
+    },
+    "Tap, then hold and drag: drag with the left mouse button. Two-finger swipe: scroll. Three-finger tap: keyboard." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轻点后按住并拖动：按住鼠标左键拖动。双指滑动：滚动。三指轻点：显示键盘。"
+          }
+        }
+      }
+    },
+    "Pinch to zoom locally. In view-only mode, drag to pan the enlarged desktop. Each display remembers its zoom and position." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "双指缩放仅调整本地画面。仅查看模式下，可拖动平移放大的桌面。每台显示器分别记住缩放和位置。"
+          }
+        }
+      }
+    },
+    "Control must be allowed on the host and for this device. The toggle only starts or stops this session’s control; it never changes host permissions." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机和此设备均须获准控制。开关仅开始或停止本次会话的控制，不会更改主机权限。"
+          }
+        }
+      }
+    },
+    "Screenshots open the system share sheet. Save to Files or share from there; no photo library access is requested." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "截图将打开系统分享面板，可存储到“文件”或分享，不会请求照片图库权限。"
+          }
+        }
+      }
+    },
+    "Could not share the screenshot. Check host screen recording permission and connection, then try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法分享截图。请检查主机的屏幕录制权限及连接，然后重试。"
+          }
+        }
+      }
+    },
+    "Remote keyboard input" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远程键盘输入"
+          }
+        }
+      }
+    },
+    "Shift modifier" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Shift 修饰键"
+          }
+        }
+      }
+    },
+    "Control modifier" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Control 修饰键"
+          }
+        }
+      }
+    },
+    "Option modifier" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Option 修饰键"
+          }
+        }
+      }
+    },
+    "Command modifier" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Command 修饰键"
+          }
+        }
+      }
+    },
+    "Escape key" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esc 键"
+          }
+        }
+      }
+    },
+    "Tab key" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tab 键"
+          }
+        }
+      }
+    },
+    "Enter key" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回车键"
+          }
+        }
+      }
+    },
+    "Left arrow key" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "向左方向键"
+          }
+        }
+      }
+    },
+    "Up arrow key" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "向上方向键"
+          }
+        }
+      }
+    },
+    "Down arrow key" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "向下方向键"
+          }
+        }
+      }
+    },
+    "Right arrow key" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "向右方向键"
+          }
+        }
+      }
+    },
+    "Remote desktop viewing is disabled on the computer." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "电脑尚未开启远程桌面查看。"
+          }
+        }
+      }
+    },
+    "Enable remote control on the computer to use the mouse and keyboard." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在电脑上开启「允许控制鼠标键盘」。"
+          }
+        }
+      }
+    },
+    "Allow Screen Recording on the computer to view its desktop." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请在 Mac 上授予屏幕录制权限后查看桌面。"
+          }
+        }
+      }
+    },
+    "Allow Accessibility on the computer to control its mouse and keyboard." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请在 Mac 上授予辅助功能权限后控制鼠标和键盘。"
+          }
+        }
+      }
+    },
+    "This display is no longer available. Select another display." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此显示器已不可用，请选择其他显示器。"
+          }
+        }
+      }
+    },
+    "This device does not have permission to view the desktop." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此设备没有查看桌面的权限。"
+          }
+        }
+      }
+    },
+    "This device does not have permission to control the desktop." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此设备没有控制桌面的权限。"
+          }
+        }
+      }
+    },
+    "The computer could not capture its desktop. Try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "电脑无法截取桌面，请重试。"
+          }
+        }
+      }
+    },
+    "The computer could not apply that input. Try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "电脑无法执行此输入，请重试。"
+          }
+        }
+      }
+    },
+    "The desktop request could not be accepted." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法接受此桌面请求。"
+          }
+        }
+      }
+    },
+    "The desktop connection ended. Reconnect to continue." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "桌面连接已结束，请重新连接。"
+          }
+        }
+      }
+    },
+    "The desktop is unavailable. Try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "桌面暂不可用，请重试。"
+          }
+        }
+      }
+    },
+    "Queued — waiting for the agent" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已排队，等待智能体处理"
+          }
+        }
+      }
+    },
+    "Sent — awaiting transcript confirmation" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已发送，等待会话记录确认"
+          }
+        }
+      }
+    },
+    "Confirmed in transcript" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已在会话记录中确认"
+          }
+        }
+      }
+    },
+    "Unconfirmed — not resent automatically" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未确认，不会自动重发"
+          }
+        }
+      }
+    },
+    "This link does not allow viewing terminal conversations." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此连接没有查看终端对话的权限。"
+          }
+        }
+      }
+    },
+    "Conversation unavailable. Return to the terminal or retry." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "对话暂不可用，请返回终端或重试。"
+          }
+        }
+      }
+    },
+    "Send could not be confirmed. Check the terminal before sending again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法确认是否发送成功，请先检查终端，再决定是否重发。"
+          }
+        }
+      }
+    },
+    "Control could not be confirmed. Use the terminal instead." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法确认控制操作，请改用终端。"
+          }
+        }
+      }
+    },
+    "Read-only link — use the terminal on the host to reply." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此连接为只读，请在主机终端中回复。"
+          }
+        }
+      }
+    },
+    "Stop this agent?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停止此智能体？"
+          }
+        }
+      }
+    },
+    "Stop agent" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停止智能体"
+          }
+        }
+      }
+    },
+    "This stops the agent, not the terminal. The terminal remains available." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此操作仅停止智能体，不会关闭终端。终端仍可继续使用。"
+          }
+        }
+      }
+    },
+    "Loading conversation…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载对话…"
+          }
+        }
+      }
+    },
+    "No conversation yet" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无对话"
+          }
+        }
+      }
+    },
+    "Messages appear here when the agent writes its transcript." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "智能体写入会话记录后，消息会显示在这里。"
+          }
+        }
+      }
+    },
+    "Conversation unavailable" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "对话暂不可用"
+          }
+        }
+      }
+    },
+    "Start a supported agent with hooks enabled, or return to the terminal." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请启动已启用 Hook 的受支持智能体，或返回终端继续操作。"
+          }
+        }
+      }
+    },
+    "Conversation is degraded. Use the terminal to continue." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "对话暂不可用，请返回终端继续操作。"
+          }
+        }
+      }
+    },
+    "Approval required — continue in the terminal." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "需要授权，请在终端中继续。"
+          }
+        }
+      }
+    },
+    "Message agent…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "向智能体发送消息…"
+          }
+        }
+      }
+    },
+    "Terminal presentation" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "终端显示方式"
+          }
+        }
+      }
+    },
+    "Conversation" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "对话"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
