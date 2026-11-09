@@ -14,8 +14,8 @@ use tokio::task::spawn_blocking;
 use tracing::{error, info};
 
 use crate::cli_session::{
-    detect_live_agent_sessions, list_cli_sessions, resolve_cli_sessions, CliSessionListArgs,
-    CliSessionListResult, CliSessionResolveArgs, CliSessionResolveResult,
+    list_cli_sessions, resolve_cli_sessions, CliSessionListArgs, CliSessionListResult,
+    CliSessionResolveArgs, CliSessionResolveResult,
 };
 use crate::web::fs_api::IpcBody;
 use crate::web::live_terminals::{live_terminals, LiveTerminalDescriptor};
@@ -113,6 +113,11 @@ pub struct LiveAgentSessionEntry {
     pub codex_home: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    pub source: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "hook_kind")]
+    pub hook_kind: Option<crate::agent_hooks::HookKind>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "transcript_path")]
+    pub transcript_path: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -143,6 +148,9 @@ fn map_live_sessions(
                 self_dev: session.self_dev,
                 codex_home: session.codex_home,
                 cwd: session.cwd,
+                source: session.source,
+                hook_kind: session.hook_kind,
+                transcript_path: session.transcript_path,
             })
         })
         .collect()
@@ -168,7 +176,11 @@ pub async fn live_get(State(state): State<AppState>) -> impl IntoResponse {
     let detected = if roots.is_empty() {
         Vec::new()
     } else {
-        match spawn_blocking(move || detect_live_agent_sessions(&roots)).await {
+        let identities = terminals
+            .iter()
+            .map(|t| (t.pid, t.id.clone(), Some(t.cwd.clone())))
+            .collect::<Vec<_>>();
+        match spawn_blocking(move || crate::cli_session::detect_with_hooks(&identities)).await {
             Ok(sessions) => sessions,
             Err(err) => {
                 error!(
@@ -234,6 +246,9 @@ mod tests {
             agent_id,
             session_id: session_id.to_string(),
             self_dev: false,
+            source: "poll",
+            hook_kind: None,
+            transcript_path: None,
             codex_home: None,
             cwd: Some("/work/app".to_string()),
         }

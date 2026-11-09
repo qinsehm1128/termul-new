@@ -15,6 +15,7 @@
 //! event log, cursor, tiers) is [`ws`] (Story 1.4).
 
 pub mod assets;
+pub mod agent_hooks_api;
 pub mod auth;
 pub mod catalog_api;
 pub mod cli_session_api;

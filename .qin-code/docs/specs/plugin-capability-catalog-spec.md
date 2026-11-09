@@ -310,12 +310,19 @@ Conventions: `confirm=none` (read or harmless), `grant` (install-time grant is e
 | se.sessions.resolveCli | resolve_cli_sessions_cmd `cli_session/commands.rs:24` | R | project | none | OPEN | in `{files[]}`; reads those transcripts |
 | se.terminals.detectLiveAgents | detect_live_agent_sessions_cmd `cli_session/commands.rs:40`; GET /cli-sessions/live (`web/cli_session_api.rs`) | R | terminal | none | OPEN | in `rootPids[]`; reads this machine's process table. Web route derives roots from live terminal-service PTYs and returns `{sessions:[{terminalId,projectId?,rootPid,agentId,sessionId,selfDev?,codexHome?,cwd?}],scannedAt}` — read-only, no secrets |
 
+| se.agentHooks.status | agent_hooks_status `agent_hooks/commands.rs`; GET /agent-hooks/status (`web/agent_hooks_api.rs`) | R | global | none | OPEN | read-only per-agent install/version/config-path status; never installs or probes by running an agent |
+| se.agentHooks.preview | agent_hooks_preview `agent_hooks/commands.rs`; GET /agent-hooks/preview (`web/agent_hooks_api.rs`) | R | global | none | OPEN | owner-only read-only exact managed config diff preview in `{agent}`; no config/backup/script writes |
+| se.agentHooks.install | agent_hooks_install `agent_hooks/commands.rs`; POST /agent-hooks/install (`web/agent_hooks_api.rs`) | W | global | explicit click | OPEN | owner-only host config write; in `{agent}`; backup + atomic managed-entry merge; exact path shown before confirmation; never automatic |
+| se.agentHooks.uninstall | agent_hooks_uninstall `agent_hooks/commands.rs`; POST /agent-hooks/uninstall (`web/agent_hooks_api.rs`) | W | global | explicit click | OPEN | owner-only removal of Se-owned entries/files; preserves concurrent user edits and restores original bytes when unchanged |
+| se.agentHooks.events | agent_hook_events `agent_hooks/commands.rs`; GET /agent-hooks/events (`web/agent_hooks_api.rs`) | R | project | none | OPEN | bounded metadata-only cursor tail in `{after?}`; no prompts, tool inputs or secrets; C1 can tail by sequence |
+
 ---
 
 #### 13. Events (plugin subscriptions)
 
 | event id | source emit (file:line) | payload summary | scope |
 |---|---|---|---|
+| se.events.agentHookEvent | `agent-hook-event` (`agent_hooks/mod.rs`, `lib.rs`, `web/router.rs`) | `AgentHookEvent`: sequence, terminal_id, project_id, agent, session_id, kind, at, transcript_path?, tool_name?, ok?; metadata only | project/terminal |
 | se.events.acpAgentSpawned | `acp/events.rs:337` | `{sessionId, agentId, runtime, cwd}` | session |
 | se.events.acpSessionCreated | `acp/events.rs:339` | `{sessionId, agentId, title?}` | session |
 | se.events.acpMessageChunk | `acp/events.rs:341` | streaming content delta | session |

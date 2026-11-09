@@ -16,9 +16,11 @@ import { useScreenObservationStore } from '@/stores/screen-observation-store'
  */
 
 import { useEffect } from 'react'
+import { activeHookState, resolveHookFallback } from '@/lib/agents/agent-hook-state'
 import { readTerminalScreenTail } from '@/lib/agents/agent-screen-source'
 import {
   type AgentStateEvidence,
+  type AgentTerminalState,
   deriveAgentTerminalState,
   isStateAwareAgent
 } from '@/lib/agents/agent-terminal-state'
@@ -80,6 +82,14 @@ export function isAgentStateCandidate(terminal: Terminal): boolean {
   return terminal.kind === 'agent' && isStateAwareAgent(terminal.agentId)
 }
 
+function priorityHookState(terminal: Terminal | undefined) {
+  return activeHookState(terminal?.agentSession, terminal?.lastActivityTimestamp)
+}
+
+function resolvedScreenState(terminal: Terminal | undefined, derived: AgentTerminalState) {
+  return resolveHookFallback(terminal?.agentSession, terminal?.lastActivityTimestamp, derived)
+}
+
 export function useAgentTerminalState(): void {
   const setTerminalOscTitle = useTerminalStore((state) => state.setTerminalOscTitle)
   const setTerminalAgentState = useTerminalStore((state) => state.setTerminalAgentState)
@@ -102,6 +112,12 @@ export function useAgentTerminalState(): void {
       const live = new Set<string>()
 
       for (const terminal of terminals) {
+        const hookState = priorityHookState(terminal)
+        if (hookState !== null) {
+          setTerminalAgentState(terminal.id, hookState)
+          memories.delete(terminal.id)
+          continue
+        }
         if (!isAgentStateCandidate(terminal)) continue
         live.add(terminal.id)
 
@@ -117,7 +133,7 @@ export function useAgentTerminalState(): void {
           const ptyId = terminal.ptyId
           const claim = terminal.claim
           if (!claim || host.status?.state === 'degraded' || host.status?.state === 'unsupported') {
-            setTerminalAgentState(terminal.id, 'unknown')
+            setTerminalAgentState(terminal.id, resolvedScreenState(terminal, 'unknown'))
             continue
           }
           if (inFlight.has(terminal.id)) continue
@@ -127,12 +143,13 @@ export function useAgentTerminalState(): void {
               const current = useTerminalStore.getState()
               if (
                 disposed ||
+                priorityHookState(current.terminals.find((t) => t.id === terminal.id)) !== null ||
                 current.terminals.find((t) => t.id === terminal.id)?.ptyId !== ptyId ||
                 current.terminals.find((t) => t.id === terminal.id)?.claim !== claim
               )
                 return
               if (!result.success) {
-                current.setTerminalAgentState(terminal.id, 'unknown')
+                current.setTerminalAgentState(terminal.id, resolvedScreenState(terminal, 'unknown'))
                 void logFrontendError({
                   level: 'warn',
                   source: 'host-screen-evidence',
@@ -156,25 +173,33 @@ export function useAgentTerminalState(): void {
                 accepted === result.data.status ? usableHostScreenText(result.data) : null
               current.setTerminalAgentState(
                 terminal.id,
-                text === null
-                  ? 'unknown'
-                  : deriveAgentTerminalState({
-                      agentId: terminal.agentId as string,
-                      oscTitle:
-                        current.terminals.find((t) => t.id === terminal.id)?.oscTitle ?? null,
-                      screenTail: text
-                    }).state
+                resolvedScreenState(
+                  current.terminals.find((t) => t.id === terminal.id),
+                  text === null
+                    ? 'unknown'
+                    : deriveAgentTerminalState({
+                        agentId: terminal.agentId as string,
+                        oscTitle:
+                          current.terminals.find((t) => t.id === terminal.id)?.oscTitle ?? null,
+                        screenTail: text
+                      }).state
+                )
               )
             })
             .catch(() => {
               if (
                 !disposed &&
+                priorityHookState(
+                  useTerminalStore.getState().terminals.find((t) => t.id === terminal.id)
+                ) === null &&
                 useTerminalStore.getState().terminals.find((t) => t.id === terminal.id)?.ptyId ===
                   ptyId &&
                 useTerminalStore.getState().terminals.find((t) => t.id === terminal.id)?.claim ===
                   claim
               ) {
-                useTerminalStore.getState().setTerminalAgentState(terminal.id, 'unknown')
+                useTerminalStore
+                  .getState()
+                  .setTerminalAgentState(terminal.id, resolvedScreenState(terminal, 'unknown'))
                 void logFrontendError({
                   level: 'warn',
                   source: 'host-screen-evidence',
@@ -193,7 +218,10 @@ export function useAgentTerminalState(): void {
           oscTitle: terminal.oscTitle ?? null,
           screenTail: readTerminalScreenTail(terminal.id, terminal.ptyId)
         }
-        setTerminalAgentState(terminal.id, deriveAgentTerminalState(evidence).state)
+        setTerminalAgentState(
+          terminal.id,
+          resolvedScreenState(terminal, deriveAgentTerminalState(evidence).state)
+        )
       }
 
       // Closed terminals must not keep their scan memory: an id can come back

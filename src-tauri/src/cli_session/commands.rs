@@ -1,8 +1,8 @@
 //! Tauri IPC for CLI session discovery.
 
 use super::{
-    detect_live_agent_sessions, list_cli_sessions, resolve_cli_sessions, CliSessionListArgs,
-    CliSessionListResult, CliSessionResolveArgs, CliSessionResolveResult, LiveAgentSession,
+    list_cli_sessions, resolve_cli_sessions, CliSessionListArgs, CliSessionListResult,
+    CliSessionResolveArgs, CliSessionResolveResult, LiveAgentSession,
 };
 
 #[tauri::command]
@@ -39,8 +39,14 @@ pub async fn resolve_cli_sessions_cmd(
 #[tauri::command]
 pub async fn detect_live_agent_sessions_cmd(
     root_pids: Vec<u32>,
+    terminal: tauri::State<'_, crate::core::TerminalServiceHandle>,
 ) -> Result<Vec<LiveAgentSession>, String> {
-    tokio::task::spawn_blocking(move || detect_live_agent_sessions(&root_pids))
+    let identities = super::live::terminal_hook_identities(&terminal)
+        .await
+        .into_iter()
+        .filter(|t| root_pids.contains(&t.0))
+        .collect::<Vec<_>>();
+    tokio::task::spawn_blocking(move || super::live::detect_with_hooks(&identities))
         .await
         .map_err(|err| format!("live agent session detection join failed: {err}"))
 }

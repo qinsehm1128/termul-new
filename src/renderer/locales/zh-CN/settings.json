@@ -1,4 +1,19 @@
 {
+  "agentHooks": {
+    "title": "Agent 集成",
+    "hint": "Hooks 用于上报终端 Agent 活动。启动时只检查状态，修改配置前需要你确认。安装后请重启已经运行的 Agent。",
+    "viewChanges": "查看变更",
+    "refresh": "刷新状态",
+    "loading": "加载中…",
+    "unknown": "不可用",
+    "configPath": "配置文件",
+    "reinstall": "重新安装",
+    "install": "安装",
+    "uninstall": "卸载",
+    "previewTitle": "预览 Hook 配置变更",
+    "previewHint": "将修改下方的宿主配置文件。只添加或替换本应用管理的 Hook 条目，保留其他 Hook；卸载也只移除本应用管理的条目。在你确认前不会写入任何变更。",
+    "confirm": "确认安装"
+  },
   "page": {
     "title": "应用偏好设置",
     "subtitle": "配置全局应用设置"

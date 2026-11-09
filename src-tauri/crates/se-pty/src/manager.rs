@@ -26,6 +26,115 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 
+fn inject_agent_hook_environment(
+    env: &mut HashMap<String, String>,
+    home: &str,
+    terminal: &str,
+    project: Option<&str>,
+) {
+    // Discard inherited/overridden identities from another pane first.
+    for key in [
+        "SE_AGENT_HOOK_ENDPOINT",
+        "SE_AGENT_HOOK_PORT",
+        "SE_AGENT_HOOK_TOKEN",
+        "SE_TERMINAL_ID",
+        "SE_PROJECT_ID",
+    ] {
+        env.remove(key);
+    }
+    env.insert("SE_TERMINAL_ID".into(), terminal.into());
+    env.insert(
+        "SE_PROJECT_ID".into(),
+        project.unwrap_or("unassigned").into(),
+    );
+    let Ok(metadata) =
+        std::fs::read_to_string(Path::new(home).join(".se-manager/agent-hooks/endpoint.env"))
+    else {
+        return;
+    };
+    let fields: HashMap<_, _> = metadata
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .collect();
+    let Some(port) = fields
+        .get("SE_AGENT_HOOK_PORT")
+        .and_then(|port| port.parse::<u16>().ok())
+        .filter(|port| *port > 0)
+    else {
+        return;
+    };
+    let Some(token) = fields
+        .get("SE_AGENT_HOOK_TOKEN")
+        .filter(|token| token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit()))
+    else {
+        return;
+    };
+    env.insert(
+        "SE_AGENT_HOOK_ENDPOINT".into(),
+        format!("http://127.0.0.1:{port}"),
+    );
+    env.insert("SE_AGENT_HOOK_PORT".into(), port.to_string());
+    env.insert("SE_AGENT_HOOK_TOKEN".into(), (*token).to_string());
+}
+
+#[cfg(test)]
+mod agent_hook_environment_tests {
+    use super::*;
+    #[test]
+    fn each_new_spawn_gets_its_own_identity_and_current_endpoint() {
+        let home = tempfile::tempdir().unwrap();
+        let runtime = home.path().join(".se-manager/agent-hooks");
+        std::fs::create_dir_all(&runtime).unwrap();
+        std::fs::write(
+            runtime.join("endpoint.env"),
+            format!(
+                "SE_AGENT_HOOK_PORT=43210\nSE_AGENT_HOOK_TOKEN={}\n",
+                "a".repeat(64)
+            ),
+        )
+        .unwrap();
+        let mut env = HashMap::from([("SE_TERMINAL_ID".into(), "foreign".into())]);
+        inject_agent_hook_environment(
+            &mut env,
+            home.path().to_str().unwrap(),
+            "terminal-1",
+            Some("project-1"),
+        );
+        assert_eq!(env["SE_AGENT_HOOK_ENDPOINT"], "http://127.0.0.1:43210");
+        assert_eq!(env["SE_TERMINAL_ID"], "terminal-1");
+        assert_eq!(env["SE_PROJECT_ID"], "project-1");
+        let existing = env.clone();
+        std::fs::write(
+            runtime.join("endpoint.env"),
+            format!(
+                "SE_AGENT_HOOK_PORT=43211\nSE_AGENT_HOOK_TOKEN={}\n",
+                "b".repeat(64)
+            ),
+        )
+        .unwrap();
+        inject_agent_hook_environment(&mut env, home.path().to_str().unwrap(), "terminal-2", None);
+        assert_eq!(env["SE_AGENT_HOOK_PORT"], "43211");
+        assert_eq!(env["SE_PROJECT_ID"], "unassigned");
+        assert_eq!(existing["SE_AGENT_HOOK_PORT"], "43210");
+    }
+    #[test]
+    fn malformed_runtime_metadata_never_becomes_shell_code_or_inherited_secret() {
+        let home = tempfile::tempdir().unwrap();
+        let runtime = home.path().join(".se-manager/agent-hooks");
+        std::fs::create_dir_all(&runtime).unwrap();
+        std::fs::write(
+            runtime.join("endpoint.env"),
+            "SE_AGENT_HOOK_PORT=$(touch injected)\nSE_AGENT_HOOK_TOKEN=bad\n",
+        )
+        .unwrap();
+        let mut env = HashMap::from([("SE_AGENT_HOOK_TOKEN".into(), "foreign-secret".into())]);
+        inject_agent_hook_environment(&mut env, home.path().to_str().unwrap(), "terminal", None);
+        assert!(!env.contains_key("SE_AGENT_HOOK_TOKEN"));
+        assert!(!env.contains_key("SE_AGENT_HOOK_ENDPOINT"));
+        assert_eq!(env["SE_TERMINAL_ID"], "terminal");
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn resolve_executable_from_path(command: &str) -> Option<String> {
     use std::ffi::OsString;
@@ -2179,6 +2288,14 @@ impl PtyManager {
         let cols = options.cols.unwrap_or(80);
         let rows = options.rows.unwrap_or(24);
         let mut env = self.merge_environment(options.env.clone());
+        // Read the host's current launch endpoint at spawn time, including in
+        // the long-lived terminal-core daemon. Never mutate or restart a PTY.
+        inject_agent_hook_environment(
+            &mut env,
+            &self.get_home_directory(),
+            &id,
+            options.project_id.as_deref(),
+        );
         log::info!(
             "[pty-env] spawn locale LANG={} LC_CTYPE={} PYTHONUTF8={} TERM={} COLORTERM={} FORCE_COLOR={}",
             env.get("LANG").map(String::as_str).unwrap_or(""),

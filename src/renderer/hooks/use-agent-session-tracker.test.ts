@@ -56,6 +56,7 @@ describe('syncTerminalAgentSessions', () => {
     const [t1, t2] = useTerminalStore.getState().terminals
     expect(t1.agentSession).toBeUndefined()
     expect(t2.agentSession).toEqual({
+      source: 'poll',
       agentId: 'codex',
       sessionId: 'c-1',
       cwd: '/repo',

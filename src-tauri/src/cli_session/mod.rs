@@ -17,7 +17,7 @@ mod scope;
 mod types;
 mod walk;
 
-pub use live::{detect_live_agent_sessions, LiveAgentSession};
+pub use live::{detect_with_hooks, LiveAgentSession};
 pub use scan::{list_cli_sessions, resolve_cli_sessions};
 pub use types::{
     CliSessionListArgs, CliSessionListResult, CliSessionResolveArgs, CliSessionResolveResult,

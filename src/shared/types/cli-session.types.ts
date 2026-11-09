@@ -252,10 +252,15 @@ export const LIVE_AGENT_IDS = ['claude-code', 'codex', 'pi', 'qin-code'] as cons
 export type LiveAgentId = (typeof LIVE_AGENT_IDS)[number]
 
 /**
- * An agent session found running under a terminal's shell (desktop host only).
+ * An agent session found running under a terminal's shell on the host.
  * Metadata only, like the transcript scan: the renderer builds the resume argv.
  */
 export interface LiveAgentSession {
+  source?: 'hook' | 'poll'
+  hook_kind?: import('./agent-hooks.types').AgentHookKind
+  /** Hook event time in epoch milliseconds; renderer-local when older hosts omit it. */
+  hook_at?: number
+  transcript_path?: string
   /** Shell pid of the terminal the agent was found under. */
   rootPid: number
   agentId: LiveAgentId
@@ -270,6 +275,12 @@ export interface LiveAgentSession {
 
 /** What a terminal remembers about the agent session running in it. */
 export interface TerminalAgentSession {
+  /** Older persisted sessions omit provenance and remain valid poll fallbacks. */
+  source?: 'hook' | 'poll'
+  hook_kind?: import('./agent-hooks.types').AgentHookKind
+  /** Hook event time in epoch milliseconds; renderer-local when older hosts omit it. */
+  hook_at?: number
+  transcript_path?: string
   agentId: LiveAgentId
   sessionId: string
   cwd?: string

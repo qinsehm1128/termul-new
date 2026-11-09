@@ -1,4 +1,19 @@
 {
+  "agentHooks": {
+    "title": "Agent integrations",
+    "hint": "Hooks report terminal agent activity. Startup only checks status; configuration changes require your confirmation. Restart existing agents after installing.",
+    "viewChanges": "View changes",
+    "refresh": "Refresh status",
+    "loading": "Loading…",
+    "unknown": "Unavailable",
+    "configPath": "Configuration file",
+    "reinstall": "Reinstall",
+    "install": "Install",
+    "uninstall": "Uninstall",
+    "previewTitle": "Preview hook configuration change",
+    "previewHint": "This changes the host configuration file below. Only app-managed hook entries are added or replaced; unrelated hooks are preserved. Uninstall removes only app-managed entries. No changes happen until you confirm.",
+    "confirm": "Confirm install"
+  },
   "page": {
     "title": "Application Preferences",
     "subtitle": "Configure global application settings"

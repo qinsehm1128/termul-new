@@ -15,6 +15,7 @@
  * sees a thrown exception from the network layer.
  */
 
+import type { AgentHookEvent, AgentKind, HookInstallStatus } from '@shared/types/agent-hooks.types'
 import type {
   CliSessionListArgs,
   CliSessionListResult,
@@ -91,6 +92,16 @@ function serverBase(): string {
 }
 
 /** Shape of the HTTP response body mirroring `IpcResult<T>`. */
+export const webServerAgentHooks = {
+  preview: (agent: AgentKind) =>
+    getJson<string>(`/agent-hooks/preview?agent=${encodeURIComponent(agent)}`),
+  status: () => getJson<HookInstallStatus[]>('/agent-hooks/status'),
+  install: (agent: AgentKind) => postJson<HookInstallStatus>('/agent-hooks/install', { agent }),
+  uninstall: (agent: AgentKind) => postJson<HookInstallStatus>('/agent-hooks/uninstall', { agent }),
+  events: (after?: number) =>
+    getJson<AgentHookEvent[]>(`/agent-hooks/events${after === undefined ? '' : `?after=${after}`}`)
+}
+
 type IpcBody<T> = { success: true; data: T } | { success: false; error: string; code: string }
 
 /** Map any transport/parse failure to a uniform `IpcResult` failure. */
@@ -500,6 +511,11 @@ function skillsError(result: { error: string; code?: string }): Error {
 }
 
 function skillsQuery(request: SkillsCatalogRequest = {}): string {
+  async live(): Promise<unknown> {
+    const res = await getJson<unknown>('/cli-sessions/live')
+    if (!res.success) throw new Error(res.error)
+    return res.data
+  },
   const params = new URLSearchParams()
   if (request.projectId) params.set('projectId', request.projectId)
   if (request.projectRoot) params.set('projectRoot', request.projectRoot)

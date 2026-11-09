@@ -198,6 +198,19 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
     ))
     .merge(classified_routes(
         Router::<AppState>::new()
+            .route("/agent-hooks/status", get(super::agent_hooks_api::status))
+            .route("/agent-hooks/preview", get(super::agent_hooks_api::preview))
+            .route("/agent-hooks/events", get(super::agent_hooks_api::events)),
+        RemoteRouteClass::AgentHooksStatus,
+    ))
+    .merge(classified_routes(
+        Router::<AppState>::new()
+            .route("/agent-hooks/install", post(super::agent_hooks_api::install))
+            .route("/agent-hooks/uninstall", post(super::agent_hooks_api::uninstall)),
+        RemoteRouteClass::AgentHooksManage,
+    ))
+    .merge(classified_routes(
+        Router::<AppState>::new()
             .route(
                 "/cli-sessions",
                 get(cli_session_api::list_get).post(cli_session_api::list_post),
@@ -452,6 +465,17 @@ pub fn router(
     store: Option<Arc<WebStore>>,
     authority: Arc<RemoteAccessAuthority>,
 ) -> Router {
+    #[cfg(not(test))]
+    if crate::agent_hooks::start().is_err() {
+        log::error!(target: "se_manager::agent_hooks", "operation=agent_hook_receiver kind=start_failed count=1");
+    }
+    let hook_relay = Arc::downgrade(&ws_relay);
+    crate::agent_hooks::subscribe(Arc::new(move |event| {
+        if let (Some(relay), Ok(payload)) = (hook_relay.upgrade(), serde_json::to_value(event)) {
+            let sinks: Vec<Arc<dyn super::sink::EventSink>> = vec![relay];
+            let _ = super::sink::fan_out(&sinks, None, "agent-hook-event", &payload);
+        }
+    }));
     if let Some(manager) = acp.in_process_manager() {
         manager.set_terminal_service(terminal.clone());
     }

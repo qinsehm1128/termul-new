@@ -30,6 +30,11 @@ pub struct LiveAgentSession {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codex_home: Option<String>,
     pub cwd: Option<String>,
+    pub source: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "hook_kind")]
+    pub hook_kind: Option<crate::agent_hooks::HookKind>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "transcript_path")]
+    pub transcript_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -76,6 +81,85 @@ struct Found {
 struct OpenFiles {
     cwd: Option<String>,
     files: Vec<String>,
+}
+
+/// Active hook lifecycle state is authoritative. Unhooked or ended terminals
+/// use the probe, but an ended hook identity cannot be resurrected by it.
+pub fn detect_with_hooks(terminals: &[(u32, String, Option<String>)]) -> Vec<LiveAgentSession> {
+    detect_with_hook_lookup(
+        terminals,
+        crate::agent_hooks::latest,
+        detect_live_agent_sessions,
+    )
+}
+
+fn detect_with_hook_lookup(
+    terminals: &[(u32, String, Option<String>)],
+    lookup: impl Fn(&str) -> Option<crate::agent_hooks::AgentHookEvent>,
+    poll: impl FnOnce(&[u32]) -> Vec<LiveAgentSession>,
+) -> Vec<LiveAgentSession> {
+    use crate::agent_hooks::HookKind;
+    let mut fallback = Vec::new();
+    let mut ended = std::collections::HashMap::new();
+    let mut sessions = Vec::new();
+    for (pid, id, cwd) in terminals {
+        if let Some(event) = lookup(id) {
+            if event.kind != HookKind::SessionEnd {
+                sessions.push(LiveAgentSession {
+                    root_pid: *pid,
+                    agent_id: event.agent.as_str(),
+                    session_id: event.session_id,
+                    self_dev: false,
+                    codex_home: None,
+                    cwd: cwd.clone(),
+                    source: "hook",
+                    hook_kind: Some(event.kind),
+                    transcript_path: event.transcript_path,
+                });
+            } else {
+                // Uninstalling hooks must not disable discovery for the rest
+                // of this PTY's life. Only suppress the ended identity.
+                fallback.push(*pid);
+                ended.insert(*pid, (event.agent.as_str(), event.session_id));
+            }
+        } else {
+            fallback.push(*pid);
+        }
+    }
+    if !fallback.is_empty() {
+        sessions.extend(poll(&fallback).into_iter().filter(|session| {
+            !ended.get(&session.root_pid).is_some_and(|(agent, id)| {
+                session.agent_id == *agent
+                    && (session.session_id.is_empty() || session.session_id == *id)
+            })
+        }));
+    }
+    sessions
+}
+
+pub async fn terminal_hook_identities(
+    service: &crate::core::TerminalServiceHandle,
+) -> Vec<(u32, String, Option<String>)> {
+    if let Some(client) = service.core_client() {
+        return client
+            .list()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|t| t.active)
+            .map(|t| (t.pid, t.id, Some(t.cwd)))
+            .collect();
+    }
+    service
+        .in_process_pty()
+        .map(|pty| {
+            pty.get_all()
+                .into_iter()
+                .filter(|t| t.is_active())
+                .map(|t| (t.pid, t.id.clone(), Some(t.cwd.clone())))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 pub fn detect_live_agent_sessions(root_pids: &[u32]) -> Vec<LiveAgentSession> {
@@ -318,6 +402,9 @@ fn resolve_all(
                 agent_id: f.agent.id(),
                 session_id: String::new(),
                 self_dev: false,
+                source: "poll",
+                hook_kind: None,
+                transcript_path: None,
                 codex_home: None,
                 cwd: cwd.clone(),
             };
@@ -513,6 +600,115 @@ fn parse_qin_clients(text: &str) -> Vec<QinClient> {
 }
 
 #[cfg(test)]
+mod hook_precedence_tests {
+    use super::*;
+    use crate::agent_hooks::{AgentHookEvent, AgentKind, HookKind};
+    fn event(kind: HookKind) -> AgentHookEvent {
+        AgentHookEvent {
+            sequence: 1,
+            terminal_id: "hooked".into(),
+            project_id: "p".into(),
+            agent: AgentKind::QinCode,
+            session_id: "actual-session".into(),
+            transcript_path: None,
+            kind,
+            at: 1,
+            tool_name: None,
+            ok: None,
+        }
+    }
+    #[test]
+    fn hook_state_precedes_polling_and_only_unhooked_roots_are_probed() {
+        let terminals = [
+            (10, "hooked".into(), Some("/project".into())),
+            (20, "plain".into(), None),
+        ];
+        let sessions = detect_with_hook_lookup(
+            &terminals,
+            |id| (id == "hooked").then(|| event(HookKind::NeedsApproval)),
+            |roots| {
+                assert_eq!(roots, &[20]);
+                vec![]
+            },
+        );
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, "actual-session");
+        assert_eq!(sessions[0].source, "hook");
+        assert_eq!(sessions[0].hook_kind, Some(HookKind::NeedsApproval));
+    }
+    #[test]
+    fn same_directory_hooks_keep_qin_and_pi_sessions_distinct() {
+        let terminals: Vec<_> = (0..4)
+            .map(|n| (10 + n, format!("pane-{n}"), Some("/same-project".into())))
+            .collect();
+        let sessions = detect_with_hook_lookup(
+            &terminals,
+            |id| {
+                let mut value = event(HookKind::SessionStart);
+                value.terminal_id = id.into();
+                value.session_id = format!("session-{id}");
+                value.agent = if id.ends_with('0') || id.ends_with('1') {
+                    AgentKind::QinCode
+                } else {
+                    AgentKind::Pi
+                };
+                Some(value)
+            },
+            |_| panic!("active hook panes must not poll"),
+        );
+        assert_eq!(sessions.len(), 4);
+        assert_eq!(
+            sessions
+                .iter()
+                .map(|s| &s.session_id)
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            4
+        );
+        assert_eq!(
+            sessions.iter().filter(|s| s.agent_id == "qin-code").count(),
+            2
+        );
+        assert_eq!(sessions.iter().filter(|s| s.agent_id == "pi").count(), 2);
+    }
+
+    fn polled(agent: &'static str, session: &str) -> LiveAgentSession {
+        LiveAgentSession {
+            root_pid: 10,
+            agent_id: agent,
+            session_id: session.into(),
+            self_dev: false,
+            codex_home: None,
+            cwd: None,
+            source: "poll",
+            hook_kind: None,
+            transcript_path: None,
+        }
+    }
+    #[test]
+    fn ended_hook_session_is_not_resurrected_by_a_stale_probe() {
+        let terminals = [(10, "hooked".into(), None)];
+        let sessions = detect_with_hook_lookup(
+            &terminals,
+            |_| Some(event(HookKind::SessionEnd)),
+            |_| vec![polled("qin-code", "actual-session"), polled("qin-code", "")],
+        );
+        assert!(sessions.is_empty());
+    }
+    #[test]
+    fn ended_hook_does_not_disable_future_agents_after_uninstall() {
+        let terminals = [(10, "hooked".into(), None)];
+        let sessions = detect_with_hook_lookup(
+            &terminals,
+            |_| Some(event(HookKind::SessionEnd)),
+            |_| vec![polled("codex", "new-codex"), polled("qin-code", "new-qin")],
+        );
+        assert_eq!(sessions.len(), 2);
+        assert!(sessions.iter().all(|session| session.source == "poll"));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -653,6 +849,9 @@ mod tests {
                 agent_id: "claude-code",
                 session_id: "ca50b276-5627-4a6a-8fea-ce2bfbe86c3d".into(),
                 self_dev: false,
+                source: "poll",
+                hook_kind: None,
+                transcript_path: None,
                 codex_home: None,
                 cwd: Some("/repo".into()),
             }]

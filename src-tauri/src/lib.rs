@@ -3033,7 +3033,7 @@ pub fn run() {
     let app = builder
         .setup(|app| {
             let handle = app.handle().clone();
-            if let Err(_) = agent_hooks::start() {
+            if agent_hooks::start().is_err() {
                 log::error!(target: "se_manager::agent_hooks", "operation=agent_hook_receiver kind=start_failed count=1");
             }
             let hook_handle = handle.clone();

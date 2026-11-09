@@ -1,7 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { mockInvoke } = vi.hoisted(() => ({ mockInvoke: vi.fn() }))
+const { mockInvoke, runtime, mockLive } = vi.hoisted(() => ({
+  mockInvoke: vi.fn(),
+  runtime: { desktop: true },
+  mockLive: vi.fn()
+}))
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mockInvoke }))
+vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: () => runtime.desktop }))
+vi.mock('@/lib/web-server-api', () => ({ webServerCliSessions: { live: mockLive } }))
 
 import {
   buildResumeArgv,
@@ -48,7 +54,11 @@ describe('buildResumeArgv', () => {
 })
 
 describe('detectLiveAgentSessions', () => {
-  beforeEach(() => mockInvoke.mockReset())
+  beforeEach(() => {
+    mockInvoke.mockReset()
+    mockLive.mockReset()
+    runtime.desktop = true
+  })
 
   it('drops entries a shell could be tricked by', async () => {
     mockInvoke.mockResolvedValue([
@@ -66,6 +76,57 @@ describe('detectLiveAgentSessions', () => {
     expect(sessions.map((s) => s.rootPid)).toEqual([10])
   })
 
+  it.each([true, false])('preserves valid hook metadata for desktop=%s', async (desktop) => {
+    runtime.desktop = desktop
+    const value = {
+      ...base,
+      agentId: 'pi',
+      source: 'hook',
+      hook_kind: 'needs_approval',
+      transcript_path: '/host/session.jsonl'
+    }
+    mockInvoke.mockResolvedValue([value])
+    mockLive.mockResolvedValue({ sessions: [value] })
+    const [live] = await detectLiveAgentSessions([1])
+    expect(live).toMatchObject({
+      source: 'hook',
+      hook_kind: 'needs_approval',
+      transcript_path: '/host/session.jsonl'
+    })
+    expect(toTerminalAgentSession(live)).toMatchObject({
+      source: 'hook',
+      hook_kind: 'needs_approval',
+      transcript_path: '/host/session.jsonl'
+    })
+    if (!desktop) expect(mockInvoke).not.toHaveBeenCalled()
+  })
+  it('supports old hookKind serialization and discards invalid provenance or unsafe transcript paths', async () => {
+    mockInvoke.mockResolvedValue([
+      {
+        ...base,
+        agentId: 'pi',
+        source: 'hook',
+        hookKind: 'tool_start',
+        transcriptPath: '/host/log.jsonl'
+      },
+      {
+        ...base,
+        agentId: 'pi',
+        source: 'anything',
+        hook_kind: 'execute_shell',
+        transcript_path: '/bad\npath'
+      }
+    ])
+    const [valid, invalid] = await detectLiveAgentSessions([1])
+    expect(valid).toMatchObject({
+      source: 'hook',
+      hook_kind: 'tool_start',
+      transcript_path: '/host/log.jsonl'
+    })
+    expect(invalid.source).toBeUndefined()
+    expect(invalid.hook_kind).toBeUndefined()
+    expect(invalid.transcript_path).toBeUndefined()
+  })
   it('does not ask the host about no terminals', async () => {
     expect(await detectLiveAgentSessions([])).toEqual([])
     expect(mockInvoke).not.toHaveBeenCalled()
