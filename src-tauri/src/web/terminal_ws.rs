@@ -900,7 +900,8 @@ async fn handle(
             // No filter lists every active terminal: the remote terminal hub
             // groups project terminals and still needs the scope-less ones.
             // A filter narrows that set; conversation wins when both are given.
-            let terminals: Vec<Value> = if let Some(client) = core_terminal(state) {
+            let unfiltered = conversation_filter.is_none() && project_filter.is_none();
+            let mut terminals: Vec<Value> = if let Some(client) = core_terminal(state) {
                 client
                     .list()
                     .await
@@ -941,6 +942,14 @@ async fn handle(
                 project_filter.is_some(),
                 terminals.len()
             );
+            if unfiltered {
+                // The hub list names every host PTY, so it carries only what
+                // grouping and opening need. Filtered lists keep the full
+                // shape the desktop and web clients consume.
+                for summary in &mut terminals {
+                    omit_unfiltered_list_attribution(summary);
+                }
+            }
             Ok(json!({ "terminals": terminals }))
         }
         "watch" => {
@@ -2013,6 +2022,18 @@ fn live_terminal_summary_from_status(
     })
 }
 
+/// An unfiltered `list` enumerates every host PTY, so it also carries no
+/// attribution the caller cannot already narrow to: `pid` is a host process
+/// handle and `conversationId` is a process-local scope, not an identity.
+/// The terminal hub groups by `projectId` and opens by `id`; filtered lists
+/// (conversation or project scope) keep the full shape for desktop/web.
+fn omit_unfiltered_list_attribution(summary: &mut Value) {
+    if let Some(object) = summary.as_object_mut() {
+        object.remove("pid");
+        object.remove("conversationId");
+    }
+}
+
 fn terminal_display_mode_wire(mode: TerminalDisplayMode) -> &'static str {
     match mode {
         TerminalDisplayMode::Phone => "phone",
@@ -2876,7 +2897,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_without_filters_returns_every_active_terminal_with_attribution() {
+    async fn unfiltered_list_keeps_grouping_but_drops_process_attribution() {
         let state = terminal_test_state();
         let temp = tempfile::tempdir().unwrap();
         let cwd = temp.path().to_string_lossy().into_owned();
@@ -2926,11 +2947,15 @@ mod tests {
         for terminal in terminals {
             assert!(
                 terminal.get("projectId").is_some(),
-                "every summary carries project attribution"
+                "the hub needs project attribution to group"
             );
             assert!(
-                terminal.get("conversationId").is_some(),
-                "every summary carries conversation attribution"
+                terminal.get("pid").is_none(),
+                "an unfiltered list must not expose the host process handle"
+            );
+            assert!(
+                terminal.get("conversationId").is_none(),
+                "an unfiltered list must not expose the process-local conversation scope"
             );
         }
         let ids = terminals
@@ -2940,7 +2965,8 @@ mod tests {
         assert!(ids.contains(&project.info.id.as_str()));
         assert!(ids.contains(&conversation.info.id.as_str()));
 
-        // A project filter still narrows instead of returning everything.
+        // A project filter still narrows instead of returning everything, and
+        // keeps the full summary shape that desktop and web clients consume.
         let filtered = handle(
             request(json!({ "projectId": "proj-1" })),
             &state,
@@ -2955,6 +2981,29 @@ mod tests {
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0]["id"], project.info.id);
         assert_eq!(filtered[0]["projectId"], "proj-1");
+        assert!(filtered[0].get("pid").is_some());
+        assert!(filtered[0].get("conversationId").is_some());
+
+        // A conversation filter keeps the same full shape too.
+        let by_conversation = handle(
+            request(json!({ "conversationId": conversation_id().to_string() })),
+            &state,
+            &authority,
+            &principal,
+            &tx,
+            &mut ctx,
+        )
+        .await
+        .expect("conversation-filtered list");
+        let by_conversation = by_conversation["terminals"]
+            .as_array()
+            .expect("terminals array");
+        assert_eq!(by_conversation.len(), 1);
+        assert_eq!(by_conversation[0]["id"], conversation.info.id);
+        assert!(by_conversation[0].get("pid").is_some());
+        assert!(by_conversation[0]["conversationId"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()));
 
         let missing = handle(
             request(json!({ "projectId": "proj-2" })),
