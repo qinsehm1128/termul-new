@@ -1653,9 +1653,26 @@ mod tests {
             0o755,
         )
         .unwrap();
-        let output =
-            bounded_output(&cli, &["hooks", "status", "--json"], Duration::from_secs(1)).unwrap();
-        assert!(serde_json::from_slice::<Value>(&output).is_ok());
+        // This is a successful JSON control, not a timeout assertion. Concurrent
+        // subprocess load can delay even this printf-only child beyond one second;
+        // keep its scheduling allowance separate from the 50 ms deadline above.
+        let success_control_budget = Duration::from_secs(5);
+        let before = Instant::now();
+        let output = bounded_output(
+            &cli,
+            &["hooks", "status", "--json"],
+            success_control_budget,
+        )
+        .unwrap_or_else(|| {
+            panic!(
+                "valid JSON success control failed after {:?} (scheduling budget {success_control_budget:?}, CLI {cli:?}); timeout behavior is asserted separately",
+                before.elapsed(),
+            )
+        });
+        assert_eq!(
+            serde_json::from_slice::<Value>(&output).expect("success control must emit valid JSON"),
+            json!({"level": "minimal", "rules": []}),
+        );
         assert!(!adapter.config().exists());
     }
 }
