@@ -129,7 +129,7 @@ struct TerminalWorkspaceView: View {
     private var terminalStatusBar: some View {
         HStack(spacing: SeSpace.xs) {
             Circle()
-                .fill(session.terminals.isConnecting ? palette.warning : (session.terminalSocket.state == .connected ? palette.live : palette.inkSecondary))
+                .fill(session.terminals.isConnecting ? palette.warning : (session.terminalSocket.isConnected ? palette.live : palette.inkSecondary))
                 .frame(width: 6, height: 6)
                 .accessibilityHidden(true)
             Text(session.terminals.isConnecting ? String(localized: "Connecting…") : "PTY")

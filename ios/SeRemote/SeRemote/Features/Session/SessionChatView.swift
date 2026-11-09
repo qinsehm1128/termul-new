@@ -45,6 +45,10 @@ enum NocturneSessionPresentation {
         }
     }
 
+    static func acceptsShortcut(isActive: Bool, enabled: Bool) -> Bool {
+        isActive && enabled
+    }
+
     static func modeAvailable(_ tab: WorkspaceTab, workspace: WorkspaceKind) -> Bool {
         tab != .chat || workspace == .conversation
     }

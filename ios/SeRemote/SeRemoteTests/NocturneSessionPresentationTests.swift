@@ -42,6 +42,16 @@ struct NocturneSessionPresentationTests {
         #expect(ready.title == String(localized: "Connected"))
     }
 
+    @Test("Hidden persistent workbenches never handle hardware shortcuts")
+    func activeShortcutOwnership() {
+        for active in [false, true] {
+            for enabled in [false, true] {
+                #expect(NocturneSessionPresentation.acceptsShortcut(isActive: active, enabled: enabled)
+                        == (active && enabled))
+            }
+        }
+    }
+
     @Test("Unavailable chat cannot be selected in project-only workspaces")
     func modeAvailability() {
         for tab in WorkspaceTab.allCases {

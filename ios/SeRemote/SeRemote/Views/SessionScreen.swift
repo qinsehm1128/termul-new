@@ -4,6 +4,8 @@ import UIKit
 struct SessionScreen: View {
     @Bindable var session: WorkspaceSession
     var hostDirectory: AnyView? = nil
+    var onBack: (() -> Void)? = nil
+    var isActive: Bool = true
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -43,7 +45,7 @@ struct SessionScreen: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
-            guard session.workspaceTab == .terminal || sideBySide else { return }
+            guard isActive, session.workspaceTab == .terminal || sideBySide else { return }
             // Keyboard/PTY resize follows the system, without animating output.
             session.noteTerminalKeyboard(height: KeyboardGuard.overlapHeight(from: notification))
         }
@@ -58,11 +60,17 @@ struct SessionScreen: View {
             }
         }
         .onAppear {
-            session.noteWideLayout(sideBySide)
-            ShortcutAvailability.shared.sessionActive = true
+            if isActive { session.noteWideLayout(sideBySide) }
+            ShortcutAvailability.shared.sessionActive = isActive
         }
         .onDisappear { ShortcutAvailability.shared.sessionActive = false }
-        .onChange(of: sideBySide) { _, visible in session.noteWideLayout(visible) }
+        .onChange(of: sideBySide) { _, visible in
+            if isActive { session.noteWideLayout(visible) }
+        }
+        .onChange(of: isActive) { _, active in
+            ShortcutAvailability.shared.sessionActive = active
+            if active { session.noteWideLayout(sideBySide) }
+        }
         .onChange(of: session.workspaceTab) { old, new in
             tabForward = (WorkspaceTab.allCases.firstIndex(of: new) ?? 0)
                 > (WorkspaceTab.allCases.firstIndex(of: old) ?? 0)
@@ -135,7 +143,7 @@ struct SessionScreen: View {
         NocturneSessionPresentation.status(
             phase: session.phase,
             connected: session.workspaceTab == .terminal
-                ? session.terminalSocket.state == .connected : session.acp.state == .connected,
+                ? session.terminalSocket.isConnected : session.acp.state == .connected,
             permissions: session.chat.permissions.count,
             questions: session.chat.questions.count,
             streaming: session.chat.messages.contains(where: \.streaming)
@@ -144,7 +152,9 @@ struct SessionScreen: View {
 
     private var workbenchHeader: some View {
         HStack(spacing: SeSpace.sm) {
-            Button { dismiss() } label: {
+            Button {
+                if let onBack { onBack() } else { dismiss() }
+            } label: {
                 Image(systemName: "chevron.left")
                     .frame(width: 44, height: 44)
                     .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
@@ -191,6 +201,7 @@ struct SessionScreen: View {
     // MARK: Shortcuts
 
     private func handleShortcut(_ shortcut: ShortcutCenter.Shortcut) {
+        guard NocturneSessionPresentation.acceptsShortcut(isActive: isActive, enabled: ShortcutAvailability.shared.sessionActive) else { return }
         switch shortcut {
         case .focusChat:
             session.setWorkspaceTab(.chat)
