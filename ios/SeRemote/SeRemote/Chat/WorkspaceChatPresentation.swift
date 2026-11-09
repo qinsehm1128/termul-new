@@ -3,6 +3,14 @@ import Foundation
 /// View-only presentation decisions. Transcript loading and token updates must
 /// never be mistaken for a local send.
 enum WorkspaceChatPresentation {
+    /// Absence of an acknowledgement never produces a completion haptic.
+    static func acknowledgedPermissionFeedback(
+        optionID: String?, optionName: String?, acknowledged: Bool
+    ) -> PermissionFeedback? {
+        guard acknowledged else { return nil }
+        return permissionFeedback(optionID: optionID, optionName: optionName, acknowledged: true)
+    }
+
     static func sentMessageIDs(
         previous: [ChatTimelineItem],
         current: [ChatTimelineItem],

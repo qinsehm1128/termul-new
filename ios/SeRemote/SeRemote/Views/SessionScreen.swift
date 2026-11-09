@@ -7,11 +7,12 @@ struct SessionScreen: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.sePalette) private var palette
+    @Environment(\.dismiss) private var dismiss
     @State private var containerWidth: CGFloat = 0
     @State private var filesVisibility: NavigationSplitViewVisibility = .detailOnly
     @State private var showTools = false
     @State private var tabForward = true
-    @Namespace private var tabSelection
 
     private var columns: SeLayout.Columns {
         SeLayout.columns(width: containerWidth, isRegular: sizeClass == .regular,
@@ -26,37 +27,21 @@ struct SessionScreen: View {
     var body: some View {
         @Bindable var chat = session.chat
         VStack(spacing: 0) {
-            adaptiveContent
-            if !session.terminalKeyboardVisible {
-                tabBar
+            workbenchHeader
+            VStack(spacing: SeSpace.sm) {
+                SessionModeSwitch(session: session)
+                SessionStatusRibbon(status: status, detail: modelName)
             }
+            .padding(.horizontal, SeSpace.md)
+            .padding(.bottom, SeSpace.sm)
+            adaptiveContent
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { containerWidth = $0 }
-        .background(SeTheme.canvas.ignoresSafeArea())
+        .background(palette.canvas.ignoresSafeArea())
+        .foregroundStyle(palette.ink)
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                VStack(spacing: SeSpace.xxs) {
-                    Text(title).font(SeFont.rowTitle).lineLimit(1)
-                    SeStatusBadge(status: session.phase == .connected ? .online : .reconnecting)
-                }
-                .accessibilityElement(children: .combine)
-            }
-            ToolbarItemGroup(placement: .primaryAction) {
-                if session.workspace == .conversation {
-                    Button("Agent", systemImage: "cpu") { session.chat.showAgentSheet = true }
-                }
-                Menu {
-                    Button("Tools", systemImage: "wrench.and.screwdriver") { showTools = true }
-                    Button("New terminal", systemImage: "plus") {
-                        Task { await session.spawnTerminal() }
-                    }
-                } label: {
-                    Label("Workspace actions", systemImage: "ellipsis.circle")
-                }
-            }
-        }
+        .toolbar(.hidden, for: .navigationBar)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notification in
             guard session.workspaceTab == .terminal || sideBySide else { return }
             // Keyboard/PTY resize follows the system, without animating output.
@@ -124,7 +109,7 @@ struct SessionScreen: View {
                     SeEmptyState(title: String(localized: "Chat"), systemImage: "bubble.left.and.bubble.right",
                                  message: String(localized: "Project view is terminals only. Open a session to talk."))
                 } else {
-                    ChatView(session: session, embedded: true)
+                    SessionChatView(session: session)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -140,35 +125,67 @@ struct SessionScreen: View {
         }
     }
 
-    private var tabBar: some View {
-        HStack(spacing: SeSpace.xs) {
-            ForEach(WorkspaceTab.allCases) { tab in
-                Button {
-                    session.setWorkspaceTab(tab)
-                } label: {
-                    Label(tab.title, systemImage: tab.systemImage)
-                        .font(SeFont.support)
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                        .foregroundStyle(session.workspaceTab == tab ? SeTheme.onAccent : SeTheme.secondaryInk)
-                        .background {
-                            if session.workspaceTab == tab {
-                                if reduceMotion {
-                                    Capsule().fill(SeTheme.accent)
-                                } else {
-                                    Capsule().fill(SeTheme.accent)
-                                        .matchedGeometryEffect(id: "selected-tab", in: tabSelection)
-                                }
-                            }
-                        }
-                }
-                .buttonStyle(.plain)
-                .accessibilityAddTraits(session.workspaceTab == tab ? .isSelected : [])
+    private var modelName: String? {
+        guard let models = session.chat.models,
+              let id = models.currentModelId else { return nil }
+        return models.availableModels?.first(where: { $0.modelId == id })?.name ?? id
+    }
+
+    private var status: NocturneSessionPresentation.Status {
+        NocturneSessionPresentation.status(
+            phase: session.phase,
+            connected: session.workspaceTab == .terminal
+                ? session.terminalSocket.state == .connected : session.acp.state == .connected,
+            permissions: session.chat.permissions.count,
+            questions: session.chat.questions.count,
+            streaming: session.chat.messages.contains(where: \.streaming)
+        )
+    }
+
+    private var workbenchHeader: some View {
+        HStack(spacing: SeSpace.sm) {
+            Button { dismiss() } label: {
+                Image(systemName: "chevron.left")
+                    .frame(width: 44, height: 44)
+                    .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: SeNocturneRadius.control).stroke(palette.strokeStrong, lineWidth: 1)
+                    }
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Back")
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.headline).lineLimit(1)
+                Text(NocturneSessionPresentation.subtitle(
+                    host: session.origin.host ?? String(localized: "Host"),
+                    agent: session.workspace == .conversation ? session.chat.agentLabel : nil,
+                    model: modelName
+                ))
+                .font(.caption.monospaced())
+                .foregroundStyle(palette.inkSecondary)
+                .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+            Menu {
+                if session.workspace == .conversation {
+                    Button("Agent", systemImage: "cpu") { session.chat.showAgentSheet = true }
+                }
+                Button("Tools", systemImage: "wrench.and.screwdriver") { showTools = true }
+                Button("New terminal", systemImage: "plus") {
+                    Task { await session.spawnTerminal() }
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .frame(width: 44, height: 44)
+                    .background(palette.cardAlt, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: SeNocturneRadius.control).stroke(palette.strokeStrong, lineWidth: 1)
+                    }
+            }
+            .accessibilityLabel("Workspace actions")
         }
-        .padding(SeSpace.xs)
-        .background(SeTheme.surface)
-        .overlay(alignment: .top) { Rectangle().fill(SeTheme.stroke).frame(height: 1) }
-        .animation(SeMotion.control.animation(reduceMotion: reduceMotion), value: session.workspaceTab)
+        .padding(SeSpace.md)
     }
 
     // MARK: Shortcuts

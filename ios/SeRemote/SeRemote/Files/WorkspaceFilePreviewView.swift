@@ -3,6 +3,7 @@ import UIKit
 
 @MainActor
 struct WorkspaceFilePreviewView: View {
+    @Environment(\.sePalette) private var palette
     let name: String
     let content: FileContent
     let isLoading: Bool
@@ -10,8 +11,7 @@ struct WorkspaceFilePreviewView: View {
     @State private var copied = false
 
     private var isTextEncoding: Bool {
-        guard let encoding = content.encoding else { return true }
-        return ["utf-8", "utf8"].contains(encoding.lowercased())
+        SessionFilesPresentation.supportsTextPreview(encoding: content.encoding)
     }
 
     var body: some View {
@@ -20,12 +20,12 @@ struct WorkspaceFilePreviewView: View {
                 VStack(alignment: .leading, spacing: SeSpace.xs) {
                     Text(name)
                         .font(SeFont.rowTitle)
-                        .foregroundStyle(SeTheme.accent)
+                        .foregroundStyle(palette.ink)
                         .textSelection(.enabled)
                         .accessibilityAddTraits(.isHeader)
                     Label("Read-only preview", systemImage: "lock")
                         .font(SeFont.caption)
-                        .foregroundStyle(SeTheme.secondaryInk)
+                        .foregroundStyle(palette.inkSecondary)
                     if isTextEncoding {
                         ViewThatFits(in: .horizontal) {
                             HStack(spacing: SeSpace.sm) { actions }
@@ -36,7 +36,7 @@ struct WorkspaceFilePreviewView: View {
                 if isLoading {
                     ProgressView("Refreshing preview…")
                         .font(SeFont.support)
-                        .tint(SeTheme.accent)
+                        .tint(palette.accent)
                 }
                 if !isTextEncoding {
                     SeEmptyState(
@@ -55,11 +55,18 @@ struct WorkspaceFilePreviewView: View {
                         .accessibilityIdentifier("files-preview-text")
                 }
             }
-            .padding(SeSpace.screenInset)
+            .padding(SeSpace.sm)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.card))
+            .overlay {
+                RoundedRectangle(cornerRadius: SeNocturneRadius.card)
+                    .strokeBorder(palette.strokeStrong, lineWidth: 1)
+            }
+            .padding(SeSpace.screenInset)
         }
         .refreshable { await refresh() }
-        .background(SeTheme.canvas)
+        .background(palette.canvas)
+        .seHaptic(trigger: copied) { _, new in new ? .success : nil }
         .onChange(of: content.content) { _, _ in copied = false }
         .onChange(of: name) { _, _ in copied = false }
         .accessibilityIdentifier("files-preview")
@@ -73,14 +80,14 @@ struct WorkspaceFilePreviewView: View {
         } label: {
             Label(copied ? String(localized: "Copied") : String(localized: "Copy"), systemImage: copied ? "checkmark" : "doc.on.doc")
         }
-        .buttonStyle(SeSecondaryButtonStyle())
+        .buttonStyle(NocturneSessionButtonStyle())
         .accessibilityLabel(copied ? Text("File text copied") : Text("Copy file text"))
         .accessibilityIdentifier("files-copy")
 
         ShareLink(item: content.content) {
             Label("Share", systemImage: "square.and.arrow.up")
         }
-        .buttonStyle(SeSecondaryButtonStyle())
+        .buttonStyle(NocturneSessionButtonStyle())
         .accessibilityLabel(Text("Share file text"))
         .accessibilityIdentifier("files-share")
     }

@@ -14,6 +14,7 @@ struct WorkspaceMessageEntrance: ViewModifier {
 }
 
 struct ActivityDisclosure: View {
+    @Environment(\.sePalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let activity: TurnActivity
     @State private var expanded = false
@@ -31,7 +32,7 @@ struct ActivityDisclosure: View {
                         .font(.subheadline.weight(.medium))
                     Spacer(minLength: 0)
                 }
-                .foregroundStyle(activity.attentionRequired ? SeTheme.warning : SeTheme.secondaryInk)
+                .foregroundStyle(activity.attentionRequired ? palette.warning : palette.inkSecondary)
                 .frame(minHeight: 44)
                 .contentShape(Rectangle())
             }
@@ -57,6 +58,7 @@ struct ActivityDisclosure: View {
 }
 
 struct WorkspaceToolSummary: View {
+    @Environment(\.sePalette) private var palette
     let tool: ToolCard
     var expanded = false
 
@@ -73,7 +75,7 @@ struct WorkspaceToolSummary: View {
         VStack(alignment: .leading, spacing: SeSpace.xs) {
             HStack(alignment: .top, spacing: SeSpace.xs) {
                 Image(systemName: "terminal")
-                    .foregroundStyle(SeTheme.secondaryInk)
+                    .foregroundStyle(palette.inkSecondary)
                 Text(WorkspaceChatPresentation.toolCommand(tool.title))
                     .font(.system(.footnote, design: .monospaced))
                     .lineLimit(expanded || tool.needsAttention ? nil : 2)
@@ -87,10 +89,10 @@ struct WorkspaceToolSummary: View {
         }
         .padding(SeSpace.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(SeTheme.codeCanvas, in: RoundedRectangle(cornerRadius: SeRadius.tool))
+        .background(palette.codeCanvas, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
         .overlay {
-            RoundedRectangle(cornerRadius: SeRadius.tool)
-                .stroke(tool.status == "failed" ? SeTheme.danger : SeTheme.stroke, lineWidth: 1)
+            RoundedRectangle(cornerRadius: SeNocturneRadius.control)
+                .stroke(tool.status == "failed" ? palette.danger : palette.strokeStrong, lineWidth: 1)
         }
     }
 
@@ -102,11 +104,12 @@ struct WorkspaceToolSummary: View {
     private var metadata: some View {
         Text("Target unavailable · Duration unavailable")
             .font(.caption)
-            .foregroundStyle(SeTheme.tertiaryInk)
+            .foregroundStyle(palette.inkTertiary)
     }
 }
 
 struct ThoughtBlock: View {
+    @Environment(\.sePalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let messages: [ChatMessage]
     @State private var expanded = false
@@ -126,7 +129,7 @@ struct ThoughtBlock: View {
                     Spacer()
                 }
                 .font(.footnote.weight(.medium))
-                .foregroundStyle(SeTheme.secondaryInk)
+                .foregroundStyle(palette.inkSecondary)
                 .frame(minHeight: 44)
                 .contentShape(Rectangle())
             }
@@ -135,7 +138,7 @@ struct ThoughtBlock: View {
             if expanded {
                 Text(text)
                     .font(.footnote)
-                    .foregroundStyle(SeTheme.secondaryInk)
+                    .foregroundStyle(palette.inkSecondary)
                     .textSelection(.enabled)
                     .padding(.leading, SeSpace.md)
                     .transaction { $0.animation = nil }
@@ -147,6 +150,7 @@ struct ThoughtBlock: View {
 }
 
 struct MessageBubble: View {
+    @Environment(\.sePalette) private var palette
     let message: ChatMessage
     var onEdit: (() -> Void)?
     var onRetry: (() -> Void)?
@@ -243,7 +247,7 @@ struct MessageBubble: View {
             return Receipt(
                 symbol: "exclamationmark.circle",
                 label: String(localized: "Not received"),
-                tint: SeTheme.danger,
+                tint: palette.danger,
                 showsProgress: false
             )
         }
@@ -261,6 +265,7 @@ struct MessageBubble: View {
 /// Equatable bubble payload — equality over the render-affecting fields so
 /// `.equatable()` can skip unchanged rows (actions stay on the wrapper).
 struct MessageBubbleContent: View, Equatable {
+    @Environment(\.sePalette) private var palette
     let message: ChatMessage
 
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -283,9 +288,9 @@ struct MessageBubbleContent: View, Equatable {
         }
         .padding(message.role == .user ? SeSpace.sm : SeSpace.xxs)
         .frame(maxWidth: message.role == .user ? nil : .infinity, alignment: .leading)
-        .background(message.role == .user ? SeTheme.accentSubtle : SeTheme.canvas)
-        .foregroundStyle(SeTheme.ink)
-        .clipShape(RoundedRectangle(cornerRadius: SeRadius.content, style: .continuous))
+        .background(message.role == .user ? palette.ink : palette.canvas)
+        .foregroundStyle(message.role == .user ? palette.canvas : palette.ink)
+        .clipShape(RoundedRectangle(cornerRadius: SeNocturneRadius.card, style: .continuous))
         .transaction { $0.animation = nil }
     }
 
@@ -306,6 +311,7 @@ struct Receipt {
 }
 
 struct PermissionCardView: View {
+    @Environment(\.sePalette) private var palette
     let card: PermissionCard
     let submission: CardSubmission?
     var onChoose: (String?) -> Void
@@ -330,16 +336,17 @@ struct PermissionCardView: View {
             HStack(alignment: .top) {
                 Label("Permission required", systemImage: "lock.shield")
                     .font(.headline)
+                    .foregroundStyle(palette.warning)
                 Spacer(minLength: SeSpace.xs)
                 if isSubmitting {
                     ProgressView().accessibilityLabel(Text("Submitting"))
                 } else {
-                    Text("Pending").font(.caption).foregroundStyle(SeTheme.warning)
+                    Text("Pending").font(.caption).foregroundStyle(palette.warning)
                 }
             }
             Text(card.title)
                 .font(.subheadline)
-                .foregroundStyle(SeTheme.secondaryInk)
+                .foregroundStyle(palette.inkSecondary)
                 .textSelection(.enabled)
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: SeSpace.xs) { choices }
@@ -351,20 +358,20 @@ struct PermissionCardView: View {
                 if !hasChosen {
                     Text("Choose an option to retry.")
                         .font(SeFont.caption)
-                        .foregroundStyle(SeTheme.secondaryInk)
+                        .foregroundStyle(palette.inkSecondary)
                 }
             }
             if isSubmitting {
                 Text("Waiting for host…")
                     .font(.caption)
-                    .foregroundStyle(SeTheme.secondaryInk)
+                    .foregroundStyle(palette.inkSecondary)
             }
         }
         .padding(SeSpace.md)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(SeTheme.warningSubtle, in: RoundedRectangle(cornerRadius: SeRadius.content))
+        .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.card))
         .overlay {
-            RoundedRectangle(cornerRadius: SeRadius.content).stroke(SeTheme.warning.opacity(0.5), lineWidth: 1)
+            RoundedRectangle(cornerRadius: SeNocturneRadius.card).stroke(palette.warning.opacity(0.5), lineWidth: 1)
         }
     }
 
@@ -372,16 +379,17 @@ struct PermissionCardView: View {
     private var choices: some View {
         Button("Deny") { choose(nil) }
             .frame(maxWidth: .infinity, minHeight: 44)
-            .buttonStyle(SeSecondaryButtonStyle())
+            .buttonStyle(NocturneSessionButtonStyle())
         ForEach(card.options) { option in
             Button(option.name) { choose(option.id) }
                 .frame(maxWidth: .infinity, minHeight: 44)
-                .buttonStyle(SePrimaryButtonStyle())
+                .buttonStyle(NocturneSessionButtonStyle(primary: true))
         }
     }
 }
 
 struct QuestionCardView: View {
+    @Environment(\.sePalette) private var palette
     let card: QuestionCard
     let submission: CardSubmission?
     var onChoose: (String) -> Void
@@ -403,7 +411,7 @@ struct QuestionCardView: View {
                     lastChoice = option.id
                     onChoose(option.id)
                 }
-                .buttonStyle(SeSecondaryButtonStyle())
+                .buttonStyle(NocturneSessionButtonStyle())
                 .disabled(isSubmitting)
             }
             if isSubmitting {
@@ -415,12 +423,12 @@ struct QuestionCardView: View {
                 if lastChoice == nil {
                     Text("Choose an answer to retry.")
                         .font(SeFont.caption)
-                        .foregroundStyle(SeTheme.secondaryInk)
+                        .foregroundStyle(palette.inkSecondary)
                 }
             }
         }
         .padding(SeSpace.md)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(SeTheme.surface, in: RoundedRectangle(cornerRadius: SeRadius.content))
+        .background(palette.cardAlt, in: RoundedRectangle(cornerRadius: SeNocturneRadius.card))
     }
 }

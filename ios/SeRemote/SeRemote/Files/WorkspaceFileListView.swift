@@ -12,6 +12,7 @@ enum WorkspaceFilesFilter {
 
 @MainActor
 struct WorkspaceFileListView: View {
+    @Environment(\.sePalette) private var palette
     let entries: [DirectoryEntry]
     @Binding var query: String
     @Binding var scrollPath: String?
@@ -31,7 +32,7 @@ struct WorkspaceFileListView: View {
                 SeSectionHeader(title: String(localized: "Files"), detail: String(localized: "Read only"))
                 HStack(spacing: SeSpace.xs) {
                     Image(systemName: "line.3.horizontal.decrease")
-                        .foregroundStyle(SeTheme.secondaryInk)
+                        .foregroundStyle(palette.inkSecondary)
                         .accessibilityHidden(true)
                     TextField("Filter names in this folder", text: $query)
                         .font(SeFont.support)
@@ -52,10 +53,10 @@ struct WorkspaceFileListView: View {
                 }
                 .padding(.horizontal, SeSpace.sm)
                 .frame(minHeight: SeSpace.hitTarget)
-                .background(SeTheme.surface, in: RoundedRectangle(cornerRadius: SeRadius.tool))
+                .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
                 Text("Names in this folder only. File contents are not searched.")
                     .font(SeFont.caption)
-                    .foregroundStyle(SeTheme.secondaryInk)
+                    .foregroundStyle(palette.inkSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(SeSpace.screenInset)
@@ -63,7 +64,7 @@ struct WorkspaceFileListView: View {
             if isLoading {
                 ProgressView("Loading files…")
                     .font(SeFont.support)
-                    .tint(SeTheme.accent)
+                    .tint(palette.accent)
                     .padding(SeSpace.sm)
             }
 
@@ -110,30 +111,46 @@ struct WorkspaceFileListView: View {
             open(entry)
         } label: {
             HStack(spacing: SeSpace.sm) {
-                Image(systemName: entry.isDirectory ? "folder" : "doc.text")
-                    .frame(width: 20)
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(selected ? palette.accent : palette.strokeStrong)
+                    .frame(width: 3, height: 30)
                     .accessibilityHidden(true)
-                Text(entry.name)
-                    .font(SeFont.support)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .multilineTextAlignment(.leading)
                 if entry.isDirectory {
-                    Image(systemName: "chevron.right")
-                        .font(SeFont.caption)
-                        .foregroundStyle(SeTheme.tertiaryInk)
+                    Image(systemName: "folder")
+                        .foregroundStyle(palette.inkSecondary)
                         .accessibilityHidden(true)
-                } else if let size = entry.size {
-                    Text(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))
-                        .font(SeFont.caption)
-                        .foregroundStyle(SeTheme.secondaryInk)
                 }
+                VStack(alignment: .leading, spacing: SeSpace.xxs) {
+                    Text(entry.name)
+                        .font(SeFont.label)
+                        .foregroundStyle(palette.ink)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    HStack(spacing: SeSpace.xs) {
+                        if !entry.isDirectory, let size = SessionFilesPresentation.byteCount(entry.size) {
+                            Text(size)
+                        }
+                        if let modified = SessionFilesPresentation.modificationDate(entry.modifiedAt) {
+                            Text(modified, style: .relative)
+                        }
+                    }
+                    .font(SeFont.caption)
+                    .foregroundStyle(palette.inkSecondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "chevron.right")
+                    .font(SeFont.caption)
+                    .foregroundStyle(palette.inkTertiary)
+                    .accessibilityHidden(true)
             }
-            .foregroundStyle(selected ? SeTheme.accent : (entry.isDirectory ? SeTheme.secondaryInk : SeTheme.ink))
             .padding(.horizontal, SeSpace.sm)
-            .padding(.vertical, SeSpace.xs)
+            .padding(.vertical, SeSpace.sm)
             .frame(minHeight: SeSpace.hitTarget)
-            .background(selected ? SeTheme.accentSubtle : .clear, in: RoundedRectangle(cornerRadius: SeRadius.tool))
+            .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.card))
+            .overlay {
+                RoundedRectangle(cornerRadius: SeNocturneRadius.card)
+                    .strokeBorder(selected ? palette.accent : palette.strokeStrong, lineWidth: 1)
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(SePressableRowStyle())

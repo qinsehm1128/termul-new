@@ -2,6 +2,7 @@ import SwiftUI
 
 @MainActor
 struct FileBrowserView: View {
+    @Environment(\.sePalette) private var palette
     @Bindable var session: WorkspaceSession
     var embedded = false
     @Environment(\.dismiss) private var dismiss
@@ -31,6 +32,9 @@ struct FileBrowserView: View {
                         }
                 }
             }
+        }
+        .seHaptic(trigger: selectedPath) { old, new in
+            old != new && new != nil ? .selection : nil
         }
         .task {
             if selectedPath == nil, let previewName = session.files.previewName {
@@ -64,7 +68,7 @@ struct FileBrowserView: View {
                     HStack(spacing: 0) {
                         fileList
                             .frame(width: min(SeLayout.sidebarWidth.upperBound, geometry.size.width * 0.4))
-                        Rectangle().fill(SeTheme.stroke).frame(width: 1)
+                        Rectangle().fill(palette.strokeStrong).frame(width: 1)
                         preview
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
@@ -76,7 +80,7 @@ struct FileBrowserView: View {
                 desktopOnlyFooter
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(SeTheme.canvas)
+            .background(palette.canvas)
         }
     }
 
@@ -86,20 +90,19 @@ struct FileBrowserView: View {
                 HStack(spacing: SeSpace.xxs) {
                     ForEach(Array(session.files.crumbs.enumerated()), id: \.element.id) { index, crumb in
                         if index > 0 {
-                            Image(systemName: "chevron.right")
-                                .font(SeFont.caption)
-                                .foregroundStyle(SeTheme.tertiaryInk)
+                            Text("/")
+                                .font(.caption.monospaced())
+                                .foregroundStyle(palette.inkTertiary)
                                 .accessibilityHidden(true)
                         }
                         Button {
                             Task { await popTo(crumb) }
                         } label: {
                             HStack(spacing: SeSpace.xs) {
-                                if index == 0 { Image(systemName: "folder") }
                                 Text(crumb.name).lineLimit(1)
                             }
-                            .font(SeFont.support)
-                            .foregroundStyle(SeTheme.secondaryInk)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(palette.inkSecondary)
                             .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
                         }
                         .buttonStyle(SePressableRowStyle())
@@ -119,7 +122,7 @@ struct FileBrowserView: View {
             .accessibilityIdentifier("files-refresh")
         }
         .padding(.horizontal, SeSpace.screenInset)
-        .overlay(alignment: .bottom) { Rectangle().fill(SeTheme.stroke).frame(height: 1) }
+        .overlay(alignment: .bottom) { Rectangle().fill(palette.strokeStrong).frame(height: 1) }
         .accessibilityIdentifier("files-crumbs")
     }
 
@@ -158,12 +161,12 @@ struct FileBrowserView: View {
     private var desktopOnlyFooter: some View {
         Label("File editing is desktop-only. Changes need the host's local web client.", systemImage: "lock.shield")
             .font(SeFont.caption)
-            .foregroundStyle(SeTheme.secondaryInk)
+            .foregroundStyle(palette.inkSecondary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, SeSpace.screenInset)
             .padding(.vertical, SeSpace.sm)
-            .background(SeTheme.surface)
-            .overlay(alignment: .top) { Rectangle().fill(SeTheme.stroke).frame(height: 1) }
+            .background(palette.card)
+            .overlay(alignment: .top) { Rectangle().fill(palette.strokeStrong).frame(height: 1) }
             .accessibilityIdentifier("files-desktop-only")
     }
 

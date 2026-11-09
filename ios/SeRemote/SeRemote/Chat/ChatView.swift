@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ChatView: View {
+    @Environment(\.sePalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -46,7 +47,7 @@ struct ChatView: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { composer }
-        .background(SeTheme.canvas)
+        .background(palette.canvas)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { containerWidth = $0 }
         .seHaptic(.send, trigger: sendHaptic)
         .seHaptic(trigger: cardHapticSerial) { _, _ in cardHaptic }
@@ -119,7 +120,7 @@ struct ChatView: View {
                 .frame(maxWidth: columnWidth)
                 .frame(maxWidth: .infinity)
             }
-            .background(SeTheme.canvas)
+            .background(palette.canvas)
             // History sessions open pinned to the newest message instead of
             // relying on scroll-to-bottom racing the first layout pass.
             .defaultScrollAnchor(.bottom)
@@ -197,11 +198,11 @@ struct ChatView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .foregroundStyle(SeTheme.ink)
+            .foregroundStyle(palette.ink)
             .frame(minHeight: 44)
-            .background(SeTheme.elevated, in: Capsule())
+            .background(palette.cardAlt, in: Capsule())
             .overlay(
-                Capsule().stroke(SeTheme.stroke, lineWidth: 1)
+                Capsule().stroke(palette.strokeStrong, lineWidth: 1)
             )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
@@ -262,11 +263,11 @@ struct ChatView: View {
                             guard session.chat.permissionSubmissions[card.id] != .submitting else { return }
                             Task {
                                 let acknowledged = await session.chat.respond(permission: card, optionId: option)
-                                let feedback = WorkspaceChatPresentation.permissionFeedback(
+                                guard let feedback = WorkspaceChatPresentation.acknowledgedPermissionFeedback(
                                     optionID: option,
                                     optionName: card.options.first(where: { $0.id == option })?.name,
                                     acknowledged: acknowledged
-                                )
+                                ) else { return }
                                 switch feedback {
                                 case .approval: cardHaptic = .success
                                 case .denial: cardHaptic = .warning
@@ -281,8 +282,8 @@ struct ChatView: View {
                         QuestionCardView(card: card, submission: session.chat.questionSubmissions[card.id]) { value in
                             guard session.chat.questionSubmissions[card.id] != .submitting else { return }
                             Task {
-                                if !(await session.chat.answer(question: card, values: [value])) {
-                                    cardHaptic = .error
+                                if await session.chat.answer(question: card, values: [value]) {
+                                    cardHaptic = .success
                                     cardHapticSerial += 1
                                 }
                             }
@@ -368,8 +369,11 @@ struct ChatView: View {
                     .lineLimit(1 ... 6)
                     .focused($composerFocused)
                     .padding(12)
-                    .background(SeTheme.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: SeRadius.composer, style: .continuous))
+                    .background(palette.cardAlt)
+                    .clipShape(RoundedRectangle(cornerRadius: SeNocturneRadius.card, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: SeNocturneRadius.card).stroke(palette.strokeStrong, lineWidth: 1)
+                    }
                 if session.chat.isSending {
                     Button {
                         Task { await session.chat.cancel() }
@@ -378,7 +382,7 @@ struct ChatView: View {
                             .font(.subheadline.weight(.semibold))
                             .frame(minWidth: 44, minHeight: 44)
                     }
-                    .buttonStyle(SeSecondaryButtonStyle())
+                    .buttonStyle(NocturneSessionButtonStyle())
                     .accessibilityLabel(Text("Stop response"))
                 } else {
                     Button {
@@ -391,7 +395,7 @@ struct ChatView: View {
                             .font(.subheadline.weight(.semibold))
                             .frame(minWidth: 44, minHeight: 44)
                     }
-                    .buttonStyle(SePrimaryButtonStyle())
+                    .buttonStyle(NocturneSessionButtonStyle(primary: true))
                     .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                               || session.chat.isLoading || session.chat.isSwitchingAgent)
                     .accessibilityLabel(Text("Send"))
@@ -401,8 +405,8 @@ struct ChatView: View {
         .padding(SeSpace.md)
         .frame(maxWidth: columnWidth)
         .frame(maxWidth: .infinity)
-        .background(SeTheme.canvas)
-        .overlay(alignment: .top) { Rectangle().fill(SeTheme.stroke).frame(height: 1) }
+        .background(palette.canvas)
+        .overlay(alignment: .top) { Rectangle().fill(palette.strokeStrong).frame(height: 1) }
         .seAnimation(.control, value: session.chat.isSending)
     }
 

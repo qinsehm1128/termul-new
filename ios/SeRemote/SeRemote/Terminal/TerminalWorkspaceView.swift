@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct TerminalWorkspaceView: View {
+    @Environment(\.sePalette) private var palette
     @Bindable var session: WorkspaceSession
     @State private var focusToken: UInt64 = 0
     @State private var textScale = TerminalTextScale.current
@@ -13,6 +14,7 @@ struct TerminalWorkspaceView: View {
                 terminalErrorBanner(error)
             }
             if let id = session.terminals.activeId {
+                terminalStatusBar
                 hostScreenObservation
                 ZStack {
                     TerminalScreen(
@@ -122,6 +124,57 @@ struct TerminalWorkspaceView: View {
                 break
             }
         }
+    }
+
+    private var terminalStatusBar: some View {
+        HStack(spacing: SeSpace.xs) {
+            Circle()
+                .fill(session.terminals.isConnecting ? palette.warning : (session.terminalSocket.state == .connected ? palette.live : palette.inkSecondary))
+                .frame(width: 6, height: 6)
+                .accessibilityHidden(true)
+            Text(session.terminals.isConnecting ? String(localized: "Connecting…") : "PTY")
+                .font(.caption.monospaced())
+                .foregroundStyle(palette.inkSecondary)
+            Spacer(minLength: SeSpace.xs)
+            if let dimensions = SessionTerminalPresentation.dimensions(cols: activeTerminal?.cols, rows: activeTerminal?.rows) {
+                Text(dimensions)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(palette.inkSecondary)
+                    .lineLimit(1)
+            }
+            Button {
+                Task { await session.terminals.setDisplayMode(.phone) }
+            } label: {
+                Text("FIT").font(.caption.monospaced())
+                    .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
+            }
+            .accessibilityLabel(Text("Phone Fit"))
+            .accessibilityValue(Text(session.terminals.displayMode == .phone ? String(localized: "Active") : String(localized: "Idle")))
+            Menu {
+                Button { nudgeTextScale(-1) } label: {
+                    Label(String(localized: "Smaller Text"), systemImage: "textformat.size.smaller")
+                }
+                Button { nudgeTextScale(1) } label: {
+                    Label(String(localized: "Larger Text"), systemImage: "textformat.size.larger")
+                }
+                Button { applyTextScale(TerminalTextScale.defaultValue) } label: {
+                    Label(String(localized: "Reset Text Size"), systemImage: "arrow.counterclockwise")
+                }
+            } label: {
+                Text("A+").font(.caption.monospaced())
+                    .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
+            }
+            .accessibilityLabel(Text("Text Size"))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(palette.ink)
+        .padding(.horizontal, SeSpace.md)
+        .background(palette.canvas)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(palette.strokeStrong).frame(height: 1)
+        }
+        .seHaptic(trigger: session.terminals.displayMode) { _, _ in .selection }
+        .seHaptic(trigger: textScale) { _, _ in .selection }
     }
 
     private var activeTerminal: LiveTerminal? {

@@ -9,6 +9,7 @@ enum TerminalInputMode: String, CaseIterable, Identifiable {
 }
 
 struct TerminalInputDock: View {
+    @Environment(\.sePalette) private var palette
     var isEnabled: Bool
     var isKeyboardVisible: Bool
     var displayMode: TerminalDisplayMode = .phone
@@ -37,10 +38,10 @@ struct TerminalInputDock: View {
                 liveBar
             }
         }
-        .background(SeTheme.surface)
+        .background(palette.card)
         .overlay(alignment: .top) {
             Rectangle()
-                .fill(SeTheme.stroke)
+                .fill(palette.strokeStrong)
                 .frame(height: 1)
         }
         .onChange(of: isKeyboardVisible) { _, visible in
@@ -175,23 +176,24 @@ struct TerminalInputDock: View {
             }
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: isKeyboardVisible ? "keyboard.chevron.compact.down" : "keyboard")
-                    .font(.body)
-                    .foregroundStyle(SeTheme.secondaryInk)
+                Text("$")
+                    .font(.body.monospaced().weight(.semibold))
+                    .foregroundStyle(palette.live)
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Live input")
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(SeTheme.ink)
+                        .foregroundStyle(palette.ink)
                     Text(isKeyboardVisible ? String(localized: "Tap to hide keyboard") : String(localized: "Tap to show keyboard"))
                         .font(.caption)
-                        .foregroundStyle(SeTheme.secondaryInk)
+                        .foregroundStyle(palette.inkSecondary)
                 }
                 Spacer()
             }
             .padding(.horizontal, 14)
             .frame(minHeight: 46, alignment: .center)
-            .background(SeTheme.elevated)
-            .clipShape(RoundedRectangle(cornerRadius: SeRadius.tool, style: .continuous))
+            .background(palette.cardAlt)
+            .clipShape(RoundedRectangle(cornerRadius: SeNocturneRadius.control, style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
@@ -222,16 +224,16 @@ struct TerminalInputDock: View {
                 }
                 .padding(.horizontal, 12)
                 .frame(minHeight: SeSpace.hitTarget)
-                .background(SeTheme.elevated)
-                .clipShape(RoundedRectangle(cornerRadius: SeRadius.tool, style: .continuous))
+                .background(palette.cardAlt)
+                .clipShape(RoundedRectangle(cornerRadius: SeNocturneRadius.control, style: .continuous))
             Button {
                 submitCommand()
             } label: {
-                Image(systemName: "return")
+                Image(systemName: "arrow.up")
                     .font(.body.weight(.semibold))
-                    .foregroundStyle(SeTheme.onAccent)
+                    .foregroundStyle(palette.canvas)
                     .frame(width: SeSpace.hitTarget, height: SeSpace.hitTarget)
-                    .background(SeTheme.accent, in: RoundedRectangle(cornerRadius: SeRadius.tool))
+                    .background(palette.ink, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
             }
             .disabled(!isEnabled || command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .accessibilityLabel(Text("Send command"))
@@ -265,14 +267,14 @@ struct TerminalInputDock: View {
                     .font(.caption.weight(.semibold).monospaced())
             }
         }
-        .foregroundStyle(isActive ? SeTheme.accent : SeTheme.ink)
+        .foregroundStyle(isActive ? palette.accent : palette.ink)
         .padding(.horizontal, 10)
         .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
-        .background(isActive ? SeTheme.accentSubtle : SeTheme.elevated)
+        .background(isActive ? palette.accentSubtle : palette.cardAlt)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(SeTheme.stroke, lineWidth: 1)
+                .stroke(palette.strokeStrong, lineWidth: 1)
         )
         .accessibilityLabel(Text(accessibility))
         .accessibilityAddTraits(.isButton)
