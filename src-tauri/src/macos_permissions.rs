@@ -398,6 +398,24 @@ pub fn privacy_pane_url(id: &str) -> Option<&'static str> {
 // macOS implementation.
 // ---------------------------------------------------------------------------
 
+/// Desktop capture requests TCC once per process, without changing settings probes.
+#[cfg(target_os = "macos")]
+pub(crate) fn ensure_desktop_capture_access() -> bool {
+    imp::ensure_desktop_capture_access()
+}
+
+/// Desktop control requires Accessibility, requesting the native prompt once.
+#[cfg(target_os = "macos")]
+pub(crate) fn ensure_desktop_input_access() -> bool {
+    imp::ensure_desktop_input_access()
+}
+
+/// Fail closed on a missing console session or the macOS lock screen.
+#[cfg(target_os = "macos")]
+pub(crate) fn desktop_session_active() -> bool {
+    imp::desktop_session_active()
+}
+
 #[cfg(target_os = "macos")]
 mod imp {
     use super::*;
@@ -410,11 +428,113 @@ mod imp {
         /// Returns `Boolean` (unsigned char), so it is read as `u8` — a Rust
         /// `bool` return would be UB for any value outside {0, 1}.
         fn AXIsProcessTrusted() -> u8;
+        fn AXIsProcessTrustedWithOptions(options: *const std::ffi::c_void) -> u8;
+        static kAXTrustedCheckOptionPrompt: *const std::ffi::c_void;
     }
 
     #[link(name = "CoreGraphics", kind = "framework")]
     extern "C" {
         fn CGPreflightScreenCaptureAccess() -> u8;
+        fn CGRequestScreenCaptureAccess() -> u8;
+        fn CGSessionCopyCurrentDictionary() -> *const std::ffi::c_void;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        static kCFBooleanTrue: *const std::ffi::c_void;
+        fn CFDictionaryCreate(
+            allocator: *const std::ffi::c_void,
+            keys: *const *const std::ffi::c_void,
+            values: *const *const std::ffi::c_void,
+            count: isize,
+            key_callbacks: *const std::ffi::c_void,
+            value_callbacks: *const std::ffi::c_void,
+        ) -> *const std::ffi::c_void;
+        fn CFDictionaryGetValue(
+            dictionary: *const std::ffi::c_void,
+            key: *const std::ffi::c_void,
+        ) -> *const std::ffi::c_void;
+        fn CFStringCreateWithCString(
+            allocator: *const std::ffi::c_void,
+            text: *const std::ffi::c_char,
+            encoding: u32,
+        ) -> *const std::ffi::c_void;
+        fn CFRelease(value: *const std::ffi::c_void);
+    }
+
+    pub fn ensure_desktop_capture_access() -> bool {
+        // SAFETY: permission APIs take no arguments or ownership.
+        if unsafe { CGPreflightScreenCaptureAccess() } != 0 {
+            return true;
+        }
+        static REQUEST: std::sync::Once = std::sync::Once::new();
+        REQUEST.call_once(|| {
+            // SAFETY: this only requests TCC; a subsequent operation rechecks.
+            unsafe { CGRequestScreenCaptureAccess() };
+        });
+        false
+    }
+
+    pub fn ensure_desktop_input_access() -> bool {
+        // SAFETY: prompt-free trust query, no ownership transfer.
+        if unsafe { AXIsProcessTrusted() } != 0 {
+            return true;
+        }
+        static REQUEST: std::sync::Once = std::sync::Once::new();
+        REQUEST.call_once(|| {
+            // SAFETY: both key/value are process-lifetime CF constants. Null
+            // callbacks mean the temporary dictionary borrows these constants.
+            unsafe {
+                let key = kAXTrustedCheckOptionPrompt;
+                let value = kCFBooleanTrue;
+                let options = CFDictionaryCreate(
+                    std::ptr::null(),
+                    &key,
+                    &value,
+                    1,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                );
+                if !options.is_null() {
+                    AXIsProcessTrustedWithOptions(options);
+                    CFRelease(options);
+                }
+            }
+        });
+        false
+    }
+
+    pub fn desktop_session_active() -> bool {
+        // SAFETY: Copy/Create functions return owned CF objects. Values read
+        // from the dictionary are borrowed, and only the owned objects release.
+        unsafe {
+            let session = CGSessionCopyCurrentDictionary();
+            if session.is_null() {
+                return false;
+            }
+            let lock_key = CFStringCreateWithCString(
+                std::ptr::null(),
+                c"CGSSessionScreenIsLocked".as_ptr(),
+                0x08000100,
+            );
+            let console_key = CFStringCreateWithCString(
+                std::ptr::null(),
+                c"kCGSSessionOnConsoleKey".as_ptr(),
+                0x08000100,
+            );
+            let on_console = !console_key.is_null()
+                && CFDictionaryGetValue(session, console_key) == kCFBooleanTrue;
+            if !console_key.is_null() {
+                CFRelease(console_key);
+            }
+            let locked =
+                lock_key.is_null() || CFDictionaryGetValue(session, lock_key) == kCFBooleanTrue;
+            if !lock_key.is_null() {
+                CFRelease(lock_key);
+            }
+            CFRelease(session);
+            on_console && !locked
+        }
     }
 
     #[link(name = "IOKit", kind = "framework")]
