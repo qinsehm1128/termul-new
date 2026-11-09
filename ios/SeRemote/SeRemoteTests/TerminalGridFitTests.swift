@@ -4,24 +4,24 @@ import Testing
 
 @Suite("Terminal grid fit")
 struct TerminalGridFitTests {
-    /// Canvas bounds inside the console's 14 pt screen gutter and 13 pt canvas
-    /// padding on an iPhone 15 (393 × 852).
-    private let portraitKeyboardDown = CGSize(width: 339, height: 590)
-    /// Same viewport with the system keyboard (≈336 pt) covering the bottom.
-    private let portraitKeyboardUp = CGSize(width: 339, height: 254)
-    /// The same phone rotated: 852 × 393 with the chrome and dock removed.
-    private let landscape = CGSize(width: 798, height: 190)
+    /// The canvas on a 420 pt portrait phone (iPhone Air class) after the
+    /// full-bleed bar (44), dock (≈108) and home indicator are removed.
+    private let portraitKeyboardDown = CGSize(width: 420, height: 685)
+    /// Same canvas with the system keyboard (≈336 pt) covering the bottom.
+    private let portraitKeyboardUp = CGSize(width: 420, height: 349)
+    /// The same phone rotated, still full-bleed.
+    private let landscape = CGSize(width: 912, height: 260)
 
-    @Test("A portrait phone shows a real terminal width at the default scale")
+    @Test("A portrait phone shows 60-64 legible columns at the default scale")
     func portraitColumns() {
         let fit = TerminalGridFit.phoneFit(size: portraitKeyboardDown, textScale: 1.25)
-        #expect(fit.cols >= 45)
+        #expect((60 ... 64).contains(fit.cols), "got \(fit.cols) columns")
         #expect(fit.rows >= 20)
-        #expect(fit.fontSize >= 10)
+        #expect(fit.fontSize >= TerminalGridFit.minimumLegibleFontSize)
         #expect(fit.fontSize <= 13)
     }
 
-    @Test("Every phone width keeps at least 45 columns at the default scale")
+    @Test("Every phone width keeps a usable column count at the default scale")
     func columnsAcrossPhoneWidths() {
         for width in stride(from: 300.0, through: 440.0, by: 20) {
             let fit = TerminalGridFit.phoneFit(
@@ -29,6 +29,23 @@ struct TerminalGridFitTests {
                 textScale: 1.25
             )
             #expect(fit.cols >= 45, "width \(width) gave \(fit.cols) columns")
+            #expect(fit.fontSize >= TerminalGridFit.minimumLegibleFontSize)
+        }
+    }
+
+    @Test("The column target is derived from the measured cell metrics")
+    func measuredMetricsKeepColumnTarget() {
+        // The view measures the real face: its advance per point can vary a
+        // little across fonts and OS versions. The grid must stay in the
+        // 60-64 column band instead of depending on an assumed ratio.
+        for advance in [CGFloat(0.58), 0.60, 0.62, 0.66, 0.70] {
+            let fit = TerminalGridFit.phoneFit(
+                size: portraitKeyboardDown,
+                textScale: 1.25,
+                advanceRatio: advance
+            )
+            #expect((60 ... 64).contains(fit.cols), "advance \(advance) gave \(fit.cols) columns")
+            #expect(fit.fontSize >= TerminalGridFit.minimumLegibleFontSize)
         }
     }
 
@@ -53,14 +70,16 @@ struct TerminalGridFitTests {
         #expect(CGFloat(down.rows) * down.fontSize * TerminalGridFit.defaultLineHeightRatio > portraitKeyboardUp.height)
     }
 
-    @Test("Rotation widens the grid and shortens it")
+    @Test("Rotation adds columns instead of magnifying the glyphs")
     func rotationReshapesGrid() {
         let portrait = TerminalGridFit.phoneFit(size: portraitKeyboardDown, textScale: 1.25)
         let rotated = TerminalGridFit.phoneFit(size: landscape, textScale: 1.25)
+        #expect(rotated.cols >= 110, "landscape showed \(rotated.cols) columns")
         #expect(rotated.cols > portrait.cols)
         #expect(rotated.rows < portrait.rows)
-        // Landscape is wide enough to stop shrinking the font.
-        #expect(rotated.fontSize == TerminalGridFit.maximumFontSize)
+        // The font is sized from the reference portrait width, so rotating
+        // reveals more columns rather than enlarging text.
+        #expect(rotated.fontSize == portrait.fontSize)
     }
 
     @Test("Zooming in trades columns for text size")
@@ -75,11 +94,21 @@ struct TerminalGridFitTests {
         #expect(large.cols >= 25)
     }
 
+    @Test("Zoom stays inside the font bounds")
+    func zoomBounds() {
+        let tiny = TerminalGridFit.phoneFit(size: portraitKeyboardDown, textScale: 0.01)
+        let huge = TerminalGridFit.phoneFit(size: portraitKeyboardDown, textScale: 20)
+        #expect(tiny.fontSize == TerminalGridFit.minimumFontSize)
+        #expect(huge.fontSize == TerminalGridFit.maximumFontSize)
+        // Zoom out still yields a usable row count for a very small font.
+        #expect(tiny.rows > huge.rows)
+    }
+
     @Test("Desktop mode holds the host column count")
     func desktopKeepsHostColumns() {
         let fit = TerminalGridFit.desktopFit(size: portraitKeyboardDown, hostCols: 80, textScale: 1.25)
         #expect(fit.cols == 80)
-        #expect(fit.fontSize <= 9)
+        #expect(fit.fontSize <= 12)
         // Rows still come from the viewport, so the canvas is not half empty.
         #expect(fit.rows >= 30)
     }

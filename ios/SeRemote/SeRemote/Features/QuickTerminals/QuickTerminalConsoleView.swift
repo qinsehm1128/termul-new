@@ -62,9 +62,8 @@ struct QuickTerminalConsoleView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
+            compactBar
             if let viewer {
-                meta(viewer)
                 if let error = viewer.errorMessage {
                     SeErrorBanner(
                         message: error,
@@ -100,75 +99,57 @@ struct QuickTerminalConsoleView: View {
 
     // MARK: - Chrome
 
-    private var header: some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(verbatim: title)
-                    .font(SeNocturneType.font(12, weight: .medium, mono: true))
-                    .foregroundStyle(palette.ink)
-                    .lineLimit(1)
-                Text(verbatim: statusLine)
-                    .font(SeNocturneType.font(9, weight: .regular, mono: true))
+    /// One 44 pt bar: title, tiny attachment dot, live cols×rows and the detach
+    /// icon. The old two-row header + status strip spent ~60 pt on chrome and
+    /// stole rows from the grid.
+    private var compactBar: some View {
+        HStack(spacing: 8) {
+            R2Dot(tone: attachmentTone, size: 5)
+            Text(verbatim: title)
+                .font(SeNocturneType.font(12, weight: .medium, mono: true))
+                .foregroundStyle(palette.ink)
+                .lineLimit(1)
+            Spacer(minLength: 6)
+            if let dimensions = viewerDimensions {
+                Text(verbatim: dimensions)
+                    .font(.system(size: 9, design: .monospaced))
                     .foregroundStyle(palette.inkTertiary)
                     .lineLimit(1)
+                    .accessibilityLabel(Text("Terminal size \(dimensions)"))
             }
-            Spacer(minLength: 6)
             Button(action: onClose) {
-                HStack(spacing: 5) {
-                    Image(systemName: "rectangle.portrait.and.arrow.right")
-                        .font(.system(size: 12, weight: .semibold))
-                    Text("Detach")
-                        .font(SeNocturneType.font(10, weight: .medium))
-                }
-                .foregroundStyle(palette.ink)
-                .padding(.horizontal, 10)
-                .frame(minHeight: 30)
-                .background(palette.card, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .strokeBorder(palette.strokeStrong, lineWidth: 1)
-                }
+                Image(systemName: "rectangle.portrait.and.arrow.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(palette.inkSecondary)
+                    .frame(width: 30, height: 30)
+                    .background(palette.card, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .strokeBorder(palette.strokeStrong, lineWidth: 1)
+                    }
+                    .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
             .accessibilityLabel(Text("Detach terminal"))
             .accessibilityHint(Text("Leaves the shell running on the host"))
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 10)
-        .padding(.bottom, 6)
+        .padding(.leading, 12)
+        .padding(.trailing, 4)
+        .frame(height: 44)
         .background(palette.surface)
     }
 
-    private var statusLine: String {
+    private var attachmentTone: R2Tone {
         guard let viewer else {
-            return attachError == nil
-                ? String(localized: "Attaching to the host shell…")
-                : String(localized: "Not attached")
+            return attachError == nil ? .attention : .quiet
         }
-        if viewer.hasExited { return String(localized: "Shell exited") }
-        return viewer.isAttached
-            ? String(localized: "Attached")
-            : String(localized: "Attaching to the host shell…")
+        return viewer.hasExited ? .quiet : (viewer.isAttached ? .live : .attention)
     }
 
-    private func meta(_ viewer: TerminalPTYViewer) -> some View {
-        HStack(spacing: 8) {
-            R2Dot(tone: viewer.hasExited ? .quiet : (viewer.isAttached ? .live : .attention))
-            Text(verbatim: viewer.hasExited
-                 ? String(localized: "Exited")
-                 : (viewer.isAttached ? String(localized: "Attached") : String(localized: "Attaching")))
-                .foregroundStyle(palette.inkTertiary)
-            Spacer(minLength: 4)
-            if let dimensions = SessionTerminalPresentation.dimensions(cols: viewer.cols, rows: viewer.rows) {
-                Text(verbatim: dimensions)
-                    .foregroundStyle(palette.inkTertiary)
-                    .lineLimit(1)
-            }
-        }
-        .font(.system(size: 9, design: .monospaced))
-        .padding(.horizontal, 16)
-        .padding(.bottom, 4)
+    private var viewerDimensions: String? {
+        guard let viewer, viewer.isAttached, !viewer.hasExited else { return nil }
+        return SessionTerminalPresentation.dimensions(cols: viewer.cols, rows: viewer.rows)
     }
 
     // MARK: - Canvas
@@ -203,15 +184,8 @@ struct QuickTerminalConsoleView: View {
                     .allowsHitTesting(false)
             }
         }
-        .padding(13)
         .background(palette.terminalCanvas)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(palette.strokeStrong, lineWidth: 1)
-        }
-        .padding(.horizontal, 14)
-        .frame(maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Attach state

@@ -98,9 +98,9 @@ struct TerminalWorkspaceView: View {
             textScaleMenu
         }
         .font(.system(size: 9, design: .monospaced))
-        .padding(.horizontal, 18)
-        .padding(.top, 10)
-        .padding(.bottom, 6)
+        .padding(.leading, 12)
+        .padding(.trailing, 4)
+        .frame(height: 44)
         .seHaptic(trigger: session.terminals.displayMode) { _, _ in .selection }
         .seHaptic(trigger: textScale) { _, _ in .selection }
     }
@@ -194,15 +194,8 @@ struct TerminalWorkspaceView: View {
                     .allowsHitTesting(false)
             }
         }
-        .padding(13)
         .background(palette.terminalCanvas)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(palette.strokeStrong, lineWidth: 1)
-        }
-        .padding(.horizontal, 14)
-        .frame(maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var activeTerminal: LiveTerminal? {
