@@ -2695,6 +2695,17 @@ mod tests {
             .layer(Extension(IngressProvenance::LocalOperator))
             .layer(Extension(authority));
 
+        // The process-wide capture also receives other route tests. Seed one
+        // such valid record so fixture isolation is exercised deterministically.
+        log_boundary_outcome(
+            &Method::POST,
+            RemoteRouteClass::AgentChat,
+            RemoteCapability::Scope("terminal.input"),
+            IngressProvenance::LocalOperator,
+            "FORBIDDEN",
+            StatusCode::FORBIDDEN,
+            std::time::Duration::ZERO,
+        );
         let mut tasks = Vec::with_capacity(500);
         for ordinal in 0..500_u16 {
             let app = app.clone();
@@ -2721,7 +2732,12 @@ mod tests {
 
         let boundary = test_tracing::messages("se_manager::web::auth")
             .into_iter()
-            .filter(|message| message.contains("operation=remote_boundary"))
+            .filter(|message| {
+                message.contains("operation=remote_boundary")
+                    && message.contains("method=GET ")
+                    && message.contains("route_class=conversation ")
+                    && message.contains("provenance=local_operator ")
+            })
             .collect::<Vec<_>>();
         assert!(
             boundary.len() >= 500,
