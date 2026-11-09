@@ -74,6 +74,14 @@ pub struct TunnelConfig {
     pub ssh_identity_file: Option<String>,
     #[serde(default)]
     pub ssh_public_https: bool,
+    #[serde(default = "default_desktop_view_enabled")]
+    pub desktop_view_enabled: bool,
+    #[serde(default)]
+    pub desktop_control_enabled: bool,
+}
+
+fn default_desktop_view_enabled() -> bool {
+    true
 }
 
 impl Default for TunnelConfig {
@@ -94,6 +102,8 @@ impl Default for TunnelConfig {
             ssh_public_hostname: None,
             ssh_identity_file: None,
             ssh_public_https: false,
+            desktop_view_enabled: true,
+            desktop_control_enabled: false,
         }
     }
 }
@@ -341,6 +351,7 @@ pub struct TunnelConfigStore {
     path: PathBuf,
     secrets_path: PathBuf,
     secrets: Arc<Mutex<Option<TunnelSecrets>>>,
+    config_update: Arc<Mutex<()>>,
 }
 
 impl TunnelConfigStore {
@@ -351,6 +362,7 @@ impl TunnelConfigStore {
             path: dir.join("config.json"),
             secrets_path: dir.join("secrets.json"),
             secrets: Arc::new(Mutex::new(None)),
+            config_update: Arc::new(Mutex::new(())),
         }
     }
 
@@ -365,6 +377,7 @@ impl TunnelConfigStore {
             path,
             secrets_path,
             secrets: Arc::new(Mutex::new(None)),
+            config_update: Arc::new(Mutex::new(())),
         }
     }
 
@@ -394,7 +407,26 @@ impl TunnelConfigStore {
             .map_err(|e| format!("failed to write tunnel config: {e}"))
     }
 
+    pub fn set_desktop_settings(
+        &self,
+        view_enabled: bool,
+        control_enabled: bool,
+    ) -> Result<(), String> {
+        let _guard = self
+            .config_update
+            .lock()
+            .map_err(|_| "tunnel config lock poisoned".to_string())?;
+        let mut config = self.load()?;
+        config.desktop_view_enabled = view_enabled;
+        config.desktop_control_enabled = control_enabled;
+        self.save(&config)
+    }
+
     pub fn apply_update(&self, update: TunnelConfigUpdate) -> Result<TunnelConfig, String> {
+        let _guard = self
+            .config_update
+            .lock()
+            .map_err(|_| "tunnel config lock poisoned".to_string())?;
         let mut config = self.load()?;
         config.provider = update.provider;
         config.cloudflare_named_hostname = empty_to_none(update.cloudflare_named_hostname);
@@ -667,6 +699,41 @@ pub fn normalize_public_http_origin(raw: &str, https: bool) -> Result<String, St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn desktop_consent_defaults_are_view_only_for_legacy_configs() {
+        let config: TunnelConfig =
+            serde_json::from_str(r#"{"provider":"cloudflareQuick"}"#).unwrap();
+        assert!(config.desktop_view_enabled);
+        assert!(!config.desktop_control_enabled);
+        assert!(TunnelConfig::default().desktop_view_enabled);
+        assert!(!TunnelConfig::default().desktop_control_enabled);
+    }
+
+    #[test]
+    fn desktop_consent_persists_without_replacing_tunnel_config_or_secrets() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = TunnelConfigStore::for_path(dir.path().join("config.json"));
+        let mut config = TunnelConfig::default();
+        config.cloudflare_named_hostname = Some("desktop.example.test".into());
+        store.save(&config).unwrap();
+        store.set_desktop_settings(false, true).unwrap();
+        let reloaded = TunnelConfigStore::for_path(dir.path().join("config.json"))
+            .load()
+            .unwrap();
+        assert!(!reloaded.desktop_view_enabled);
+        assert!(reloaded.desktop_control_enabled);
+        assert_eq!(
+            reloaded.cloudflare_named_hostname,
+            config.cloudflare_named_hostname
+        );
+        let json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.path().join("config.json")).unwrap())
+                .unwrap();
+        assert_eq!(json["desktopViewEnabled"], false);
+        assert_eq!(json["desktopControlEnabled"], true);
+        assert!(!dir.path().join("secrets.json").exists());
+    }
 
     #[test]
     fn default_provider_is_quick_tunnel() {

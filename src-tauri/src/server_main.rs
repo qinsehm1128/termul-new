@@ -565,6 +565,12 @@ fn main() -> ExitCode {
             ),
         );
         acp.set_scheduled_tasks(&scheduled_tasks);
+        if let Err(error) =
+            se_manager_lib::initialize_headless_remote_desktop(cfg.service_account_state_dir())
+        {
+            error!(%error, "failed to initialize remote desktop consent");
+            return ExitCode::from(1);
+        }
         // Cross-agent memory index. Its state root is the standalone host's own
         // service-account state dir — deliberately NOT the desktop's
         // `app_data_dir`, because the two hosts must not share a mutable store.

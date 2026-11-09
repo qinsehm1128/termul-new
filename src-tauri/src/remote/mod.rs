@@ -11,6 +11,7 @@
 //! directly to a session via the WS URL. Auth / token-gating land in Epic 2.
 
 pub mod cloudflared;
+pub mod desktop;
 pub mod host;
 pub mod intent;
 pub mod lan;

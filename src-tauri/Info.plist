@@ -46,9 +46,11 @@
   <key>NSSystemAdministrationUsageDescription</key>
   <string>Se needs administration access so commands you run can perform privileged system tasks.</string>
 
-  <!-- Capture. A user command can invoke screencapture or a recording tool. -->
+  <!-- Local remote-desktop consent is required in addition to macOS permission. -->
   <key>NSScreenCaptureUsageDescription</key>
-  <string>Se needs screen recording permission so commands you run can capture the screen.</string>
+  <string>Se captures this Mac's screen for SeRemote when you allow desktop viewing by an authorized remote device, or when a command you run captures the screen.</string>
+  <key>NSAccessibilityUsageDescription</key>
+  <string>Se needs accessibility permission to send mouse and keyboard input from an authorized remote device only when you enable remote control. You can stop remote access at any time.</string>
 
   <!-- Media. Declared because a subprocess invoking these without the key is
        killed outright; Se itself never opens a camera or microphone. -->
