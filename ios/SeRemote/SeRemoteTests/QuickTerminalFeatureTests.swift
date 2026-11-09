@@ -126,8 +126,12 @@ struct QuickTerminalFeatureTests {
             #expect(QuickTerminalPresentation.attachClaim(reused) == nil)
             let notice = try #require(QuickTerminalPresentation.consoleUnattachableNotice(reused))
             #expect(!notice.isEmpty)
-            // A missing claim is the real cause, so it wins over transport noise.
-            #expect(QuickTerminalPresentation.consoleFailureMessage(reused, error: failure) == notice)
+            // Only a real authorization refusal is reported as a claim problem.
+            #expect(QuickTerminalPresentation.consoleFailureMessage(
+                reused, error: HostError.ipc("Unauthorized", "UNAUTHORIZED")) == notice)
+            #expect(QuickTerminalPresentation.consoleFailureMessage(
+                reused, error: HostError.ipc("boom", "NETWORK_ERROR")) == "boom")
+            #expect(QuickTerminalPresentation.consoleFailureMessage(reused, error: failure) == "attach failed")
         }
     }
 

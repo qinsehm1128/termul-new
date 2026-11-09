@@ -57,9 +57,14 @@ nonisolated enum QuickTerminalPresentation {
         return String(localized: "This shell is already running on the host, but this device holds no claim for it, so it cannot be attached. The shell keeps running.")
     }
 
-    /// Failure copy for the console: name the claim limitation when that is
-    /// the real cause, otherwise keep the host's own message.
+    /// Failure copy for the console: name the claim limitation only when the
+    /// host actually refused authorization, otherwise keep its own message so
+    /// a transport failure is never reported as a claim problem.
     static func consoleFailureMessage(_ opened: QuickTerminalOpenedWire, error: Error) -> String {
-        consoleUnattachableNotice(opened) ?? error.localizedDescription
+        if case HostError.ipc(_, let code) = error, code == "UNAUTHORIZED",
+           let notice = consoleUnattachableNotice(opened) {
+            return notice
+        }
+        return error.localizedDescription
     }
 }
