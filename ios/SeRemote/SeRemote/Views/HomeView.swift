@@ -269,8 +269,10 @@ struct HomeView: View {
     }
 
     private func open(_ link: RemoteLink) {
-        activity.recordOpen(link)
-        store.connect(link: link)
+        // A rescan folds into the saved record it belongs to, so record the open
+        // against the record that survives rather than the freshly parsed link.
+        let stored = store.connect(link: link)
+        activity.recordOpen(stored)
     }
 
     private func connectPendingLink() {

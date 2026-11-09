@@ -67,8 +67,8 @@ struct WorkspaceView: View {
         .onDisappear {
             // Animated insertion may transiently disappear mid-connect. Only
             // an authoritative disconnect/link replacement tears down sockets.
-            if ShellConnectionLifecycle.shouldStop(disappearingLinkID: link.id,
-                                                   activeLinkID: store.activeLink?.id) {
+            if ShellConnectionLifecycle.shouldStop(disappearingSession: link.sessionIdentity,
+                                                   activeSession: store.activeLink?.sessionIdentity) {
                 startTask?.cancel()
                 startTask = nil
                 session.stop()

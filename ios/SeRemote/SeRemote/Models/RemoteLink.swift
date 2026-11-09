@@ -48,6 +48,52 @@ struct RemoteLink: Identifiable, Hashable, Codable {
         originURL.absoluteString
     }
 
+    /// Identity of the host behind this link: the pairing credential when the QR
+    /// carried one, otherwise nothing.
+    ///
+    /// A saved origin is disposable — a LAN listener can come back on another
+    /// address after a DHCP or Wi-Fi change, and a quick tunnel always comes back
+    /// on another hostname — while the credential is issued by one host and keeps
+    /// identifying it across those moves. Matching on it is what lets a rescan
+    /// update the saved record instead of adding a second one that still carries
+    /// the dead origin.
+    var hostIdentity: String? {
+        guard let token = pairingToken, !token.isEmpty else { return nil }
+        return "credential:\(token)"
+    }
+
+    /// The same saved host, possibly reachable at a different origin now.
+    func refersToSameHost(as other: RemoteLink) -> Bool {
+        if let mine = hostIdentity, let theirs = other.hostIdentity, mine == theirs {
+            return true
+        }
+        // No credential to compare, or the host rotated it: the address is all
+        // the identity left.
+        return originHost.caseInsensitiveCompare(other.originHost) == .orderedSame
+    }
+
+    /// Identity of the live session this link opens: the saved record plus the
+    /// origin it dials. Keeping the record across a rescan must still replace the
+    /// session that dials the dead origin, so the address belongs in the key.
+    var sessionIdentity: String {
+        "\(id.uuidString)#\(savedOrigin)"
+    }
+
+    /// Fold a fresh scan of this same host in: the record keeps its identity
+    /// (`id`, so the keychain account and the home-screen activity timestamps stay
+    /// attached) and a name the user gave it, while the origin and credential
+    /// become the ones that were just scanned.
+    func adoptingRescan(_ fresh: RemoteLink) -> RemoteLink {
+        let userNamed = title != RemoteLink.displayTitle(for: accessURL)
+        return RemoteLink(
+            id: id,
+            title: userNamed && !fresh.title.isEmpty ? title : fresh.title,
+            accessURL: fresh.accessURL,
+            bearer: fresh.pairingToken,
+            createdAt: createdAt
+        )
+    }
+
     func url(for surface: WorkspaceSurface) -> URL {
         var base = accessURL.absoluteString
         if let hash = base.firstIndex(of: "#") {

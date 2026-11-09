@@ -52,11 +52,16 @@ final class ConnectionStore {
         }
     }
 
-    func connect(link: RemoteLink, surface: WorkspaceSurface = .chat) {
-        remember(link)
+    /// Returns the saved record the session dials. A rescan of a host that moved
+    /// to a new origin folds into the existing record, so this is not always the
+    /// link that was passed in.
+    @discardableResult
+    func connect(link: RemoteLink, surface: WorkspaceSurface = .chat) -> RemoteLink {
+        let stored = remember(link)
         errorMessage = nil
         self.surface = surface
-        activeLink = link
+        activeLink = stored
+        return stored
     }
 
     func disconnect() {
@@ -107,14 +112,40 @@ final class ConnectionStore {
         errorMessage = nil
     }
 
-    private func remember(_ link: RemoteLink) {
-        savedLinks.removeAll {
-            $0.id == link.id
-                || $0.originHost == link.originHost
-                || $0.accessURL.absoluteString == link.accessURL.absoluteString
+    @discardableResult
+    private func remember(_ link: RemoteLink) -> RemoteLink {
+        let folded = Self.fold(rescan: link, into: savedLinks)
+        savedLinks = folded.saved
+        // A mounted session must dial the address that was just scanned: the
+        // active link follows the record this scan was folded into, so the dead
+        // origin cannot survive a rescan.
+        if activeLink.map({ $0.id == link.id || $0.refersToSameHost(as: link) }) == true {
+            activeLink = folded.stored
         }
-        savedLinks.insert(link, at: 0)
         persist()
+        return folded.stored
+    }
+
+    /// Fold a freshly scanned link into the saved list.
+    ///
+    /// A rescan of a host whose address moved (`192.168.100.71` → `192.168.6.105`)
+    /// arrives as a different origin carrying the same credential. Inserting it
+    /// beside the old row would keep the dead origin in the list and split the
+    /// host's activity history across two records, so the scan updates the record
+    /// it belongs to and every stale duplicate is dropped.
+    ///
+    /// Pure so the dedupe rules are testable without UserDefaults or the keychain.
+    static func fold(
+        rescan link: RemoteLink,
+        into saved: [RemoteLink]
+    ) -> (stored: RemoteLink, saved: [RemoteLink]) {
+        let stored = saved.first { $0.refersToSameHost(as: link) }?.adoptingRescan(link) ?? link
+        let remaining = saved.filter { candidate in
+            candidate.id != stored.id
+                && !candidate.refersToSameHost(as: stored)
+                && candidate.accessURL.absoluteString != stored.accessURL.absoluteString
+        }
+        return (stored, [stored] + remaining)
     }
 
     private func persist() {

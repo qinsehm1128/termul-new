@@ -13,7 +13,10 @@ struct RootView: View {
         ZStack {
             if let link = store.activeLink {
                 WorkspaceView(store: store, settings: settings, link: link)
-                    .id(link.id)
+                    // The origin is part of the key: a rescan that keeps the
+                    // saved record but moves the address must open a session
+                    // against the new origin, never keep dialing the dead one.
+                    .id(link.sessionIdentity)
                     .transition(SeTransition.entrance(reduceMotion: reduceMotion))
             } else {
                 HomeView(store: store, settings: settings)
@@ -21,7 +24,7 @@ struct RootView: View {
             }
         }
         .background(SeTheme.canvas.ignoresSafeArea())
-        .seAnimation(.context, value: store.activeLink?.id)
+        .seAnimation(.context, value: store.activeLink?.sessionIdentity)
         // Below SeRemoteApp's preferredColorScheme, so the persisted
         // appearance (or the device setting for .system) decides day/night.
         .seResolvedThemeMode()
