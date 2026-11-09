@@ -1,7 +1,7 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useScreenObservationStore } from '@/stores/screen-observation-store'
 import { useAgentHookStateStore } from '@/stores/agent-hook-state-store'
+import { useScreenObservationStore } from '@/stores/screen-observation-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import type { Terminal } from '@/types/project'
 import { useAgentTerminalState } from './use-agent-terminal-state'

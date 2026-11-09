@@ -1,6 +1,6 @@
 import type { TerminalAgentSession } from './cli-session.types'
-import type { AgentDescriptorRef } from './session-workspace.types'
 import type { TerminalModes } from './ipc.types'
+import type { AgentDescriptorRef } from './session-workspace.types'
 import type { TerminalScreenEngine } from './terminal-screen.types'
 
 // Persisted terminal data (subset of Terminal for storage)
