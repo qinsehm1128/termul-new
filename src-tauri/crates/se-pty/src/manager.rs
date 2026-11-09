@@ -26,112 +26,160 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 
+// Host bootstrap sets only this process's tuple. Daemon clients transport the
+// same tuple in SpawnOptions.env; never discover a host through a global file.
+static AGENT_HOOK_ENV: std::sync::OnceLock<parking_lot::RwLock<HashMap<String, String>>> =
+    std::sync::OnceLock::new();
+pub fn configure_agent_hook_environment(env: HashMap<String, String>) {
+    *AGENT_HOOK_ENV.get_or_init(Default::default).write() = env;
+}
 fn inject_agent_hook_environment(
     env: &mut HashMap<String, String>,
     home: &str,
-    terminal: &str,
-    project: Option<&str>,
+    terminal_id: &str,
+    project_id: Option<&str>,
+    generation: Option<u64>,
 ) {
-    // Discard inherited/overridden identities from another pane first.
+    if let Some(config) = AGENT_HOOK_ENV.get() {
+        env.extend(config.read().clone());
+    }
+    // These are always derived from this spawn, not inherited from a parent PTY.
     for key in [
-        "SE_AGENT_HOOK_ENDPOINT",
         "SE_AGENT_HOOK_PORT",
-        "SE_AGENT_HOOK_TOKEN",
+        "SE_AGENT_HOOK_PTY_ID",
+        "SE_AGENT_HOOK_GENERATION",
         "SE_TERMINAL_ID",
         "SE_PROJECT_ID",
     ] {
         env.remove(key);
     }
-    env.insert("SE_TERMINAL_ID".into(), terminal.into());
+    env.insert("SE_TERMINAL_ID".into(), terminal_id.into());
     env.insert(
         "SE_PROJECT_ID".into(),
-        project.unwrap_or("unassigned").into(),
+        project_id.unwrap_or("unassigned").into(),
     );
-    let Ok(metadata) =
-        std::fs::read_to_string(Path::new(home).join(".se-manager/agent-hooks/endpoint.env"))
-    else {
-        return;
-    };
-    let fields: HashMap<_, _> = metadata
-        .lines()
-        .filter_map(|line| line.split_once('='))
-        .collect();
-    let Some(port) = fields
-        .get("SE_AGENT_HOOK_PORT")
-        .and_then(|port| port.parse::<u16>().ok())
-        .filter(|port| *port > 0)
-    else {
-        return;
-    };
-    let Some(token) = fields
+    env.insert("SE_AGENT_HOOK_PTY_ID".into(), terminal_id.into());
+    if let Some(generation) = generation {
+        env.insert("SE_AGENT_HOOK_GENERATION".into(), generation.to_string());
+    }
+    let valid_instance = env.get("SE_AGENT_HOOK_INSTANCE").is_some_and(|id| {
+        id.len() == 36
+            && id.bytes().enumerate().all(|(i, b)| {
+                if [8, 13, 18, 23].contains(&i) {
+                    b == b'-'
+                } else {
+                    b.is_ascii_hexdigit()
+                }
+            })
+    });
+    let has_endpoint = env.contains_key("SE_AGENT_HOOK_ENDPOINT");
+    let has_token = env.contains_key("SE_AGENT_HOOK_TOKEN");
+    if !has_endpoint && !has_token && valid_instance {
+        let instance = &env["SE_AGENT_HOOK_INSTANCE"];
+        let path = std::path::Path::new(home)
+            .join(".se-manager/agent-hooks/instances")
+            .join(instance)
+            .join("endpoint.env");
+        // Fixed key parser, not shell evaluation. Reject links and oversized files.
+        let safe = path
+            .ancestors()
+            .all(|p| std::fs::symlink_metadata(p).map_or(false, |m| !m.file_type().is_symlink()));
+        if safe && std::fs::metadata(&path).is_ok_and(|m| m.is_file() && m.len() < 4096) {
+            if let Ok(contents) = std::fs::read_to_string(path) {
+                let mut parsed = HashMap::new();
+                let valid = contents.lines().all(|line| {
+                    let Some((key, value)) = line.split_once('=') else {
+                        return false;
+                    };
+                    if !matches!(
+                        key,
+                        "SE_AGENT_HOOK_ENDPOINT" | "SE_AGENT_HOOK_TOKEN" | "SE_AGENT_HOOK_INSTANCE"
+                    ) || parsed.contains_key(key)
+                    {
+                        return false;
+                    }
+                    parsed.insert(key.to_owned(), value.to_owned());
+                    true
+                });
+                if valid
+                    && parsed.get("SE_AGENT_HOOK_INSTANCE") == env.get("SE_AGENT_HOOK_INSTANCE")
+                {
+                    env.extend(parsed);
+                }
+            }
+        }
+    }
+    let valid_endpoint = env
+        .get("SE_AGENT_HOOK_ENDPOINT")
+        .and_then(|s| s.strip_prefix("http://127.0.0.1:"))
+        .and_then(|p| p.parse::<u16>().ok())
+        .is_some_and(|p| p != 0);
+    let valid_token = env
         .get("SE_AGENT_HOOK_TOKEN")
-        .filter(|token| token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit()))
-    else {
-        return;
-    };
-    env.insert(
-        "SE_AGENT_HOOK_ENDPOINT".into(),
-        format!("http://127.0.0.1:{port}"),
-    );
-    env.insert("SE_AGENT_HOOK_PORT".into(), port.to_string());
-    env.insert("SE_AGENT_HOOK_TOKEN".into(), (*token).to_string());
+        .is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()));
+    if !valid_instance || !valid_endpoint || !valid_token || generation.is_none() {
+        for key in [
+            "SE_AGENT_HOOK_INSTANCE",
+            "SE_AGENT_HOOK_ENDPOINT",
+            "SE_AGENT_HOOK_TOKEN",
+        ] {
+            env.remove(key);
+        }
+    }
 }
-
 #[cfg(test)]
 mod agent_hook_environment_tests {
     use super::*;
     #[test]
-    fn each_new_spawn_gets_its_own_identity_and_current_endpoint() {
+    fn spawn_tuple_isolated_from_global_endpoint_and_partial_tuple_rejected() {
         let home = tempfile::tempdir().unwrap();
-        let runtime = home.path().join(".se-manager/agent-hooks");
-        std::fs::create_dir_all(&runtime).unwrap();
-        std::fs::write(
-            runtime.join("endpoint.env"),
-            format!(
-                "SE_AGENT_HOOK_PORT=43210\nSE_AGENT_HOOK_TOKEN={}\n",
-                "a".repeat(64)
+        let root = home.path().join(".se-manager/agent-hooks");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("endpoint.env"), "SE_AGENT_HOOK_TOKEN=foreign\n").unwrap();
+        let instance = "74b74834-5205-4c1e-a731-35ab983994b5".to_owned();
+        let mut env = HashMap::from([
+            ("SE_AGENT_HOOK_INSTANCE".into(), instance.clone()),
+            (
+                "SE_AGENT_HOOK_ENDPOINT".into(),
+                "http://127.0.0.1:43210".into(),
             ),
-        )
-        .unwrap();
-        let mut env = HashMap::from([("SE_TERMINAL_ID".into(), "foreign".into())]);
+            ("SE_AGENT_HOOK_TOKEN".into(), "a".repeat(64)),
+        ]);
         inject_agent_hook_environment(
             &mut env,
             home.path().to_str().unwrap(),
             "terminal-1",
             Some("project-1"),
+            Some(3),
         );
-        assert_eq!(env["SE_AGENT_HOOK_ENDPOINT"], "http://127.0.0.1:43210");
-        assert_eq!(env["SE_TERMINAL_ID"], "terminal-1");
-        assert_eq!(env["SE_PROJECT_ID"], "project-1");
-        let existing = env.clone();
-        std::fs::write(
-            runtime.join("endpoint.env"),
-            format!(
-                "SE_AGENT_HOOK_PORT=43211\nSE_AGENT_HOOK_TOKEN={}\n",
-                "b".repeat(64)
-            ),
-        )
-        .unwrap();
-        inject_agent_hook_environment(&mut env, home.path().to_str().unwrap(), "terminal-2", None);
-        assert_eq!(env["SE_AGENT_HOOK_PORT"], "43211");
-        assert_eq!(env["SE_PROJECT_ID"], "unassigned");
-        assert_eq!(existing["SE_AGENT_HOOK_PORT"], "43210");
+        assert_eq!(env["SE_AGENT_HOOK_INSTANCE"], instance);
+        assert_eq!(env["SE_AGENT_HOOK_TOKEN"], "a".repeat(64));
+        assert_eq!(env["SE_AGENT_HOOK_GENERATION"], "3");
+        assert_eq!(env["SE_AGENT_HOOK_PTY_ID"], "terminal-1");
+        env.remove("SE_AGENT_HOOK_TOKEN");
+        inject_agent_hook_environment(
+            &mut env,
+            home.path().to_str().unwrap(),
+            "terminal-2",
+            None,
+            Some(4),
+        );
+        assert!(!env.contains_key("SE_AGENT_HOOK_ENDPOINT"));
     }
     #[test]
-    fn malformed_runtime_metadata_never_becomes_shell_code_or_inherited_secret() {
+    fn no_instance_never_reads_global_file() {
         let home = tempfile::tempdir().unwrap();
-        let runtime = home.path().join(".se-manager/agent-hooks");
-        std::fs::create_dir_all(&runtime).unwrap();
+        let root = home.path().join(".se-manager/agent-hooks");
+        std::fs::create_dir_all(&root).unwrap();
         std::fs::write(
-            runtime.join("endpoint.env"),
-            "SE_AGENT_HOOK_PORT=$(touch injected)\nSE_AGENT_HOOK_TOKEN=bad\n",
+            root.join("endpoint.env"),
+            "SE_AGENT_HOOK_PORT=43210\nSE_AGENT_HOOK_TOKEN=bad\n",
         )
         .unwrap();
-        let mut env = HashMap::from([("SE_AGENT_HOOK_TOKEN".into(), "foreign-secret".into())]);
-        inject_agent_hook_environment(&mut env, home.path().to_str().unwrap(), "terminal", None);
-        assert!(!env.contains_key("SE_AGENT_HOOK_TOKEN"));
+        let mut env = HashMap::new();
+        inject_agent_hook_environment(&mut env, home.path().to_str().unwrap(), "t", None, Some(1));
         assert!(!env.contains_key("SE_AGENT_HOOK_ENDPOINT"));
-        assert_eq!(env["SE_TERMINAL_ID"], "terminal");
+        assert_eq!(env["SE_TERMINAL_ID"], "t");
     }
 }
 
@@ -2295,6 +2343,7 @@ impl PtyManager {
             &self.get_home_directory(),
             &id,
             options.project_id.as_deref(),
+            self.claims.generation(&id),
         );
         log::info!(
             "[pty-env] spawn locale LANG={} LC_CTYPE={} PYTHONUTF8={} TERM={} COLORTERM={} FORCE_COLOR={}",
