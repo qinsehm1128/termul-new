@@ -29,13 +29,13 @@ artifact: {"work_id":null,"created_by_session":"session_lizard_1794024668506_6ff
 
 ### 统计
 
-本表按 `src-tauri/src/lib.rs` 的 `generate_handler!` 逐条核对（2026-11-07 宿主 MCP、SSH 命令黑名单及独立记忆入口退役同步后用脚本比对）：后端共 344 个命令，全部已分类。合并为同一 op 的命令按各自原有分类计入，重复登记的只计一次。
+本表按 `src-tauri/src/lib.rs` 的 `generate_handler!` 逐条核对（2026-11-07 宿主 MCP、SSH 命令黑名单及独立记忆入口退役同步后用脚本比对）：后端共 347 个命令，全部已分类。合并为同一 op 的命令按各自原有分类计入，重复登记的只计一次。
 
 | 来源 | 总数 | OPEN | OPEN-REDACTED | SECRET-EXCLUDED | INTERNAL |
 |---|---|---|---|---|---|
-| 后端 Tauri 命令 | 344 | 306 | 12 | 9 | 17 |
+| 后端 Tauri 命令 | 347 | 309 | 12 | 9 | 17 |
 | 前端独有能力（无 Rust 命令） | 39 | 39 | 0 | 0 | 0 |
-| **合计** | **383** | **345** | **12** | **9** | **17** |
+| **合计** | **386** | **348** | **12** | **9** | **17** |
 
 各部分的范围：
 - A：Agent、会话、对话、记忆、Skills、定时任务、AI 渠道、MCP、远程访问、插件；
@@ -970,7 +970,7 @@ bridge 的独立 token 不是外部 MCP bearer，也不是插件授权令牌。H
 
 ## 不变量
 
-1. **密钥不出宿主。** 8 个 SECRET-EXCLUDED 操作在注册表中不存在。即使用户授权，也没有任何 op、事件、日志或审计条目能返回密钥值。OPEN-REDACTED 的输出由契约测试用哨兵值验证不含密钥。
+1. **密钥不出宿主。** 9 个 SECRET-EXCLUDED 操作在注册表中不存在。即使用户授权，也没有任何 op、事件、日志或审计条目能返回密钥值。OPEN-REDACTED 的输出由契约测试用哨兵值验证不含密钥。
 2. **身份与范围由宿主派生，不信任插件输入。** caller、pluginId 和 project 范围从已认证连接得出。路径、cwd、terminalId 和 conversationId 先在宿主侧解析，并校验是否落在已授权范围内。清单发现以下现有缺口，开放前必须补上：
    - `terminal_watch`、`terminal_write` 没有 claim 校验，插件版本必须校验调用方是否拥有该终端（`commands.rs:1244,1486`）；
    - `git_*` 的读操作和 `push` 不校验项目路径，插件版本必须先把 cwd 规范化并核对它在已授权项目之内（`commands.rs:6767` 等）；
