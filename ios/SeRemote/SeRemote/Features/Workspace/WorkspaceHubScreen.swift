@@ -42,7 +42,7 @@ struct WorkspaceHubScreen: View {
             WorkspaceHubView(
                 host: hostName,
                 latency: "", // The host protocol does not report latency.
-                project: session.projects.active?.name ?? String(localized: "项目"),
+                project: session.projects.active?.name ?? String(localized: "Project"),
                 branch: session.projects.active.map { NocturneWorkspacePresentation.project($0, snapshot: snapshot).branch } ?? "",
                 tools: ToolDestination.hubCases.map { NocturneWorkspacePresentation.tool($0, snapshot: snapshot) },
                 projects: session.projects.projects.map { NocturneWorkspacePresentation.project($0, snapshot: snapshot) },

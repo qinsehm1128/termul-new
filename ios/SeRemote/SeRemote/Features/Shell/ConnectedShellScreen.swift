@@ -130,14 +130,14 @@ struct ConnectedShellScreen: View {
         }
         .background {
             VStack {
-                Button("命令面板") { showsCommand = true }
+                Button("Command palette") { showsCommand = true }
                     .keyboardShortcut("k", modifiers: .command)
             }
             .hidden()
         }
         .disabled(openingSession)
         .overlay {
-            if openingSession { ProgressView().accessibilityLabel("正在打开会话") }
+            if openingSession { ProgressView().accessibilityLabel(String(localized: "Opening session")) }
         }
         .animation(reduceMotion ? nil : SeNocturneMotion.quick, value: showsCommand)
     }
@@ -150,7 +150,7 @@ struct ConnectedShellScreen: View {
             ConversationsScreen(
                 session: session,
                 hostName: hostName,
-                hostMeta: session.phase == .connected ? "已连接" : "连接中",
+                hostMeta: session.phase == .connected ? String(localized: "Connected") : String(localized: "Connecting"),
                 conversations: conversationEntries,
                 needs: needs,
                 summary: needSummary,
@@ -227,7 +227,7 @@ struct ConnectedShellScreen: View {
                         HStack {
                             Text(saved.title).foregroundStyle(palette.ink)
                             Spacer()
-                            if saved.id == link.id { Text("当前").font(SeNocturneType.font(9, mono: true)) }
+                            if saved.id == link.id { Text("Current").font(SeNocturneType.font(9, mono: true)) }
                         }
                         .frame(minHeight: 44)
                     }
@@ -237,16 +237,16 @@ struct ConnectedShellScreen: View {
                     showsHosts = false
                     showsWorkbench = true
                 } label: {
-                    Text("查看这台主机的工作台").frame(minHeight: 44)
+                    Text("View this host dashboard").frame(minHeight: 44)
                 }
                 .listRowBackground(palette.card)
             }
             .scrollContentBackground(.hidden)
             .background(palette.canvas)
-            .navigationTitle("主机")
+            .navigationTitle(String(localized: "Host"))
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { showsHosts = false }
+                    Button("Done") { showsHosts = false }
                 }
             }
         }

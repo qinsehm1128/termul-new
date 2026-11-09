@@ -15,10 +15,10 @@ enum SidebarDestination: String, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .conversations: "会话"
-        case .terminals: "终端"
-        case .tools: "工具"
-        case .settings: "设置"
+        case .conversations: String(localized: "Conversations")
+        case .terminals: String(localized: "Terminals")
+        case .tools: String(localized: "Tools")
+        case .settings: String(localized: "Settings")
         }
     }
 
@@ -62,13 +62,13 @@ struct AdaptiveSidebarShell: View {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: collapsed ? .center : .leading, spacing: 0) {
                     if !collapsed {
-                        groupLabel("主要")
+                        groupLabel(String(localized: "Primary"))
                     }
                     ForEach(SidebarDestination.primary) { destination in
                         nav(destination)
                     }
                     if !collapsed {
-                        groupLabel("主机")
+                        groupLabel(String(localized: "Hosts"))
                         hostRow
                     }
                 }
@@ -87,7 +87,7 @@ struct AdaptiveSidebarShell: View {
         .ignoresSafeArea(edges: .leading)
         .animation(reduceMotion ? nil : SeNocturneMotion.panel, value: collapsed)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("侧栏")
+        .accessibilityLabel(String(localized: "Sidebar"))
     }
 
     private var header: some View {
@@ -131,14 +131,14 @@ struct AdaptiveSidebarShell: View {
                 .frame(width: 44, height: 44)
         }
         .buttonStyle(SePressable())
-        .accessibilityLabel(collapsed ? "展开侧栏" : "收起侧栏")
+        .accessibilityLabel(collapsed ? String(localized: "Expand sidebar") : String(localized: "Collapse sidebar"))
     }
 
     private var search: some View {
         Button(action: onOpenCommand) {
             HStack(spacing: 8) {
                 SeIconView(icon: .search, size: 14, stroke: 1.6, color: palette.inkTertiary)
-                Text("搜索会话、文件或命令")
+                Text("Search sessions, files or commands")
                     .font(SeNocturneType.font(11.5))
                     .foregroundStyle(palette.inkTertiary)
                     .lineLimit(1)
@@ -239,7 +239,7 @@ struct AdaptiveSidebarShell: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(SePressable())
-                .accessibilityLabel("设置")
+                .accessibilityLabel(String(localized: "Settings"))
             } else {
                 nav(.settings)
                 Text(version)

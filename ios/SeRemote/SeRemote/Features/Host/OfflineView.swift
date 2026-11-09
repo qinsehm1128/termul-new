@@ -27,8 +27,7 @@ struct OfflineView: View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
                 SeNavBar(
-                    title: host,
-                    subtitle: subtitle,
+                    title: String(localized: "Offline"),
                     onBack: onBack,
                     onTrailing: onOpenSettings
                 )
@@ -36,19 +35,18 @@ struct OfflineView: View {
                 hostHead
 
                 VStack(alignment: .leading, spacing: 0) {
-                    SeEyebrow(text: "连接已断开")
-                    Text("这台主机现在不在线。已缓存的会话仍然可以读，但不能发送新的指令。")
-                        .font(SeNocturneType.font(12))
-                        .foregroundStyle(palette.inkSecondary)
-                        .lineSpacing(3)
-                        .padding(.top, 7)
+                    HStack(spacing: 2) {
+                        SeEyebrow(text: String(localized: "Connection lost"))
+                        SeInfoTip(text: String(localized: "Cached sessions stay readable, but new instructions cannot be sent. The cache keeps the last 7 days; reconnecting resumes the original PTY."))
+                        Spacer(minLength: 0)
+                    }
 
-                    SeSolidButton(title: "重新连接", action: onReconnect)
-                        .padding(.top, 14)
+                    SeSolidButton(title: String(localized: "Reconnect"), action: onReconnect)
+                        .padding(.top, 10)
 
                     if let onWake {
                         Button(action: onWake) {
-                            Text("尝试局域网唤醒")
+                            Text("Try Wake on LAN")
                                 .font(SeNocturneType.font(11.5))
                                 .foregroundStyle(palette.accent)
                                 .frame(maxWidth: .infinity, minHeight: 44)
@@ -67,10 +65,10 @@ struct OfflineView: View {
                 .padding(.horizontal, 18)
                 .padding(.top, 20)
 
-                SeGroupLabel(title: "缓存会话", count: String(format: "%02d", cached.count))
+                SeGroupLabel(title: String(localized: "Cached sessions"), count: String(format: "%02d", cached.count))
 
                 if cached.isEmpty {
-                    Text("这台主机还没有缓存下来的会话。")
+                    Text("This host has no cached sessions yet.")
                         .font(SeNocturneType.font(11))
                         .foregroundStyle(palette.inkSecondary)
                         .padding(.horizontal, 18)
@@ -91,12 +89,8 @@ struct OfflineView: View {
                     .padding(.horizontal, 18)
                 }
 
-                Text("缓存只保留最近 7 天。重新连接后，会话会续上原来的 PTY。")
-                    .font(SeNocturneType.font(10))
-                    .foregroundStyle(palette.inkTertiary)
-                    .padding(.horizontal, 18)
-                    .padding(.top, 14)
-                    .padding(.bottom, 28)
+                Color.clear
+                    .frame(height: 28)
             }
         }
         .background(palette.canvas)
@@ -104,12 +98,11 @@ struct OfflineView: View {
     }
 
     private var subtitle: String {
-        lastSeen.isEmpty ? "离线" : "离线 · 上次在线 \(lastSeen)"
+        lastSeen.isEmpty ? String(localized: "Offline") : String(localized: "Offline · Last seen \(lastSeen)")
     }
 
     private var hostHead: some View {
         VStack(alignment: .leading, spacing: 4) {
-            SeEyebrow(text: "主机")
             Text(host)
                 .font(SeNocturneType.font(26, weight: .semibold))
                 .tracking(-0.8)

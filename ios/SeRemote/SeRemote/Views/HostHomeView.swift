@@ -8,8 +8,8 @@ enum HostHomeSection: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .sessions: "会话"
-        case .projects: "项目"
+        case .sessions: String(localized: "Sessions")
+        case .projects: String(localized: "Projects")
         }
     }
 }
@@ -51,7 +51,7 @@ struct HostHomeView: View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
                 if !directoryOnly {
-                    SeNavBar(title: "工作台", subtitle: "\(link.title) · \(link.originHost)", onBack: onClose)
+                    SeNavBar(title: String(localized: "Dashboard"), subtitle: "\(link.title) · \(link.originHost)", onBack: onClose)
                 }
 
                 hostHead
@@ -60,8 +60,8 @@ struct HostHomeView: View {
 
                 SeSegmented(
                     segments: [
-                        SeSegment(HostHomeSection.sessions.rawValue, "会话", count: conversations.count),
-                        SeSegment(HostHomeSection.projects.rawValue, "项目", count: projects.count)
+                        SeSegment(HostHomeSection.sessions.rawValue, String(localized: "Sessions"), count: conversations.count),
+                        SeSegment(HostHomeSection.projects.rawValue, String(localized: "Projects"), count: projects.count)
                     ],
                     selection: Binding(get: { section.rawValue }, set: { section = HostHomeSection(rawValue: $0) ?? .sessions }),
                     wide: true,
@@ -77,9 +77,9 @@ struct HostHomeView: View {
                 .padding(.top, 10)
 
                 if section == .sessions {
-                    SeGroupLabel(title: "会话", count: String(format: "%02d", filteredConversations.count))
+                    SeGroupLabel(title: String(localized: "Sessions"), count: String(format: "%02d", filteredConversations.count))
                     if filteredConversations.isEmpty {
-                        empty("这台主机还没有会话。")
+                        empty(String(localized: "This host has no sessions yet."))
                     } else {
                         VStack(spacing: 8) {
                             ForEach(filteredConversations) { conversation in
@@ -89,9 +89,9 @@ struct HostHomeView: View {
                         .padding(.horizontal, 18)
                     }
                 } else {
-                    SeGroupLabel(title: "项目", count: String(format: "%02d", projects.count))
+                    SeGroupLabel(title: String(localized: "Projects"), count: String(format: "%02d", projects.count))
                     if projects.isEmpty {
-                        empty("这台主机还没有项目。")
+                        empty(String(localized: "This host has no projects yet."))
                     } else {
                         VStack(spacing: 8) {
                             ForEach(projects) { project in
@@ -102,33 +102,29 @@ struct HostHomeView: View {
                     }
                 }
 
-                SeGroupLabel(title: "工具", count: "02")
+                SeGroupLabel(title: String(localized: "Tools"), count: "02")
                 HStack(spacing: 8) {
                     SeToolTile(
                         icon: .terminal,
-                        label: "终端",
-                        title: "打开终端",
-                        meta: "zsh · \(runningTerminals) 个连接"
+                        label: String(localized: "Terminal"),
+                        title: String(localized: "Open terminal"),
+                        meta: String(localized: "zsh · \(runningTerminals) connections")
                     ) {
                         Task { await session.spawnTerminal() }
                     }
                     SeToolTile(
                         icon: .folder,
-                        label: "文件",
-                        title: "浏览文件",
-                        meta: session.files.isLoading ? "读取中" : "只读"
+                        label: String(localized: "Files"),
+                        title: String(localized: "Browse files"),
+                        meta: session.files.isLoading ? String(localized: "Reading") : String(localized: "Read-only")
                     ) {
                         session.setWorkspaceTab(.files)
                     }
                 }
                 .padding(.horizontal, 18)
 
-                Text("会话与项目由主机提供。这里的列表只读，操作会回到对应的工作台。")
-                    .font(SeNocturneType.font(10))
-                    .foregroundStyle(palette.inkTertiary)
-                    .padding(.horizontal, 18)
-                    .padding(.top, 14)
-                    .padding(.bottom, 28)
+                Color.clear
+                    .frame(height: 28)
             }
         }
         .background(palette.canvas)
@@ -140,7 +136,9 @@ struct HostHomeView: View {
 
     private var hostHead: some View {
         VStack(alignment: .leading, spacing: 4) {
-            SeEyebrow(text: directoryOnly ? "主机" : "目录")
+            if directoryOnly {
+                SeEyebrow(text: String(localized: "Host"))
+            }
             Text(link.title)
                 .font(SeNocturneType.font(26, weight: .semibold))
                 .tracking(-0.8)
@@ -159,27 +157,27 @@ struct HostHomeView: View {
     private var hostMeta: String {
         let state: String
         switch session.phase {
-        case .connected: state = "在线"
-        case .connecting: state = "连接中"
-        case .idle: state = "未连接"
-        case .failed: state = "离线"
+        case .connected: state = String(localized: "Online")
+        case .connecting: state = String(localized: "Connecting")
+        case .idle: state = String(localized: "Not connected")
+        case .failed: state = String(localized: "Offline")
         }
-        return "\(state) · \(conversations.count) 个会话 · \(runningTerminals) 个终端"
+        return String(localized: "\(state) · \(conversations.count) sessions · \(runningTerminals) terminals")
     }
 
     private var chips: [SeChipItem] {
         if section == .sessions {
             return [
-                SeChipItem(id: HostDirectoryPresentation.all, title: "全部", count: conversations.count),
-                SeChipItem(id: HostDirectoryPresentation.ready, title: "就绪", dot: .live,
+                SeChipItem(id: HostDirectoryPresentation.all, title: String(localized: "All"), count: conversations.count),
+                SeChipItem(id: HostDirectoryPresentation.ready, title: String(localized: "Ready"), dot: .live,
                            count: HostDirectoryPresentation.readyCount(in: session.conversations.conversations)),
-                SeChipItem(id: HostDirectoryPresentation.ended, title: "已结束", dot: .off,
+                SeChipItem(id: HostDirectoryPresentation.ended, title: String(localized: "Ended"), dot: .off,
                            count: HostDirectoryPresentation.endedCount(in: session.conversations.conversations))
             ]
         }
         return [
-            SeChipItem(id: "all", title: "全部", count: projects.count),
-            SeChipItem(id: "ready", title: "运行中", dot: .live, count: projects.filter(\.isRunning).count)
+            SeChipItem(id: "all", title: String(localized: "All"), count: projects.count),
+            SeChipItem(id: "ready", title: String(localized: "Running"), dot: .live, count: projects.filter(\.isRunning).count)
         ]
     }
 
@@ -202,8 +200,8 @@ struct HostHomeView: View {
     private func projectRow(_ project: HostProject) -> some View {
         SeSessionRow(
             title: project.name,
-            meta: [project.path ?? "项目", project.isRunning ? "运行中" : "空闲"].joined(separator: " · "),
-            time: project.isRunning ? "\(project.liveTerminalCount) 个终端" : nil,
+            meta: [project.path ?? String(localized: "Project"), project.isRunning ? String(localized: "Running") : String(localized: "Idle")].joined(separator: " · "),
+            time: project.isRunning ? String(localized: "\(project.liveTerminalCount) terminals") : nil,
             status: project.isRunning ? .live : .idle,
             onTap: { open(project) }
         )
