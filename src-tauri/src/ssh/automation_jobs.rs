@@ -254,7 +254,7 @@ impl JobManager {
         self.authorize(&context, &profile.id, "job_start")?;
         let fingerprint = profile_fingerprint(&profile);
         let grant = context.authorize(&profile.id, "job_start")?;
-        if !grant.posix_jobs || grant.profile_fingerprint.as_deref() != Some(fingerprint.as_str()) {
+        if grant.profile_fingerprint.as_deref() != Some(fingerprint.as_str()) {
             return Err(AutomationError::new(
                 "profile_identity_changed",
                 "SSH profile identity needs host authorization",
@@ -362,9 +362,6 @@ impl JobManager {
                         .as_ref()
                         .ok_or_else(AutomationError::backend)?
                         .authorize_command(&profile, "job_start", &request.command)?;
-                    if !grant.posix_jobs {
-                        return Err(super::automation::posix_jobs_disabled());
-                    }
                     if grant.profile_fingerprint.as_deref()
                         != Some(worker_job.profile_fingerprint.as_str())
                         || worker_job.cancel.load(Ordering::Acquire)
@@ -537,13 +534,7 @@ impl JobManager {
         profile_id: &str,
         operation: &str,
     ) -> AutomationResult<()> {
-        let authorization = context.authorize(profile_id, operation).and_then(|grant| {
-            if grant.posix_jobs {
-                Ok(())
-            } else {
-                Err(AutomationError::denied())
-            }
-        });
+        let authorization = context.authorize(profile_id, operation).map(|_| ());
         if authorization.is_err() {
             // Revoked callers cannot access results, but their existing work is signalled.
             for job in lock(&self.jobs)
@@ -597,9 +588,7 @@ impl JobManager {
                     drop(job);
                     let granted = catch_unwind(AssertUnwindSafe(|| {
                         context.authorize(&profile_id, "job_start").map(|grant| {
-                            grant.posix_jobs
-                                && grant.profile_fingerprint.as_deref()
-                                    == Some(fingerprint.as_str())
+                            grant.profile_fingerprint.as_deref() == Some(fingerprint.as_str())
                         })
                     }))
                     .ok()
@@ -1777,9 +1766,15 @@ mod tests {
             "job_not_found"
         );
         assert!(recovered.status_at(&context, "other", &id, 0, 128).is_err());
-        lock(&policy.0).profiles.get_mut("p").unwrap().posix_jobs = false;
+        let granted = lock(&policy.0).profiles["p"].operations.clone();
+        lock(&policy.0)
+            .profiles
+            .get_mut("p")
+            .unwrap()
+            .operations
+            .clear();
         assert!(recovered.status_at(&context, "p", &id, 0, 128).is_err());
-        lock(&policy.0).profiles.get_mut("p").unwrap().posix_jobs = true;
+        lock(&policy.0).profiles.get_mut("p").unwrap().operations = granted;
         let terminal = JobManager::with_store(fixture.path()).unwrap();
         assert_eq!(
             terminal.status_at(&context, "p", &id, 0, 128).unwrap()["state"],
@@ -1913,7 +1908,12 @@ mod tests {
         let backend = fake(result(), true);
         let id = start(&manager, &context, backend.clone(), 100);
         until(|| backend.entered.load(Ordering::Acquire));
-        lock(&policy.0).profiles.get_mut("p").unwrap().posix_jobs = false;
+        lock(&policy.0)
+            .profiles
+            .get_mut("p")
+            .unwrap()
+            .operations
+            .clear();
         until(|| {
             lock(&manager.jobs)
                 .get(&id)
@@ -1955,7 +1955,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_posix_and_invalid_limits_before_launch() {
+    fn rejects_revoked_start_and_invalid_limits_before_launch() {
         let _serial = lock(&SERIAL);
         drained();
         let (manager, context, policy) = fixture();
@@ -1970,7 +1970,12 @@ mod tests {
                 )
                 .is_err());
         }
-        lock(&policy.0).profiles.get_mut("p").unwrap().posix_jobs = false;
+        lock(&policy.0)
+            .profiles
+            .get_mut("p")
+            .unwrap()
+            .operations
+            .remove("job_start");
         assert_eq!(
             manager
                 .start(

@@ -143,9 +143,6 @@ impl CallContext {
             .cloned()
             .ok_or_else(AutomationError::denied)?;
         check_profile_identity(profile, &grant)?;
-        if operation == "job_start" && !grant.posix_jobs {
-            return Err(posix_jobs_disabled());
-        }
         let result = snapshot.commands.check(&profile.id, command);
         let operation = if operation == "job_start" {
             "job_start"
@@ -453,9 +450,6 @@ impl SshAutomationService {
             check_profile_identity(&profile, &grant)?;
             if ["list_files", "read_file", "write_file", "upload", "download"].contains(&operation.as_str()) {
                 check_remote_path(required_string(&args,"remotePath",4096)?, &grant.remote_roots)?;
-                if ["upload", "download"].contains(&operation.as_str()) && grant.local_roots.is_empty() {
-                    return Err(no_local_roots());
-                }
             }
             if ["execute", "job_start"].contains(&operation.as_str()) {
                 context.authorize_command(&profile, &operation, required_string(&args, "command", 32 * 1024)?)?;
@@ -528,27 +522,15 @@ fn profile_metadata(profile: &SSHProfile, grant: &ProfileGrant) -> Value {
         "port": profile.port, "username": profile.username, "authMethod": profile.auth_method,
         "tags": profile.tags, "lastConnected": profile.last_connected,
         "credentialConfigured": profile.auth_method == "agent" || profile.has_stored_password || profile.has_stored_passphrase || profile.private_key_path.is_some(),
-        "operations": operations, "posixJobs": grant.posix_jobs,
-        // Grant scope, not credentials: callers need it to choose paths that will pass.
+        "operations": operations,
+        // Optional path restrictions; empty means any absolute path is allowed.
         "remoteRoots": grant.remote_roots, "localRoots": grant.local_roots,
     })
 }
-pub(crate) fn posix_jobs_disabled() -> AutomationError {
+pub(crate) fn outside_remote_roots() -> AutomationError {
     AutomationError::denied_because(
-        "POSIX jobs are disabled for this profile; the Se host owner must enable 'Allow POSIX jobs' in Settings > MCP > Host access",
+        "remotePath is outside the profile's remote root restriction (see profile_get remoteRoots)",
     )
-}
-pub(crate) fn no_local_roots() -> AutomationError {
-    AutomationError::denied_because(
-        "No Se host local roots are configured for this profile; upload/download stay denied until the host owner adds one in Settings > MCP > Host access",
-    )
-}
-pub(crate) fn outside_remote_roots(roots: &[String]) -> AutomationError {
-    AutomationError::denied_because(if roots.is_empty() {
-        "No remote roots are configured for this profile; remote file operations stay denied until the host owner adds one in Settings > MCP > Host access"
-    } else {
-        "remotePath is outside the authorized remote roots (see profile_get remoteRoots)"
-    })
 }
 
 pub(crate) fn required_string<'a>(
@@ -599,6 +581,10 @@ pub(crate) fn check_remote_path(path: &str, roots: &[String]) -> AutomationResul
             "remotePath must be an absolute normalized path without '.', '..' or '//'",
         ));
     }
+    // Granting the operation is the permission; roots only narrow it when configured.
+    if roots.is_empty() {
+        return Ok(());
+    }
     if roots.iter().any(|root| {
         safe(root)
             && (root == "/"
@@ -610,7 +596,7 @@ pub(crate) fn check_remote_path(path: &str, roots: &[String]) -> AutomationResul
     }) {
         Ok(())
     } else {
-        Err(outside_remote_roots(roots))
+        Err(outside_remote_roots())
     }
 }
 

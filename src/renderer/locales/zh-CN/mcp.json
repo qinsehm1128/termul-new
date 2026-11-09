@@ -340,11 +340,11 @@
     "configureProfile": "配置 {{name}}",
     "notGranted": "未授权",
     "identityChangedShort": "身份已变更",
-    "grantToConfigure": "勾选授权将默认选中全部 13 项操作（含高风险操作），之后可设为仅只读或逐项调整，保存后才生效。",
+    "grantToConfigure": "勾选授权会默认选中全部 13 项操作，勾选的操作对任意路径都可用；之后可设为仅只读或逐项调整，保存后生效。",
     "selectReadOnly": "设为仅只读",
     "selectAllPermissions": "全选全部权限…",
     "clearPermissions": "清空权限",
-    "confirmAllWarning": "全部 13 项包含执行任意远端命令、文件写入、传输与取消任务。仅应用于当前连接，访问根目录和 POSIX 任务许可仍须单独设置。",
+    "confirmAllWarning": "全部 13 项包含执行任意远端命令、文件写入、传输与取消任务，且不限路径。仅应用于当前连接。",
     "confirmAllPermissions": "确认授予全部权限",
     "cancelSelection": "取消选择",
     "readPermissions": "读取与查询",
@@ -361,12 +361,10 @@
     "workspaceEnabled": "允许工作区查询",
     "allProjects": "全部项目（含未来新增项目）",
     "includePaths": "暴露项目目录路径",
-    "executeWarning": "授权连接默认选中全部操作。执行命令和启动任务可运行任意远端命令，不受路径根目录约束；可设为仅只读或取消高风险操作来缩小权限，保存后才生效。",
-    "localWarning": "本地根目录指 Se 宿主文件系统，不是当前浏览器。空根目录不授予文件访问权限；根目录不能约束任意命令。",
+    "executeWarning": "授权连接默认选中全部操作。勾选即开放，无需再配置根目录或任务开关。可设为仅只读或取消高风险操作来缩小权限，保存后生效。",
     "grantProfile": "授权全部操作",
     "remoteRoots": "远端根目录（每行一个绝对路径）",
     "localRoots": "Se 宿主本地根目录（每行一个绝对路径）",
-    "posixJobs": "允许 POSIX 任务（需要兼容 POSIX shell；取消操作不保证确认远端进程终止）",
     "fingerprintChanged": "此配置的身份已改变。请核对当前目标并单独重新授权，再保存启用策略。",
     "reauthorizeIdentity": "明确授权当前目标身份",
     "highRisk": "高风险",
@@ -402,12 +400,9 @@
       "job_list": "列出任务",
       "job_cancel": "取消任务"
     },
-    "incompleteShort": "缺 {{count}} 项设置",
-    "scopeTitle": "访问范围（文件操作与任务必填）",
-    "gaps": {
-      "remoteRoots": "已授权文件操作（列出/读取/写入/上传/下载），但未填写远端根目录，所有远端路径都会被拒绝。请填写绝对目录，例如 /srv/app。",
-      "localRoots": "已授权上传/下载，但未填写 Se 宿主本地根目录，传输会被拒绝。请填写 Se 宿主上的目录。",
-      "posixJobs": "已授权启动任务，但未开启 POSIX 任务，job_start 会被拒绝。请勾选下方“允许 POSIX 任务”。"
-    }
+    "pathLimitTitle": "路径限制（可选，默认不限制）",
+    "pathLimitActive": "已限制",
+    "pathLimitHint": "留空表示不限路径。填写后，文件操作和传输只能在这些目录内进行。本地根目录指 Se 宿主文件系统，不是当前浏览器。根目录不约束命令执行。",
+    "unrestricted": "留空 = 不限制"
   }
 }

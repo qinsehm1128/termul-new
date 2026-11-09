@@ -415,7 +415,8 @@ fn operation_grant_and_identity_take_precedence_over_matches() {
         .profiles
         .get_mut("p")
         .unwrap()
-        .posix_jobs = false;
+        .operations
+        .remove("job_start");
     assert_eq!(
         ctx.authorize_command(&profile(), "job_start", "danger")
             .unwrap_err()

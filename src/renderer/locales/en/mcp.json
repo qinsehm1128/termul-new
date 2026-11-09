@@ -340,11 +340,11 @@
     "configureProfile": "Configure {{name}}",
     "notGranted": "Not authorized",
     "identityChangedShort": "Identity changed",
-    "grantToConfigure": "Authorizing selects all 13 operations, including high-risk actions. You can then switch to read-only or adjust individual permissions. Changes take effect after saving.",
+    "grantToConfigure": "Granting selects all 13 operations. Checked operations work on any path; you can switch to read-only or adjust individually. Changes apply after saving.",
     "selectReadOnly": "Read-only preset",
     "selectAllPermissions": "Select all permissions…",
     "clearPermissions": "Clear permissions",
-    "confirmAllWarning": "All 13 permissions include arbitrary remote commands, file writes, transfers and job cancellation. This applies only to this connection; roots and POSIX job consent remain separate.",
+    "confirmAllWarning": "All 13 operations include running any remote command, writing files, transfers and cancelling jobs, on any path. Applies to this connection only.",
     "confirmAllPermissions": "Confirm all permissions",
     "cancelSelection": "Cancel selection",
     "readPermissions": "Read and query",
@@ -361,12 +361,10 @@
     "workspaceEnabled": "Allow workspace queries",
     "allProjects": "All projects (including future projects)",
     "includePaths": "Expose project directory paths",
-    "executeWarning": "Authorizing a connection selects all operations by default. Execute and job start can run arbitrary remote commands, NOT confined by path roots. Switch to read-only or uncheck high-risk operations to restrict access. Changes take effect after saving.",
-    "localWarning": "Local roots refer to the Se host filesystem, not this browser. Empty roots grant no file access. Roots do not constrain arbitrary commands.",
+    "executeWarning": "Granting a connection selects every operation. Checked means allowed: no extra root or job switch is needed. Use read-only or uncheck high-risk operations to narrow it; changes apply after saving.",
     "grantProfile": "Authorize all operations",
     "remoteRoots": "Remote roots (one absolute path per line)",
     "localRoots": "Se host local roots (one absolute path per line)",
-    "posixJobs": "Allow POSIX jobs (requires a compatible POSIX shell; cancellation may not confirm remote termination)",
     "fingerprintChanged": "This profile changed. Review the current target and explicitly reauthorize it before saving an enabled policy.",
     "reauthorizeIdentity": "Authorize this current target identity",
     "highRisk": "High risk",
@@ -402,12 +400,9 @@
       "job_list": "List jobs",
       "job_cancel": "Cancel jobs"
     },
-    "incompleteShort": "{{count}} setting(s) missing",
-    "scopeTitle": "Access scope (required for file operations and jobs)",
-    "gaps": {
-      "remoteRoots": "File operations (list/read/write/upload/download) are granted but no remote root is set, so every remote path is denied. Add an absolute directory such as /srv/app.",
-      "localRoots": "Upload/download are granted but no Se host local root is set, so transfers are denied. Add a directory on the Se host.",
-      "posixJobs": "Start job is granted but POSIX jobs are off, so job_start is denied. Enable \"Allow POSIX jobs\" below."
-    }
+    "pathLimitTitle": "Path restriction (optional, unrestricted by default)",
+    "pathLimitActive": "Restricted",
+    "pathLimitHint": "Leave empty to allow any path. When filled, file operations and transfers only work inside these directories. Local roots refer to the Se host filesystem, not this browser. Roots do not constrain commands.",
+    "unrestricted": "Empty = unrestricted"
   }
 }

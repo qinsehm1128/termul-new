@@ -191,7 +191,6 @@ describe('compact host access controls', () => {
     await ready(false)
     fireEvent.click(check(en.hostAccess.grantProfile))
     for (const op of MCP_SSH_OPERATIONS) expect(check(operationLabel(op))).toBeChecked()
-    expect(check(en.hostAccess.posixJobs)).not.toBeChecked()
     expect(check(en.hostAccess.enabled)).not.toBeChecked()
     expect(button('test')).toBeDisabled()
     expect(put).not.toHaveBeenCalled()
@@ -325,7 +324,6 @@ describe('compact host access controls', () => {
     fireEvent.click(button('selectAllPermissions'))
     fireEvent.click(button('confirmAllPermissions'))
     for (const op of MCP_SSH_OPERATIONS) expect(check(operationLabel(op))).toBeChecked()
-    expect(check(en.hostAccess.posixJobs)).not.toBeChecked()
     fireEvent.click(button('save'))
     await waitFor(() => expect(put).toHaveBeenCalledOnce())
     expect(put.mock.calls[0][1].ssh.profiles.p).toEqual({
@@ -403,25 +401,22 @@ describe('host access management', () => {
     expect(container.querySelector('input[type=password]')).toBeNull()
     expect(call).not.toHaveBeenCalled()
   })
-  it('warns when granted file operations or jobs would be denied by empty roots or POSIX off', async () => {
+  it('treats checked operations as the whole grant: no roots or job switch are required', async () => {
     render(<McpHostAccessPanel />)
     await ready()
+    fireEvent.click(check(en.hostAccess.enabled))
     fireEvent.click(check(en.hostAccess.grantProfile))
-    expect(screen.getByText(en.hostAccess.gaps.remoteRoots)).toBeInTheDocument()
-    expect(screen.getByText(en.hostAccess.gaps.localRoots)).toBeInTheDocument()
-    expect(screen.getByText(en.hostAccess.gaps.posixJobs)).toBeInTheDocument()
-    fireEvent.change(screen.getByRole('textbox', { name: en.hostAccess.remoteRoots }), {
-      target: { value: '/srv' }
-    })
-    fireEvent.change(screen.getByRole('textbox', { name: en.hostAccess.localRoots }), {
-      target: { value: '/host-data' }
-    })
-    fireEvent.click(check(en.hostAccess.posixJobs))
-    expect(screen.queryByText(en.hostAccess.gaps.remoteRoots)).toBeNull()
-    expect(screen.queryByText(en.hostAccess.gaps.localRoots)).toBeNull()
-    expect(screen.queryByText(en.hostAccess.gaps.posixJobs)).toBeNull()
+    expect(screen.queryByRole('checkbox', { name: /POSIX/ })).toBeNull()
+    expect(screen.getByText(en.hostAccess.pathLimitTitle)).toBeInTheDocument()
+    expect(screen.queryByText(en.hostAccess.pathLimitActive)).toBeNull()
+    fireEvent.click(button('save'))
+    await waitFor(() => expect(put).toHaveBeenCalledOnce())
+    const saved = put.mock.calls[0][1].ssh.profiles.p
+    expect(saved.operations).toHaveLength(MCP_SSH_OPERATIONS.length)
+    expect(saved.remoteRoots).toEqual([])
+    expect(saved.localRoots).toEqual([])
   })
-  it('saves selected project IDs, individual SSH grants, roots, POSIX acknowledgement and fingerprints', async () => {
+  it('saves selected project IDs, individual SSH grants, optional roots and fingerprints', async () => {
     render(<McpHostAccessPanel />)
     await ready()
     fireEvent.click(check(en.hostAccess.enabled))
@@ -432,10 +427,8 @@ describe('host access management', () => {
     for (const op of MCP_SSH_OPERATIONS) expect(check(operationLabel(op))).toBeChecked()
     fireEvent.click(button('clearPermissions'))
     for (const op of MCP_SSH_OPERATIONS) expect(check(operationLabel(op))).not.toBeChecked()
-    expect(screen.getByText(en.hostAccess.localWarning)).toBeInTheDocument()
     fireEvent.click(check(operationLabel('execute')))
     fireEvent.click(check(`${en.hostAccess.operations.upload} — ${en.hostAccess.highRisk}`))
-    fireEvent.click(check(en.hostAccess.posixJobs))
     fireEvent.change(screen.getByRole('textbox', { name: en.hostAccess.remoteRoots }), {
       target: { value: '/srv\n/opt' }
     })
@@ -459,7 +452,7 @@ describe('host access management', () => {
               operations: ['execute', 'upload'],
               remoteRoots: ['/srv', '/opt'],
               localRoots: ['/host-data'],
-              posixJobs: true
+              posixJobs: false
             }
           }
         },

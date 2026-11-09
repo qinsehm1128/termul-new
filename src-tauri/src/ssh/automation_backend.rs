@@ -657,7 +657,8 @@ fn remote_path(
     };
     remote_no_links(sftp, check)?;
     let canonical = sftp.realpath(check).map_err(transport)?;
-    let mut allowed = false;
+    // Empty roots mean the granted operation is unrestricted by path.
+    let mut allowed = grant.remote_roots.is_empty();
     for root in &grant.remote_roots {
         let root = Path::new(root);
         lexical_path(root)?;
@@ -671,7 +672,7 @@ fn remote_path(
         allowed |= canonical.starts_with(root);
     }
     if !allowed {
-        return Err(super::automation::outside_remote_roots(&grant.remote_roots));
+        return Err(super::automation::outside_remote_roots());
     }
     if create {
         let result = canonical.join(
@@ -714,7 +715,7 @@ fn local_path(value: &str, grant: &ProfileGrant, create: bool) -> AutomationResu
     local_no_links(check)?;
     let canonical = fs::canonicalize(check)
         .map_err(|_| error("local_io_error", "Local path could not be resolved"))?;
-    let mut allowed = false;
+    let mut allowed = grant.local_roots.is_empty();
     for root in &grant.local_roots {
         lexical_path(root)?;
         local_no_links(root)?;
@@ -728,13 +729,9 @@ fn local_path(value: &str, grant: &ProfileGrant, create: bool) -> AutomationResu
         allowed |= canonical.starts_with(root);
     }
     if !allowed {
-        return Err(if grant.local_roots.is_empty() {
-            super::automation::no_local_roots()
-        } else {
-            AutomationError::denied_because(
-                "localPath is outside the authorized Se host local roots (see profile_get localRoots)",
-            )
-        });
+        return Err(AutomationError::denied_because(
+            "localPath is outside the profile's Se host local root restriction (see profile_get localRoots)",
+        ));
     }
     if create {
         Ok(canonical.join(

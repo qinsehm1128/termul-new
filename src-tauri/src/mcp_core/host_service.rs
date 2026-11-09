@@ -128,8 +128,6 @@ impl HostCapabilityService {
                 != profile.map(profile_fingerprint).as_ref()
         {
             Some("profile_identity_changed")
-        } else if request.operation == "job_start" && !grant.is_some_and(|g| g.posix_jobs) {
-            Some("permission_denied")
         } else {
             None
         };

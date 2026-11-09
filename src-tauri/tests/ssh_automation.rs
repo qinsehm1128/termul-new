@@ -176,10 +176,11 @@ impl AutomationBackend for FakeBackend {
             let local = args["localPath"]
                 .as_str()
                 .ok_or_else(AutomationError::denied)?;
-            if !grant
-                .local_roots
-                .iter()
-                .any(|r| local.starts_with(&format!("{}/", r.display())))
+            if !grant.local_roots.is_empty()
+                && !grant
+                    .local_roots
+                    .iter()
+                    .any(|r| local.starts_with(&format!("{}/", r.display())))
             {
                 return Err(AutomationError::denied());
             }
@@ -332,11 +333,8 @@ async fn deny_by_default_and_args_cannot_grant_permissions() {
 
 #[tokio::test]
 async fn denied_path_roots_do_not_resolve_credentials() {
+    // Configured roots still narrow access: a path outside them never reaches credentials.
     let (service, grants, backend, resolves) = fixture();
-    let mut grant = all_grant();
-    grant.remote_roots.clear();
-    grant.local_roots.clear();
-    allow(&grants, "alice", grant);
     for op in [
         "read_file",
         "write_file",
@@ -344,24 +342,56 @@ async fn denied_path_roots_do_not_resolve_credentials() {
         "upload",
         "download",
     ] {
-        let mut args = json!({"profileId":"p","remotePath":"/allowed/file"});
+        let mut args = json!({"profileId":"p","remotePath":"/elsewhere/file"});
         if op == "write_file" {
             args["content"] = json!("test");
         }
         if op == "upload" || op == "download" {
             args["localPath"] = json!("/authorized-local/file");
         }
-        assert_eq!(
-            service
-                .call(op, args, ctx("alice", &grants))
-                .await
-                .unwrap_err()
-                .code,
-            "permission_denied"
-        );
+        let err = service
+            .call(op, args, ctx("alice", &grants))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, "permission_denied");
+        assert!(!err.message.contains("/elsewhere"));
     }
     assert_eq!(resolves.load(Ordering::SeqCst), 0);
     assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn granted_operations_without_roots_are_unrestricted_by_path() {
+    // Granting the operation is the permission; empty roots add no hidden deny.
+    let (service, grants, backend, _) = fixture();
+    let mut grant = all_grant();
+    grant.remote_roots.clear();
+    grant.local_roots.clear();
+    grant.posix_jobs = false;
+    allow(&grants, "alice", grant);
+    for op in [
+        "write_file",
+        "read_file",
+        "list_files",
+        "upload",
+        "download",
+    ] {
+        let mut args = json!({"profileId":"p","remotePath":"/www/site/file"});
+        if op == "list_files" {
+            args["remotePath"] = json!("/www/site");
+        }
+        if op == "write_file" {
+            args["content"] = json!("test");
+        }
+        if op == "upload" || op == "download" {
+            args["localPath"] = json!("/Users/me/build/file");
+        }
+        service
+            .call(op, args, ctx("alice", &grants))
+            .await
+            .unwrap_or_else(|e| panic!("{op} denied: {}", e.message));
+    }
+    assert!(backend.calls.load(Ordering::SeqCst) >= 5);
 }
 
 #[tokio::test]
@@ -964,19 +994,23 @@ async fn revocation_during_credential_resolution_prevents_backend_call() {
 }
 
 #[tokio::test]
-async fn jobs_require_explicit_posix_opt_in() {
+async fn jobs_require_the_job_start_operation_grant() {
     let (service, grants, backend, _) = fixture();
     let mut grant = all_grant();
-    grant.posix_jobs = false;
+    grant.operations.remove("job_start");
     allow(&grants, "alice", grant);
-    assert!(service
-        .call(
-            "job_start",
-            json!({"profileId":"p","command":"ok"}),
-            ctx("alice", &grants)
-        )
-        .await
-        .is_err());
+    assert_eq!(
+        service
+            .call(
+                "job_start",
+                json!({"profileId":"p","command":"ok"}),
+                ctx("alice", &grants)
+            )
+            .await
+            .unwrap_err()
+            .code,
+        "permission_denied"
+    );
     assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
 }
 
