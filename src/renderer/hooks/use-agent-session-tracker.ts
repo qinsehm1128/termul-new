@@ -80,11 +80,19 @@ export function useAgentSessionTracker(): void {
           running = false
         })
     }
-    // The singleton owns the only timer: discovery runs on its visible,
-    // disconnected fallback path, never on a second always-running interval.
-    const unsubscribe = agentHooksApi.subscribeState((response) => {
-      if (!disposed) applyAgentHookStateSync(response)
-    }, discover)
+    const needsLegacyDiscovery = () =>
+      useTerminalStore
+        .getState()
+        .terminals.some((terminal) => terminal.ptyId && terminal.agentSession?.source !== 'hook')
+    // The singleton owns the only timer: disconnected recovery or, while push
+    // is healthy, a 15s legacy fallback only for terminals without hook identity.
+    const unsubscribe = agentHooksApi.subscribeState(
+      (response) => {
+        if (!disposed) applyAgentHookStateSync(response)
+      },
+      discover,
+      needsLegacyDiscovery
+    )
     const unsubscribeTerminals = useTerminalStore.subscribe((store, previous) => {
       const attachmentsChanged =
         store.terminals.length !== previous.terminals.length ||
@@ -96,12 +104,23 @@ export function useAgentSessionTracker(): void {
             terminal.projectId !== old.projectId
           )
         })
-      if (disposed || !attachmentsChanged) return
-      reconcileAgentHookIdentities()
-      discover()
+      if (disposed) return
+      if (attachmentsChanged) {
+        reconcileAgentHookIdentities()
+        discover()
+      }
+      if (
+        attachmentsChanged ||
+        store.terminals.some(
+          (terminal, index) =>
+            terminal.agentSession?.source !== previous.terminals[index]?.agentSession?.source
+        )
+      )
+        unsubscribe.refreshFallback?.()
     })
     reconcileAgentHookIdentities()
     discover()
+    unsubscribe.refreshFallback?.()
     return () => {
       disposed = true
       unsubscribeTerminals()

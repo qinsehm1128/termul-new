@@ -325,6 +325,42 @@ describe('singleton revision reconciliation', () => {
     expect(discover).toHaveBeenCalledTimes(2)
   })
 
+  it('keeps one 15s healthy-push timer only for legacy candidates and stops when hooks cover them', async () => {
+    const h = harness()
+    let needsDiscovery = false
+    const discover = vi.fn()
+    const stop = h.subscribe(vi.fn(), discover, () => needsDiscovery)
+    cleanups.push(stop)
+    await flush()
+    h.connection(true)
+    await flush()
+    const reconciles = h.state.mock.calls.length
+    expect(vi.getTimerCount()).toBe(0)
+    // A terminal may be attached after the initial state snapshot.
+    needsDiscovery = true
+    stop.refreshFallback?.()
+    expect(vi.getTimerCount()).toBe(1)
+    await vi.advanceTimersByTimeAsync(14_999)
+    expect(discover).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(discover).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(discover).toHaveBeenCalledTimes(2)
+    expect(h.state).toHaveBeenCalledTimes(reconciles)
+    // A new hook identity immediately removes the discovery timer.
+    needsDiscovery = false
+    h.push({ ...snapshot(), current_revision: 2 })
+    expect(vi.getTimerCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(discover).toHaveBeenCalledTimes(2)
+    // Removing the candidate subscriber must also tear down its sole timer.
+    needsDiscovery = true
+    stop.refreshFallback?.()
+    expect(vi.getTimerCount()).toBe(1)
+    stop()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('backs off exactly 1/2/4/8/16/30 seconds and caps at 30', async () => {
     const h = harness()
     await flush()

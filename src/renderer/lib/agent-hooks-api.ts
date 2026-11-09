@@ -90,7 +90,7 @@ function warn(message: string) {
 /** One shared revision cursor, push subscription, in-flight request and fallback timer. */
 export function createHookStateSubscription(transport: HookStateTransport) {
   const listeners = new Set<HookStateListener>()
-  const fallbackListeners = new Set<() => void>()
+  const fallbackListeners = new Map<() => void, (() => boolean) | undefined>()
   const states = new Map<string, HookStateDto>()
   let cursor: HookStateSyncRequest = {}
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -128,16 +128,37 @@ export function createHookStateSubscription(transport: HookStateTransport) {
         warn('[AgentHooks] state subscriber failed')
       }
     }
+    refreshFallback()
   }
 
+  const needsLegacyDiscovery = () => [...fallbackListeners.values()].some((needed) => needed?.())
+  function runFallbacks() {
+    if (!active() || !visible()) return
+    for (const [listener, needed] of fallbackListeners) {
+      if (needed ? !needed() : connected) continue
+      try {
+        listener()
+      } catch {
+        /* discovery cannot disrupt state transport */
+      }
+    }
+  }
+  function refreshFallback() {
+    if (!visible() || (connected && !needsLegacyDiscovery())) clearTimer()
+    else schedule()
+  }
   function schedule() {
-    if (!active() || connected || !visible() || inFlight || timer !== undefined) return
+    if (!active() || !visible() || inFlight || timer !== undefined) return
+    if (connected && !needsLegacyDiscovery()) return
     timer = setTimeout(
       () => {
         timer = undefined
-        void reconcile()
+        if (connected) {
+          runFallbacks()
+          schedule()
+        } else void reconcile()
       },
-      RECONCILE_DELAYS[Math.min(retry++, RECONCILE_DELAYS.length - 1)]
+      connected ? 15_000 : RECONCILE_DELAYS[Math.min(retry++, RECONCILE_DELAYS.length - 1)]
     )
   }
 
@@ -168,15 +189,7 @@ export function createHookStateSubscription(transport: HookStateTransport) {
       queuedPush = null
       if (currentEpoch === epoch && active()) {
         for (const response of pending ?? []) receivePush(response)
-        if (!connected && visible()) {
-          for (const listener of fallbackListeners) {
-            try {
-              listener()
-            } catch {
-              /* discovery cannot disrupt state transport */
-            }
-          }
-        }
+        if (!connected) runFallbacks()
       }
       if (resync && active()) {
         resync = false
@@ -245,8 +258,12 @@ export function createHookStateSubscription(transport: HookStateTransport) {
     void reconcile()
   }
 
-  return (listener: HookStateListener, onFallback?: () => void): (() => void) => {
-    if (onFallback) fallbackListeners.add(onFallback)
+  return (
+    listener: HookStateListener,
+    onFallback?: () => void,
+    needsDiscovery?: () => boolean
+  ): (() => void) & { refreshFallback?: () => void } => {
+    if (onFallback) fallbackListeners.set(onFallback, needsDiscovery)
     listeners.add(listener)
     if (listeners.size === 1) start()
     else if (cursor.instance_id != null)
@@ -258,7 +275,7 @@ export function createHookStateSubscription(transport: HookStateTransport) {
         tombstones: []
       })
     let disposed = false
-    return () => {
+    const stop = () => {
       if (disposed) return
       disposed = true
       listeners.delete(listener)
@@ -273,8 +290,14 @@ export function createHookStateSubscription(transport: HookStateTransport) {
         cursor = {}
         states.clear()
         resync = false
-      }
+      } else refreshFallback()
     }
+    refreshFallback()
+    return Object.assign(stop, {
+      refreshFallback: () => {
+        if (!disposed) refreshFallback()
+      }
+    })
   }
 }
 

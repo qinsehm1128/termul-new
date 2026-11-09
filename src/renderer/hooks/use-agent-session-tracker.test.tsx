@@ -211,9 +211,11 @@ describe('subscription-fed runtime and identity tracker', () => {
       await Promise.resolve()
     })
     expect(mocks.subscribe).toHaveBeenCalledTimes(1)
+    expect(mocks.subscribe.mock.calls[0][2]()).toBe(true)
     expect(vi.getTimerCount()).toBe(0)
     const receive = mocks.subscribe.mock.calls[0][0] as (response: HookStateSyncResponse) => void
     act(() => receive(sync()))
+    expect(mocks.subscribe.mock.calls[0][2]()).toBe(false)
     expect(getAgentHookRuntimeState('host-pty')?.state).toBe('busy')
     await act(async () => {
       vi.advanceTimersByTime(15_000)
