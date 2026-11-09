@@ -41,24 +41,44 @@ struct HostHTTP: Sendable {
         return try unwrap(result)
     }
 
+    /// The health probe gates the whole workspace, so an origin that no longer
+    /// answers must reach the one-tap rescan state within seconds instead of
+    /// hanging on a dead address. Attempts share one budget: a refused connection
+    /// is retried only if it can still settle differently inside it.
+    private static let probeAttemptLimit = 3
+    private static let probeAttemptTimeout: TimeInterval = 5
+    private static let probeBudget: Duration = .seconds(7)
+
     func probeHealth() async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: Self.probeBudget)
         var lastError: Error?
-        for attempt in 0 ..< 5 {
+        for attempt in 0 ..< Self.probeAttemptLimit {
+            let remaining = clock.now.duration(to: deadline)
+            guard remaining > .zero else { break }
             do {
-                try await probeHealthOnce()
+                try await probeHealthOnce(timeout: min(Self.probeAttemptTimeout, Self.seconds(remaining)))
                 return
             } catch {
                 lastError = error
-                if attempt < 4 {
-                    try await Task.sleep(for: .milliseconds(400 * (1 << attempt)))
+                guard PairingRecovery.isWorthRetrying(error) else { break }
+                if attempt < Self.probeAttemptLimit - 1 {
+                    try await Task.sleep(for: .milliseconds(250))
                 }
             }
         }
         throw lastError ?? HostError.network(String(localized: "The phone could not reach the host."))
     }
 
-    private func probeHealthOnce() async throws {
-        var request = URLRequest(url: origin.appendingPathComponent("health"), timeoutInterval: 12)
+    private static func seconds(_ duration: Duration) -> TimeInterval {
+        let parts = duration.components
+        return TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18
+    }
+
+    private func probeHealthOnce(timeout: TimeInterval) async throws {
+        // A sub-second floor keeps a nearly exhausted budget from turning the
+        // request into an instant timeout that never leaves the device.
+        var request = URLRequest(url: origin.appendingPathComponent("health"), timeoutInterval: max(0.5, timeout))
         request.httpMethod = "GET"
         request.assumesHTTP3Capable = false
         credentials.apply(to: &request)

@@ -168,7 +168,9 @@ final class WorkspaceSession {
         } catch {
             guard startEpoch == epoch, !Task.isCancelled else { return }
             HostLog.session.error("Host connect failed after restart-safe retries")
-            needsRePairing = PairingRecovery.needsRePairing(error)
+            // The origin is the classifier's evidence: a timeout on a private
+            // LAN address means the host moved, not that the Mac is slow.
+            needsRePairing = PairingRecovery.needsRePairing(error, origin: origin)
             phase = .failed(error.localizedDescription)
         }
     }

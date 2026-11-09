@@ -36,6 +36,35 @@ struct PairingRecoveryTests {
         #expect(!PairingRecovery.needsRePairing(URLError(code)))
     }
 
+    @Test("A LAN address that stops answering asks for a new scan")
+    func lanTimeout() throws {
+        let lan = try #require(URL(string: "http://192.168.100.71:53231"))
+        // The host moved to another lease/Wi-Fi: retrying the dead address can
+        // never succeed, and only a scan carries the new one.
+        #expect(PairingRecovery.needsRePairing(URLError(.timedOut), origin: lan))
+    }
+
+    @Test("A slow tunnel stays retryable")
+    func tunnelTimeout() throws {
+        let tunnel = try #require(URL(string: "https://abc.trycloudflare.com"))
+        // Same timeout, different meaning: the hostname is still right.
+        #expect(!PairingRecovery.needsRePairing(URLError(.timedOut), origin: tunnel))
+    }
+
+    @Test("Settled failures inside the connect budget are not retried")
+    func retryPolicy() {
+        // A refused connection or an unknown host is the answer, not a hiccup.
+        #expect(!PairingRecovery.isWorthRetrying(URLError(.cannotConnectToHost)))
+        #expect(!PairingRecovery.isWorthRetrying(URLError(.cannotFindHost)))
+        #expect(!PairingRecovery.isWorthRetrying(URLError(.dnsLookupFailed)))
+        #expect(!PairingRecovery.isWorthRetrying(HostError.rePairingRequired("rotate")))
+        #expect(!PairingRecovery.isWorthRetrying(CancellationError()))
+        // A stalled or dropped request can still settle.
+        #expect(PairingRecovery.isWorthRetrying(URLError(.timedOut)))
+        #expect(PairingRecovery.isWorthRetrying(URLError(.networkConnectionLost)))
+        #expect(PairingRecovery.isWorthRetrying(HostError.network("tunnel 502")))
+    }
+
     @Test("Host-side failures that carry a message are not pairing problems")
     func hostFailures() {
         #expect(!PairingRecovery.needsRePairing(HostError.network("boom")))
