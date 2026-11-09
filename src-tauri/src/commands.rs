@@ -4729,8 +4729,15 @@ pub async fn remote_server_start(
         Ok(config) => config,
         Err(e) => return Ok(IpcResult::error(e, "TUNNEL_CONFIG_READ_FAILED")),
     };
-    if let Err(e) = tunnel_config.validate_for_start() {
-        return Ok(IpcResult::error(e, "TUNNEL_CONFIG_INVALID"));
+    let start_tunnel = match tunnel_start_plan(publish_mode, &tunnel_config) {
+        Ok(start) => start,
+        Err(e) => return Ok(IpcResult::error(e, "TUNNEL_CONFIG_INVALID")),
+    };
+    if !start_tunnel {
+        log::warn!(
+            target: "se_manager::remote::host",
+            "operation=tunnel_skip lifecycle_phase=start publish_mode=lan stable_code=TUNNEL_CONFIG_INVALID"
+        );
     }
     let acp_host =
         match crate::core::resolve_acp_web_host(acp_manager.inner(), ws_relay.inner().clone()) {
@@ -4750,7 +4757,10 @@ pub async fn remote_server_start(
     let host_capabilities = app
         .try_state::<Arc<crate::mcp_core::host_service::HostCapabilityService>>()
         .map(|state| state.inner().clone());
-    let started = if let Some(bind_port) = tunnel_config.preferred_bind_port() {
+    let started = if let Some(bind_port) = tunnel_config
+        .preferred_bind_port()
+        .filter(|_| start_tunnel)
+    {
         remote_state
             .start_on_port(
                 acp_host.clone(),
@@ -4802,6 +4812,9 @@ pub async fn remote_server_start(
                     ))
                 }
             };
+            if !start_tunnel {
+                return Ok(IpcResult::success(remote_state.status()));
+            }
             match remote::tunnel::start_configured_tunnel(port, &tunnel_config, tunnel_store).await
             {
                 Ok(tunnel) => {
@@ -4837,6 +4850,57 @@ pub async fn remote_server_start(
             }
         }
         Err(e) => Ok(IpcResult::error(e, "REMOTE_START_FAILED")),
+    }
+}
+
+/// Decide whether a remote start also starts the configured tunnel.
+///
+/// Tunnel mode needs a valid tunnel, so an invalid config is an error. LAN
+/// mode only adds the tunnel as an extra public URL: an incomplete tunnel
+/// setup (for example an SSH provider with no host yet) must not block
+/// LAN access, so the tunnel is skipped instead.
+fn tunnel_start_plan(
+    publish_mode: remote::PublishMode,
+    config: &remote::tunnel::TunnelConfig,
+) -> Result<bool, String> {
+    match (config.validate_for_start(), publish_mode) {
+        (Ok(()), _) => Ok(true),
+        (Err(_), remote::PublishMode::Lan) => Ok(false),
+        (Err(e), remote::PublishMode::Tunnel) => Err(e),
+    }
+}
+
+#[cfg(test)]
+mod tunnel_start_plan_tests {
+    use super::{remote, tunnel_start_plan};
+    use crate::remote::tunnel::{TunnelConfig, TunnelProviderKind};
+
+    fn incomplete_ssh() -> TunnelConfig {
+        TunnelConfig {
+            provider: TunnelProviderKind::SshReverse,
+            ..TunnelConfig::default()
+        }
+    }
+
+    #[test]
+    fn lan_start_skips_an_incomplete_tunnel_instead_of_failing() {
+        assert_eq!(
+            tunnel_start_plan(remote::PublishMode::Lan, &incomplete_ssh()),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn tunnel_start_still_rejects_an_incomplete_tunnel() {
+        let err = tunnel_start_plan(remote::PublishMode::Tunnel, &incomplete_ssh()).unwrap_err();
+        assert_eq!(err, "SSH host is required");
+    }
+
+    #[test]
+    fn valid_tunnel_starts_in_both_modes() {
+        let quick = TunnelConfig::default();
+        assert_eq!(tunnel_start_plan(remote::PublishMode::Lan, &quick), Ok(true));
+        assert_eq!(tunnel_start_plan(remote::PublishMode::Tunnel, &quick), Ok(true));
     }
 }
 
