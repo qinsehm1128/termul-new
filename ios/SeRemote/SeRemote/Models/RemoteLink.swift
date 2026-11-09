@@ -114,6 +114,10 @@ struct RemoteLink: Identifiable, Hashable, Codable {
     }()
 
     static func parse(_ raw: String) throws -> RemoteLink {
+        try parse(raw, fallbackToken: nil)
+    }
+
+    private static func parse(_ raw: String, fallbackToken: String?) throws -> RemoteLink {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() else {
             throw RemoteLinkError.invalidURL
@@ -121,7 +125,7 @@ struct RemoteLink: Identifiable, Hashable, Codable {
         if deepLinkSchemes.contains(scheme) {
             return try parseDeepLink(url)
         }
-        return try parseAccessURL(url)
+        return try parseAccessURL(url, fallbackToken: fallbackToken)
     }
 
     private static func parseDeepLink(_ url: URL) throws -> RemoteLink {
@@ -132,7 +136,14 @@ struct RemoteLink: Identifiable, Hashable, Codable {
         guard let embedded, !embedded.isEmpty else {
             throw RemoteLinkError.invalidURL
         }
-        var link = try parse(embedded)
+        // A deep link may carry the bearer outside the embedded URL
+        // (`se://open?url=…&access_token=…`). Hand it to the access-URL parser so
+        // the embedded URL is still validated for scheme and host, and so the
+        // token survives without rewriting the embedded fragment.
+        let fallbackToken = [queryToken, outerToken]
+            .compactMap { $0 }
+            .first { !$0.isEmpty }
+        var link = try parse(embedded, fallbackToken: fallbackToken)
         if link.pairingToken == nil, let token = queryToken ?? outerToken, !token.isEmpty {
             link = RemoteLink(id: link.id, title: link.title, accessURL: link.accessURL, bearer: token, createdAt: link.createdAt)
         }
@@ -142,14 +153,15 @@ struct RemoteLink: Identifiable, Hashable, Codable {
         return link
     }
 
-    private static func parseAccessURL(_ url: URL) throws -> RemoteLink {
+    private static func parseAccessURL(_ url: URL, fallbackToken: String? = nil) throws -> RemoteLink {
         guard let scheme = url.scheme?.lowercased(), let host = url.host(), !host.isEmpty else {
             throw RemoteLinkError.invalidURL
         }
         guard scheme == "http" || scheme == "https" else {
             throw RemoteLinkError.httpsRequired
         }
-        guard let token = accessToken(in: url), !token.isEmpty else {
+        let embeddedToken = accessToken(in: url).flatMap { $0.isEmpty ? nil : $0 }
+        guard let token = embeddedToken ?? fallbackToken, !token.isEmpty else {
             throw RemoteLinkError.missingToken
         }
         // HTTP is allowed for operator-shared pairing URLs (LAN or an HTTP
