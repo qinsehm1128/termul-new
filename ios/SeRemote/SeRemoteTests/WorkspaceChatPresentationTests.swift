@@ -1,5 +1,12 @@
+import Foundation
 import Testing
 @testable import SeRemote
+
+/// Resolve a catalog key the same way the app does, so label assertions stay
+/// locale-independent.
+private func L(_ key: String) -> String {
+    String(localized: String.LocalizationValue(stringLiteral: key))
+}
 
 @Suite("Workspace chat presentation")
 struct WorkspaceChatPresentationTests {
@@ -45,9 +52,9 @@ struct WorkspaceChatPresentationTests {
     @Test("Full command title and unknown status are preserved")
     func toolSummary() {
         #expect(WorkspaceChatPresentation.toolCommand("swift test --filter Reconnect") == "swift test --filter Reconnect")
-        #expect(WorkspaceChatPresentation.toolCommand("  \n") == "Tool call")
-        #expect(WorkspaceChatPresentation.outcome("failed") == "Failed")
-        #expect(WorkspaceChatPresentation.outcome("in_progress") == "Running")
+        #expect(WorkspaceChatPresentation.toolCommand("  \n") == L("Tool call"))
+        #expect(WorkspaceChatPresentation.outcome("failed") == L("Failed"))
+        #expect(WorkspaceChatPresentation.outcome("in_progress") == L("Running"))
         #expect(WorkspaceChatPresentation.outcome("host_cancelled") == "Host Cancelled")
     }
 

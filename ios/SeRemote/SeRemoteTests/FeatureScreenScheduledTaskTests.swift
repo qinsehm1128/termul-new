@@ -30,7 +30,7 @@ struct FeatureScreenScheduledTaskTests {
         let summary = ScheduledTaskScheduleFormatter.summary(.at(at: time))
         #expect(summary.contains(ScheduledTaskScheduleFormatter.timestamp(time)))
         #expect(summary.contains("UTC"))
-        #expect(summary.contains("Once"))
+        #expect(summary == String(localized: "Once · UTC · \(ScheduledTaskScheduleFormatter.timestamp(time))"))
     }
 
     @Test func timezoneRemainsExplicitWithoutAValidAnchor() {
