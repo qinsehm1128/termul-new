@@ -17,6 +17,7 @@ use uuid::Uuid;
 pub enum UpgradedConnectionKind {
     Acp,
     Terminal,
+    Desktop,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +31,7 @@ pub struct UpgradedConnectionReceipt {
 struct RegisteredConnection {
     id: Uuid,
     kind: UpgradedConnectionKind,
+    device_id: Option<String>,
     cancel: CancellationToken,
 }
 
@@ -58,6 +60,15 @@ pub struct UpgradedConnectionTicket {
 }
 
 impl UpgradedConnectionTicket {
+    /// Bind a connection authenticated by its first frame. The ticket stays
+    /// admitted throughout, avoiding an untracked connection during authentication.
+    pub fn bind_device(&self, device_id: &str) {
+        let mut inner = self.registry.inner.lock();
+        if let Some(connection) = inner.connections.iter_mut().find(|c| c.id == self.id) {
+            connection.device_id = Some(device_id.to_owned());
+        }
+    }
+
     /// Cancelled when the host shuts down; the connection must then end.
     #[must_use]
     pub fn cancel_token(&self) -> CancellationToken {
@@ -123,6 +134,57 @@ impl UpgradedConnectionRegistry {
         self: &Arc<Self>,
         kind: UpgradedConnectionKind,
     ) -> Option<UpgradedConnectionTicket> {
+        self.admit_inner(kind, None)
+    }
+
+    pub fn admit_device(
+        self: &Arc<Self>,
+        kind: UpgradedConnectionKind,
+        device_id: &str,
+    ) -> Option<UpgradedConnectionTicket> {
+        self.admit_inner(kind, Some(device_id.to_owned()))
+    }
+
+    /// Counts include cancelled connections until their task releases its ticket.
+    pub fn device_counts(&self) -> std::collections::HashMap<String, u64> {
+        let mut counts = std::collections::HashMap::new();
+        for connection in &self.inner.lock().connections {
+            if let Some(device_id) = &connection.device_id {
+                *counts.entry(device_id.clone()).or_insert(0) += 1;
+            }
+        }
+        counts
+    }
+
+    pub fn device_connection_count(&self, device_id: &str) -> u64 {
+        self.inner
+            .lock()
+            .connections
+            .iter()
+            .filter(|connection| connection.device_id.as_deref() == Some(device_id))
+            .count() as u64
+    }
+
+    pub fn cancel_device(&self, device_id: &str) -> u64 {
+        let mut inner = self.inner.lock();
+        let mut cancelled = 0;
+        for connection in &inner.connections {
+            if connection.device_id.as_deref() == Some(device_id)
+                && !connection.cancel.is_cancelled()
+            {
+                connection.cancel.cancel();
+                cancelled += 1;
+            }
+        }
+        inner.cancelled = inner.cancelled.saturating_add(cancelled);
+        cancelled
+    }
+
+    fn admit_inner(
+        self: &Arc<Self>,
+        kind: UpgradedConnectionKind,
+        device_id: Option<String>,
+    ) -> Option<UpgradedConnectionTicket> {
         let mut inner = self.inner.lock();
         if !inner.admitting {
             inner.failed = inner.failed.saturating_add(1);
@@ -138,6 +200,7 @@ impl UpgradedConnectionRegistry {
         inner.connections.push(RegisteredConnection {
             id,
             kind,
+            device_id,
             cancel: cancel.clone(),
         });
         Some(UpgradedConnectionTicket {
@@ -246,6 +309,47 @@ impl UpgradedConnectionRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn device_cancellation_is_selective_and_idempotent() {
+        let registry = Arc::new(UpgradedConnectionRegistry::new());
+        let acp = registry
+            .admit_device(UpgradedConnectionKind::Acp, "phone-a")
+            .unwrap();
+        let terminal = registry
+            .admit_device(UpgradedConnectionKind::Terminal, "phone-a")
+            .unwrap();
+        let other = registry
+            .admit_device(UpgradedConnectionKind::Acp, "phone-b")
+            .unwrap();
+        let legacy = registry.admit(UpgradedConnectionKind::Acp).unwrap();
+        assert_eq!(registry.device_connection_count("phone-a"), 2);
+        assert_eq!(registry.device_counts().get("phone-b"), Some(&1));
+        assert_eq!(registry.cancel_device("phone-a"), 2);
+        assert_eq!(registry.cancel_device("phone-a"), 0);
+        assert!(acp.cancel_token().is_cancelled());
+        assert!(terminal.cancel_token().is_cancelled());
+        assert!(!other.cancel_token().is_cancelled());
+        assert!(!legacy.cancel_token().is_cancelled());
+        assert_eq!(registry.device_connection_count("phone-a"), 2);
+        drop(acp);
+        drop(terminal);
+        assert_eq!(registry.device_connection_count("phone-a"), 0);
+        assert_eq!(registry.receipt().active, 2);
+    }
+
+    #[test]
+    fn frame_authentication_tags_existing_admission() {
+        let registry = Arc::new(UpgradedConnectionRegistry::new());
+        let ticket = registry.admit(UpgradedConnectionKind::Terminal).unwrap();
+        assert!(registry.device_counts().is_empty());
+        ticket.bind_device("phone");
+        assert_eq!(registry.device_connection_count("phone"), 1);
+        assert_eq!(registry.cancel_device("phone"), 1);
+        assert!(ticket.cancel_token().is_cancelled());
+        drop(ticket);
+        assert!(registry.device_counts().is_empty());
+    }
 
     /// A connection task that ends when its ticket is cancelled.
     fn cooperative(ticket: UpgradedConnectionTicket) -> tokio::task::JoinHandle<()> {

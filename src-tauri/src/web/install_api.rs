@@ -25,7 +25,7 @@ use axum::{body::Bytes, extract::State, http::StatusCode, response::IntoResponse
 
 use crate::acp::install::{code, InstallOutcome, InstallRequest};
 use crate::web::auth::IngressProvenance;
-use crate::web::fs_api::IpcBody;
+use crate::web::operation_policy::PolicyIpcBody as IpcBody;
 use crate::web::ws::AppState;
 
 /// `POST /acp/install` — install a catalog agent.
@@ -45,15 +45,19 @@ use crate::web::ws::AppState;
 pub async fn install(
     State(state): State<AppState>,
     axum::Extension(provenance): axum::Extension<IngressProvenance>,
+    principal: Option<axum::Extension<crate::web::auth::RemotePrincipal>>,
+    authority: Option<axum::Extension<std::sync::Arc<crate::web::auth::RemoteAccessAuthority>>>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(denial) = crate::web::operation_policy::authorize_local_only(
+    if let Err(denial) = crate::web::operation_policy::authorize_request_operation(
         provenance,
+        principal.as_ref().map(|principal| &principal.0),
+        authority.as_ref().map(|authority| authority.0.as_ref()),
         crate::web::operation_policy::LocalOnlyOperation::InstallAcpAgent,
     ) {
         return (
             StatusCode::OK,
-            Json(IpcBody::<InstallOutcome>::err(denial.message, denial.code)),
+            Json(IpcBody::<InstallOutcome>::denied(denial)),
         );
     }
     let req: InstallRequest = match serde_json::from_slice(&body) {
@@ -99,6 +103,7 @@ mod tests {
     use super::*;
     use crate::acp::install::AcpInstallService;
     use crate::acp::AcpCatalogService;
+    use crate::web::fs_api::IpcBody;
     use crate::web::ws::HistoryMode;
     use axum::body::Body;
     use axum::extract::ConnectInfo;

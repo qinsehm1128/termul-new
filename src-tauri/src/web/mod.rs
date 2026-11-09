@@ -17,6 +17,8 @@
 pub mod assets;
 pub mod agent_hooks_api;
 pub mod auth;
+pub mod devices;
+pub mod devices_api;
 pub mod catalog_api;
 pub mod cli_session_api;
 pub mod config;
@@ -58,6 +60,7 @@ pub mod session_workspace_api;
 pub mod sink;
 pub mod skills_api;
 pub mod store;
+pub mod remote_desktop;
 pub mod terminal_ws;
 pub mod upgraded_connections;
 pub mod workspace_api;
@@ -375,6 +378,7 @@ pub async fn serve(
     authority: Arc<RemoteAccessAuthority>,
     host_services: WebHostServices,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    authority.configure_device_store(cfg.service_account_state_dir().join("devices.json"))?;
     let terminal = crate::quick_terminal::with_local_service(
         crate::core::TerminalServiceHandle::in_process(pty.clone()),
         &cfg.service_account_state_dir(),

@@ -40,7 +40,6 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, Notify, OwnedSemaphorePermit, Semaphore};
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::acp::config::{AgentConfig, PermissionPolicy};
@@ -194,6 +193,7 @@ impl WsReply {
             err: Some(WsError {
                 code: code.as_str().to_string(),
                 message: message.into(),
+                capability: None,
             }),
         }
     }
@@ -208,6 +208,14 @@ impl WsReply {
     /// breaking the wire contract. This constructor accepts a raw string so
     /// the install handler's `err.code` is byte-identical across transports.
     #[must_use]
+    pub fn scope_denied(id: impl Into<String>, code: &'static str, scope: &str) -> Self {
+        let mut reply = Self::err_with_code(id, code, "device scope is not permitted");
+        if let Some(error) = reply.err.as_mut() {
+            error.capability = Some(scope.to_owned());
+        }
+        reply
+    }
+
     pub fn err_with_code(
         id: impl Into<String>,
         code: impl Into<String>,
@@ -220,6 +228,7 @@ impl WsReply {
             err: Some(WsError {
                 code: code.into(),
                 message: message.into(),
+                capability: None,
             }),
         }
     }
@@ -232,6 +241,8 @@ pub struct WsError {
     pub code: String,
     /// Human-readable message.
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capability: Option<String>,
 }
 
 /// The 10 stable `err.code` machine strings (AC2). Mirrors the TS
@@ -735,7 +746,7 @@ pub async fn ws_upgrade(
         let Some(ticket) = registry.admit(UpgradedConnectionKind::Acp) else {
             return;
         };
-        run_relay(socket, state, authority, peer, ticket.cancel_token()).await;
+        run_relay(socket, state, authority, peer, ticket).await;
     })
     .into_response()
 }
@@ -827,6 +838,65 @@ fn handle_lifecycle_signal(text: &str, authed: bool, backgrounded: &AtomicBool) 
     }
 }
 
+pub(super) fn device_revision_event(revision: u64) -> Value {
+    json!({"type": "devices_changed", "revision": revision})
+}
+
+fn hook_event_is_forwardable(event: &SequencedEvent, authenticated: bool) -> bool {
+    if event.type_ != "agent-hook-event" {
+        return true;
+    }
+    // Hook metadata must remain attributed, even though the device permission
+    // proposal deliberately does not introduce a project ACL.
+    authenticated
+        && event
+            .payload
+            .get("project_id")
+            .and_then(Value::as_str)
+            .is_some_and(|project_id| !project_id.trim().is_empty())
+}
+
+/// Device attachment hints also accept the proposal's notification form
+/// `{type:"project_attached",projectId}` alongside the normal RPC envelope.
+pub(super) fn normalize_project_hint(text: &str) -> Option<String> {
+    if !text.contains("project_attached") {
+        return None;
+    }
+    let mut value: Value = serde_json::from_str(text).ok()?;
+    if value.get("type").and_then(Value::as_str) != Some("project_attached") {
+        return None;
+    }
+    let object = value.as_object_mut()?;
+    object
+        .entry("id")
+        .or_insert_with(|| json!("project_attached"));
+    if let Some(project_id) = object.get("projectId").cloned() {
+        object.insert("payload".into(), json!({"projectId": project_id}));
+    }
+    serde_json::to_string(&value).ok()
+}
+
+pub(super) fn device_disconnect_frame(
+    authority: &RemoteAccessAuthority,
+    principal: Option<&RemotePrincipal>,
+) -> axum::extract::ws::CloseFrame {
+    let revoked = principal.is_some_and(|principal| {
+        matches!(
+            authority.validate_principal(principal),
+            Err(crate::web::auth::RemoteAuthError::DeviceRevoked)
+        )
+    });
+    axum::extract::ws::CloseFrame {
+        code: if revoked { 1008 } else { 1000 },
+        reason: if revoked {
+            "DEVICE_REVOKED"
+        } else {
+            "disconnected"
+        }
+        .into(),
+    }
+}
+
 fn generation_requires_reauthentication(
     authenticated_generation: u64,
     current: crate::web::auth::RemoteGenerationState,
@@ -864,8 +934,10 @@ async fn run_relay(
     state: AppState,
     authority: Arc<RemoteAccessAuthority>,
     peer: SocketAddr,
-    cancel: CancellationToken,
+    ticket: crate::web::upgraded_connections::UpgradedConnectionTicket,
 ) {
+    let ticket = Arc::new(ticket);
+    let cancel = ticket.cancel_token();
     let (mut sink, mut stream) = socket.split();
     let (out_tx, mut out_rx) = outbound_channel();
     let relay = Arc::clone(&state.relay);
@@ -933,9 +1005,15 @@ async fn run_relay(
     let authenticated_generation = Arc::new(AtomicU64::new(0));
     let write_authenticated_generation = Arc::clone(&authenticated_generation);
     let mut generation_rx = authority.subscribe_generation();
+    let mut devices_rx = authority.subscribe_devices();
+    let live_principal = Arc::new(parking_lot::Mutex::new(None::<RemotePrincipal>));
+    let write_principal = Arc::clone(&live_principal);
+    let write_authority = Arc::clone(&authority);
 
     let write_tx = out_tx.clone();
     let mut write_task = tokio::spawn(async move {
+        let mut device_sweep = tokio::time::interval(Duration::from_secs(60));
+        device_sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut ping = tokio::time::interval(PING_INTERVAL);
         // Steady, not bursty: if a slow client stalled the write loop, don't
         // ping-storm it on recovery — delay missed ticks to the next period.
@@ -951,6 +1029,36 @@ async fn run_relay(
             }
             tokio::select! {
                 biased;
+                () = cancel.cancelled() => {
+                    let principal = write_principal.lock().clone();
+                    let frame = device_disconnect_frame(&write_authority, principal.as_ref());
+                    let _ = sink.send(Message::Close(Some(frame))).await;
+                    break;
+                }
+                _ = device_sweep.tick() => {
+                    // Auto-expiry is time-based and may have no device revision
+                    // until validation sweeps persisted device state.
+                    let principal = write_principal.lock().clone();
+                    if principal.as_ref().is_some_and(|p| write_authority.validate_principal(p).is_err()) {
+                        let frame = device_disconnect_frame(&write_authority, principal.as_ref());
+                        let _ = sink.send(Message::Close(Some(frame))).await;
+                        break;
+                    }
+                }
+                changed = devices_rx.changed() => {
+                    if changed.is_err() { break; }
+                    let principal = write_principal.lock().clone();
+                    if principal.as_ref().is_some_and(|p| write_authority.validate_principal(p).is_err()) {
+                        let frame = device_disconnect_frame(&write_authority, principal.as_ref());
+                        let _ = sink.send(Message::Close(Some(frame))).await;
+                        break;
+                    }
+                    if principal.is_some() {
+                        let revision = *devices_rx.borrow_and_update();
+                        let notification = device_revision_event(revision).to_string();
+                        if sink.send(Message::Text(notification.into())).await.is_err() { break; }
+                    }
+                }
                 changed = generation_rx.changed() => {
                     if changed.is_err() {
                         break;
@@ -972,6 +1080,11 @@ async fn run_relay(
                         .frame
                         .take()
                         .expect("queued outbound frame is consumed exactly once");
+                    if let Outbound::Event(event) = &frame {
+                        if !hook_event_is_forwardable(event, write_authenticated_generation.load(Ordering::Acquire) != 0) {
+                            continue;
+                        }
+                    }
                     let text = match frame {
                         Outbound::Event(evt) => serde_json::to_string(&evt).unwrap_or_else(|e| {
                             warn!("[ws] failed to serialize event {}: {e}", evt.type_);
@@ -1030,6 +1143,8 @@ async fn run_relay(
     let read_subscribed_clients = Arc::clone(&subscribed_clients);
     let read_relay = Arc::clone(&relay);
     let read_authenticated_generation = Arc::clone(&authenticated_generation);
+    let read_ticket = Arc::clone(&ticket);
+    let read_cancel = ticket.cancel_token();
     let mut read_task = tokio::spawn(async move {
         let mut authed = false;
         let mut principal = None;
@@ -1090,6 +1205,13 @@ async fn run_relay(
                     {
                         break; // write half closed.
                     }
+                    if let Some(principal) = principal.as_ref() {
+                        read_ticket.bind_device(principal.device_id());
+                        *live_principal.lock() = Some(principal.clone());
+                        if authority.validate_principal(principal).is_err() {
+                            read_cancel.cancel();
+                        }
+                    }
                 }
                 Message::Binary(_) => {
                     // Protocol error — close the connection.
@@ -1126,13 +1248,6 @@ async fn run_relay(
         _ = &mut read_task => {
             write_task.abort();
             // Write is the loser — await its abort to avoid orphaning.
-            let _ = write_task.await;
-        }
-        // Host shutdown: end both halves so the shutdown join sees it gone.
-        () = cancel.cancelled() => {
-            read_task.abort();
-            write_task.abort();
-            let _ = read_task.await;
             let _ = write_task.await;
         }
     }
@@ -1493,6 +1608,8 @@ async fn handle_request_with_conversation(
     peer: SocketAddr,
     generation_slot: Option<&AtomicU64>,
 ) -> WsReply {
+    let hint = normalize_project_hint(text);
+    let text = hint.as_deref().unwrap_or(text);
     let req: WsRequest = match serde_json::from_str(text) {
         Ok(r) => r,
         Err(e) => {
@@ -1600,17 +1717,26 @@ async fn handle_request_with_conversation(
             "remote access principal is unavailable",
         );
     };
-    if authority
-        .authorize(verified_principal, RemoteCapability::Connect)
-        .is_err()
-    {
-        *authed = false;
-        *principal = None;
-        return WsReply::err_with_code(
-            id,
-            "REAUTHENTICATION_REQUIRED",
-            "remote access generation is no longer authorized",
-        );
+    if let Err(error) = authority.validate_principal(verified_principal) {
+        return WsReply::err_with_code(id, error.code(), error.to_string());
+    }
+    let scope = acp_request_scope(&req.type_);
+    if let Err(error) = authority.require_scope(verified_principal, scope) {
+        return WsReply::scope_denied(id, error.code(), scope);
+    }
+    if req.type_ == "project_attached" {
+        let project_id = req
+            .payload
+            .get("projectId")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if registry.switch_context(project_id).is_none() {
+            return WsReply::err(id, WsErrorCode::NotFound, "unknown project");
+        }
+        return match authority.attach_project(verified_principal, project_id) {
+            Ok(()) => WsReply::ok(id, Some(json!({"projectId": project_id}))),
+            Err(error) => WsReply::err_with_code(id, error.code(), error.to_string()),
+        };
     }
 
     // Post-auth routing.
@@ -1700,11 +1826,13 @@ async fn handle_request_with_conversation(
         // `config_options_update`, …) flow back automatically through the
         // existing `fan_out` → `WsRelaySink::emit` → WS frame → store pipeline.
         "create_session" => {
-            if let Err(denial) = operation_policy::authorize_local_only(
+            if let Err(denial) = operation_policy::authorize_device_operation(
+                authority,
                 authority.ingress_provenance(),
+                Some(verified_principal),
                 operation_policy::LocalOnlyOperation::CreateSession,
             ) {
-                return WsReply::err_with_code(id, denial.code, denial.message);
+                return WsReply::scope_denied(id, denial.code, denial.capability);
             }
             handle_create_session(
                 id,
@@ -1851,11 +1979,13 @@ async fn handle_request_with_conversation(
         // rollback), and broadcasts `projects_changed` to ALL clients. Any
         // authenticated client can set the default for now (Epic 2 wires auth).
         "set_default_project" => {
-            if let Err(denial) = operation_policy::authorize_local_only(
+            if let Err(denial) = operation_policy::authorize_device_operation(
+                authority,
                 authority.ingress_provenance(),
+                Some(verified_principal),
                 operation_policy::LocalOnlyOperation::SetDefaultProject,
             ) {
-                return WsReply::err_with_code(id, denial.code, denial.message);
+                return WsReply::scope_denied(id, denial.code, denial.capability);
             }
             handle_set_default_project(
                 id,
@@ -1868,11 +1998,13 @@ async fn handle_request_with_conversation(
             .await
         }
         "spawn_agent" => {
-            if let Err(denial) = operation_policy::authorize_local_only(
+            if let Err(denial) = operation_policy::authorize_device_operation(
+                authority,
                 authority.ingress_provenance(),
+                Some(verified_principal),
                 operation_policy::LocalOnlyOperation::SpawnAgent,
             ) {
-                return WsReply::err_with_code(id, denial.code, denial.message);
+                return WsReply::scope_denied(id, denial.code, denial.capability);
             }
             handle_spawn_agent(id, &req.payload, acp, current_agent).await
         }
@@ -1885,11 +2017,13 @@ async fn handle_request_with_conversation(
             handle_list_acp_catalog(id, &req.payload, acp, acp_catalog, acp_install).await
         }
         "set_catalog_opt_in" => {
-            if let Err(denial) = operation_policy::authorize_local_only(
+            if let Err(denial) = operation_policy::authorize_device_operation(
+                authority,
                 authority.ingress_provenance(),
+                Some(verified_principal),
                 operation_policy::LocalOnlyOperation::SetCatalogOptIn,
             ) {
-                return WsReply::err_with_code(id, denial.code, denial.message);
+                return WsReply::scope_denied(id, denial.code, denial.capability);
             }
             handle_set_catalog_opt_in(id, &req.payload, acp_catalog).await
         }
@@ -1903,11 +2037,13 @@ async fn handle_request_with_conversation(
         // carry SCREAMING_SNAKE_CASE codes byte-identical to the Tauri +
         // HTTP transports (via `WsReply::err_with_code`).
         "install_acp_agent" => {
-            if let Err(denial) = operation_policy::authorize_local_only(
+            if let Err(denial) = operation_policy::authorize_device_operation(
+                authority,
                 authority.ingress_provenance(),
+                Some(verified_principal),
                 operation_policy::LocalOnlyOperation::InstallAcpAgent,
             ) {
-                return WsReply::err_with_code(id, denial.code, denial.message);
+                return WsReply::scope_denied(id, denial.code, denial.capability);
             }
             handle_install_acp_agent(id, &req.payload, acp_install).await
         }
@@ -1916,11 +2052,13 @@ async fn handle_request_with_conversation(
         // localStorage stub) so settings / layout / command history / SSH
         // profiles survive browser switches + server restarts.
         "store_read" | "store_write" | "store_delete" => {
-            if let Err(denial) = operation_policy::authorize_local_only(
+            if let Err(denial) = operation_policy::authorize_device_operation(
+                authority,
                 authority.ingress_provenance(),
+                Some(verified_principal),
                 operation_policy::LocalOnlyOperation::StoreAccess,
             ) {
-                return WsReply::err_with_code(id, denial.code, denial.message);
+                return WsReply::scope_denied(id, denial.code, denial.capability);
             }
             match req.type_.as_str() {
                 "store_read" => handle_store_read(id, &req.payload, store).await,
@@ -1931,11 +2069,13 @@ async fn handle_request_with_conversation(
         "list_cli_sessions" => handle_list_cli_sessions(id, &req.payload, registry).await,
         "resolve_cli_sessions" => handle_resolve_cli_sessions(id, &req.payload).await,
         "kill_agent" => {
-            if let Err(denial) = operation_policy::authorize_local_only(
+            if let Err(denial) = operation_policy::authorize_device_operation(
+                authority,
                 authority.ingress_provenance(),
+                Some(verified_principal),
                 operation_policy::LocalOnlyOperation::KillAgent,
             ) {
-                return WsReply::err_with_code(id, denial.code, denial.message);
+                return WsReply::scope_denied(id, denial.code, denial.capability);
             }
             handle_kill_agent(
                 id,
@@ -1949,11 +2089,13 @@ async fn handle_request_with_conversation(
         }
         "list_agents" => handle_list_agents(id, acp).await,
         "set_permission_policy" => {
-            if let Err(denial) = operation_policy::authorize_local_only(
+            if let Err(denial) = operation_policy::authorize_device_operation(
+                authority,
                 authority.ingress_provenance(),
+                Some(verified_principal),
                 operation_policy::LocalOnlyOperation::PermissionPolicy,
             ) {
-                return WsReply::err_with_code(id, denial.code, denial.message);
+                return WsReply::scope_denied(id, denial.code, denial.capability);
             }
             handle_set_permission_policy(id, &req.payload, acp).await
         }
@@ -1984,6 +2126,41 @@ async fn handle_request_with_conversation(
                 req.type_
             ),
         ),
+    }
+}
+
+/// Conservative read allowlist: new ACP operations must opt into read access.
+fn acp_request_scope(request: &str) -> &'static str {
+    match request {
+        "authenticate"
+        | "ping"
+        | "project_attached"
+        | "conversation_host_status"
+        | "list_conversations"
+        | "get_conversation"
+        | "get_conversation_binding"
+        | "resolve_legacy_conversation_id"
+        | "get_session_workspace"
+        | "subscribe"
+        | "list_persisted_sessions"
+        | "open_persisted_session"
+        | "get_session_payload"
+        | "get_session_payload_page"
+        | "recover_session_snapshot"
+        | "get_session_cursor"
+        | "get_composer_controls"
+        | "list_sessions"
+        | "list_acp_catalog"
+        | "list_cli_sessions"
+        | "resolve_cli_sessions"
+        | "list_agents" => "view",
+        "set_catalog_opt_in"
+        | "install_acp_agent"
+        | "store_read"
+        | "store_write"
+        | "store_delete"
+        | "set_permission_policy" => "manage",
+        _ => "agent.run",
     }
 }
 
@@ -9385,7 +9562,7 @@ mod tests {
         assert_eq!(file_registry.lock().default_project_id(), Some("p-2"));
         let saved = saved.expect("persisted file written");
         let v: Value = serde_json::from_str(&saved).expect("valid json");
-        assert_eq!(v["schemaVersion"], 3);
+        assert_eq!(v["schemaVersion"], 4);
         assert_eq!(v["defaultProjectId"], "p-2");
     }
 
@@ -10366,6 +10543,114 @@ mod tests {
         assert!(rejected, "ceiling 4194304 must reject");
         assert!(total <= MAX_COMPAT_HISTORY_ENCODED_BYTES);
         assert!(charge_compat_history_bytes(MAX_COMPAT_HISTORY_ENCODED_BYTES, &"x").is_err());
+    }
+
+    #[test]
+    fn device_change_notification_contains_only_type_and_revision() {
+        let notification = device_revision_event(42);
+        assert_eq!(
+            notification,
+            json!({"type":"devices_changed","revision":42})
+        );
+        assert_eq!(notification.as_object().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn hook_events_require_authentication_and_project_metadata() {
+        let hook = |payload| SequencedEvent::new(None, 0, "agent-hook-event", payload);
+        assert!(!hook_event_is_forwardable(
+            &hook(json!({"project_id":"p"})),
+            false
+        ));
+        for payload in [
+            json!({}),
+            json!({"project_id":""}),
+            json!({"project_id":null}),
+            json!({"projectId":"p"}),
+        ] {
+            assert!(!hook_event_is_forwardable(&hook(payload), true));
+        }
+        assert!(hook_event_is_forwardable(
+            &hook(json!({"project_id":"p"})),
+            true
+        ));
+        assert!(hook_event_is_forwardable(
+            &SequencedEvent::new(None, 0, "projects_changed", json!({})),
+            true
+        ));
+    }
+
+    #[tokio::test]
+    async fn paired_ws_scope_removal_denies_mutation_but_keeps_reads() {
+        let authority = Arc::new(RemoteAccessAuthority::for_tests("test-remote-access-token"));
+        authority.set_ingress_provenance(IngressProvenance::PublicTunnel);
+        let paired = authority
+            .pair_device(crate::web::devices::PairRequest {
+                code: authority.issue_pairing_code().unwrap().code,
+                name: "Phone".into(),
+                platform: "test".into(),
+            })
+            .unwrap();
+        let relay = Arc::new(WsRelaySink::new());
+        let registry = Arc::new(ProjectRegistry::new());
+        let mut authed = false;
+        let mut principal = None;
+        let mut subscribed = Vec::new();
+        let auth = policy_request(
+            &authority,
+            &json!({"id":"a", "type":"authenticate", "payload":{"token":paired.device_token}})
+                .to_string(),
+            &mut authed,
+            &mut principal,
+            &relay,
+            &registry,
+            &mut subscribed,
+        )
+        .await;
+        assert!(auth.ok, "{:?}", auth.err);
+        authority
+            .set_device_scopes(&paired.device_id, vec!["view".into()])
+            .unwrap();
+        for message in [
+            "spawn_agent",
+            "send_prompt",
+            "resume",
+            "start",
+            "create_session",
+        ] {
+            let reply = policy_request(
+                &authority,
+                &json!({"id":"r", "type":message,"payload":{}}).to_string(),
+                &mut authed,
+                &mut principal,
+                &relay,
+                &registry,
+                &mut subscribed,
+            )
+            .await;
+            let error = reply.err.unwrap();
+            assert_eq!(error.code, "FORBIDDEN", "{message}");
+            assert_eq!(error.capability.as_deref(), Some("agent.run"));
+            assert!(authed);
+        }
+        let reply = policy_request(
+            &authority,
+            r#"{"id":"read","type":"ping","payload":{}}"#,
+            &mut authed,
+            &mut principal,
+            &relay,
+            &registry,
+            &mut subscribed,
+        )
+        .await;
+        assert!(reply.ok);
+        let ordinary = device_disconnect_frame(&authority, principal.as_ref());
+        assert_eq!(ordinary.code, 1000);
+        assert_ne!(ordinary.reason, "DEVICE_REVOKED");
+        authority.revoke_device(&paired.device_id).unwrap();
+        let revoked = device_disconnect_frame(&authority, principal.as_ref());
+        assert_eq!(revoked.code, 1008);
+        assert_eq!(revoked.reason, "DEVICE_REVOKED");
     }
 
     #[tokio::test]

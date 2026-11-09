@@ -107,6 +107,22 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
         Router::<AppState>::new().route("/health", get(health_check)),
         RemoteRouteClass::Health,
     )
+    .merge(super::devices_api::routes())
+    .merge(classified_routes(
+        Router::<AppState>::new()
+            .route("/remote/desktop/info", get(super::remote_desktop::info))
+            .route("/remote/desktop/screenshot", get(super::remote_desktop::screenshot))
+            .route("/remote/desktop/stream", get(super::remote_desktop::stream)),
+        RemoteRouteClass::RemoteDesktop,
+    ))
+    .merge(classified_routes(
+        Router::<AppState>::new()
+            .route("/remote-desktop/settings", get(super::remote_desktop::get_settings).put(super::remote_desktop::set_settings))
+            .route("/remote-desktop/stop", post(super::remote_desktop::emergency_stop))
+            .route("/api/remote-desktop/settings", get(super::remote_desktop::get_settings).put(super::remote_desktop::set_settings))
+            .route("/api/remote-desktop/stop", post(super::remote_desktop::emergency_stop)),
+        RemoteRouteClass::LocalOperator,
+    ))
     .merge(classified_routes(
         Router::<AppState>::new().route("/ws", get(ws_upgrade)),
         RemoteRouteClass::AcpWebSocket,

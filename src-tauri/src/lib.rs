@@ -99,6 +99,14 @@ use tauri_plugin_store::StoreExt;
 #[cfg(not(target_os = "linux"))]
 use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 
+/// Install the same persisted desktop consent service for the headless host.
+/// There is no local Tauri renderer to receive banner events in this process.
+#[cfg(feature = "standalone-server")]
+pub fn initialize_headless_remote_desktop(app_data_dir: std::path::PathBuf) -> Result<(), String> {
+    let store = Arc::new(remote::TunnelConfigStore::new(app_data_dir));
+    remote::desktop::DesktopService::initialize(store, |_| {}).map(|_| ())
+}
+
 const MENU_ID_CHECK_FOR_UPDATES: &str = "check-for-updates";
 const MENU_ID_RELOAD: &str = "view-reload";
 const MENU_ID_TOGGLE_DEVTOOLS: &str = "view-toggle-devtools";
@@ -3684,8 +3692,29 @@ pub fn run() {
             // wanted. Start adopts that generation; launch does not touch
             // the OS keyring.
             let tunnel_store = Arc::new(remote::TunnelConfigStore::new(app_data_dir.clone()));
+            let desktop_events_app = app.handle().clone();
+            let desktop_service = remote::desktop::DesktopService::initialize(
+                Arc::clone(&tunnel_store),
+                move |state| {
+                    let _ = desktop_events_app.emit(remote::desktop::STATE_EVENT, state);
+                },
+            )
+            .map_err(std::io::Error::other)?;
+            app.manage(desktop_service);
             let remote_authority = Arc::new(provision_desktop_remote_authority()?);
+            remote_authority.configure_device_store(
+                app_data_dir.join("remote-tunnel").join("devices.json"),
+            )?;
             app.manage(Arc::clone(&remote_authority));
+            // Revision-only notifications never expose device credentials.
+            let mut device_changes = remote_authority.subscribe_devices();
+            let device_events_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                while device_changes.changed().await.is_ok() {
+                    let revision = *device_changes.borrow_and_update();
+                    let _ = device_events_app.emit("remote:devices-changed", serde_json::json!({ "revision": revision }));
+                }
+            });
 
             // The shared-live host receives the exact same authority instance
             // managed above and threads it into the HTTP/ACP WebSocket router.
@@ -3804,6 +3833,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            remote::desktop::get_remote_desktop_settings,
+            remote::desktop::set_remote_desktop_settings,
+            remote::desktop::remote_desktop_emergency_stop,
             // Quit mode for "Quit and End All Terminals"
             set_quit_ends_core_sessions,
             // Shell detection commands

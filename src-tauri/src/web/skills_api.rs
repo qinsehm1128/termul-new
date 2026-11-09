@@ -34,7 +34,7 @@ use crate::skills::scanner;
 use crate::skills::service::SkillsHubService;
 use crate::skills::{AgentSkillContent, AgentSkillSummary};
 use crate::web::auth::IngressProvenance;
-use crate::web::fs_api::IpcBody;
+use crate::web::operation_policy::PolicyIpcBody as IpcBody;
 use crate::web::operation_policy::{self, LocalOnlyOperation};
 use crate::web::ws::AppState;
 
@@ -125,14 +125,19 @@ pub async fn status(
 pub async fn sync(
     State(state): State<AppState>,
     Extension(provenance): Extension<IngressProvenance>,
+    principal: Option<Extension<crate::web::auth::RemotePrincipal>>,
+    authority: Option<Extension<std::sync::Arc<crate::web::auth::RemoteAccessAuthority>>>,
     Json(request): Json<SkillsCatalogRequest>,
 ) -> impl IntoResponse {
-    if let Err(denial) =
-        operation_policy::authorize_local_only(provenance, LocalOnlyOperation::SkillsMutation)
-    {
+    if let Err(denial) = operation_policy::authorize_request_operation(
+        provenance,
+        principal.as_ref().map(|p| &p.0),
+        authority.as_ref().map(|a| a.0.as_ref()),
+        LocalOnlyOperation::SkillsMutation,
+    ) {
         return (
             StatusCode::OK,
-            Json(IpcBody::<SkillsStatus>::err(denial.message, denial.code)),
+            Json(IpcBody::<SkillsStatus>::denied(denial)),
         );
     }
     with_service(state, move |service| service.sync(request)).await
@@ -142,17 +147,19 @@ pub async fn sync(
 pub async fn preview(
     State(state): State<AppState>,
     Extension(provenance): Extension<IngressProvenance>,
+    principal: Option<Extension<crate::web::auth::RemotePrincipal>>,
+    authority: Option<Extension<std::sync::Arc<crate::web::auth::RemoteAccessAuthority>>>,
     Json(request): Json<SkillsPreviewRequest>,
 ) -> impl IntoResponse {
-    if let Err(denial) =
-        operation_policy::authorize_local_only(provenance, LocalOnlyOperation::SkillsMutation)
-    {
+    if let Err(denial) = operation_policy::authorize_request_operation(
+        provenance,
+        principal.as_ref().map(|p| &p.0),
+        authority.as_ref().map(|a| a.0.as_ref()),
+        LocalOnlyOperation::SkillsMutation,
+    ) {
         return (
             StatusCode::OK,
-            Json(IpcBody::<SkillsOperationStart>::err(
-                denial.message,
-                denial.code,
-            )),
+            Json(IpcBody::<SkillsOperationStart>::denied(denial)),
         );
     }
     with_service(state, move |service| service.start_preview_job(request)).await
@@ -162,17 +169,19 @@ pub async fn preview(
 pub async fn install_preview(
     State(state): State<AppState>,
     Extension(provenance): Extension<IngressProvenance>,
+    principal: Option<Extension<crate::web::auth::RemotePrincipal>>,
+    authority: Option<Extension<std::sync::Arc<crate::web::auth::RemoteAccessAuthority>>>,
     Json(request): Json<SkillsInstallCommit>,
 ) -> impl IntoResponse {
-    if let Err(denial) =
-        operation_policy::authorize_local_only(provenance, LocalOnlyOperation::SkillsMutation)
-    {
+    if let Err(denial) = operation_policy::authorize_request_operation(
+        provenance,
+        principal.as_ref().map(|p| &p.0),
+        authority.as_ref().map(|a| a.0.as_ref()),
+        LocalOnlyOperation::SkillsMutation,
+    ) {
         return (
             StatusCode::OK,
-            Json(IpcBody::<SkillsOperationStart>::err(
-                denial.message,
-                denial.code,
-            )),
+            Json(IpcBody::<SkillsOperationStart>::denied(denial)),
         );
     }
     with_service(state, move |service| service.start_install_job(request)).await
@@ -182,17 +191,19 @@ pub async fn install_preview(
 pub async fn operation_status(
     State(state): State<AppState>,
     Extension(provenance): Extension<IngressProvenance>,
+    principal: Option<Extension<crate::web::auth::RemotePrincipal>>,
+    authority: Option<Extension<std::sync::Arc<crate::web::auth::RemoteAccessAuthority>>>,
     axum::extract::Path(job_id): axum::extract::Path<String>,
 ) -> impl IntoResponse {
-    if let Err(denial) =
-        operation_policy::authorize_local_only(provenance, LocalOnlyOperation::SkillsMutation)
-    {
+    if let Err(denial) = operation_policy::authorize_request_operation(
+        provenance,
+        principal.as_ref().map(|p| &p.0),
+        authority.as_ref().map(|a| a.0.as_ref()),
+        LocalOnlyOperation::SkillsMutation,
+    ) {
         return (
             StatusCode::OK,
-            Json(IpcBody::<SkillsOperationStatus>::err(
-                denial.message,
-                denial.code,
-            )),
+            Json(IpcBody::<SkillsOperationStatus>::denied(denial)),
         );
     }
     with_service(state, move |service| service.operation_status(&job_id)).await
@@ -208,15 +219,17 @@ pub struct CancelSkillOperationRequest {
 pub async fn cancel_operation(
     State(state): State<AppState>,
     Extension(provenance): Extension<IngressProvenance>,
+    principal: Option<Extension<crate::web::auth::RemotePrincipal>>,
+    authority: Option<Extension<std::sync::Arc<crate::web::auth::RemoteAccessAuthority>>>,
     Json(request): Json<CancelSkillOperationRequest>,
 ) -> impl IntoResponse {
-    if let Err(denial) =
-        operation_policy::authorize_local_only(provenance, LocalOnlyOperation::SkillsMutation)
-    {
-        return (
-            StatusCode::OK,
-            Json(IpcBody::<()>::err(denial.message, denial.code)),
-        );
+    if let Err(denial) = operation_policy::authorize_request_operation(
+        provenance,
+        principal.as_ref().map(|p| &p.0),
+        authority.as_ref().map(|a| a.0.as_ref()),
+        LocalOnlyOperation::SkillsMutation,
+    ) {
+        return (StatusCode::OK, Json(IpcBody::<()>::denied(denial)));
     }
     with_service(state, move |service| {
         service.cancel_operation(&request.job_id)
@@ -228,16 +241,20 @@ pub async fn cancel_operation(
 pub async fn install(
     State(state): State<AppState>,
     Extension(provenance): Extension<IngressProvenance>,
+    principal: Option<Extension<crate::web::auth::RemotePrincipal>>,
+    authority: Option<Extension<std::sync::Arc<crate::web::auth::RemoteAccessAuthority>>>,
     Json(request): Json<SkillsInstallRequest>,
 ) -> impl IntoResponse {
-    if let Err(denial) =
-        operation_policy::authorize_local_only(provenance, LocalOnlyOperation::SkillsMutation)
-    {
+    if let Err(denial) = operation_policy::authorize_request_operation(
+        provenance,
+        principal.as_ref().map(|p| &p.0),
+        authority.as_ref().map(|a| a.0.as_ref()),
+        LocalOnlyOperation::SkillsMutation,
+    ) {
         return (
             StatusCode::OK,
-            Json(IpcBody::<crate::skills::manifest::SkillManifest>::err(
-                denial.message,
-                denial.code,
+            Json(IpcBody::<crate::skills::manifest::SkillManifest>::denied(
+                denial,
             )),
         );
     }
@@ -270,16 +287,20 @@ pub async fn install(
 pub async fn project(
     State(state): State<AppState>,
     Extension(provenance): Extension<IngressProvenance>,
+    principal: Option<Extension<crate::web::auth::RemotePrincipal>>,
+    authority: Option<Extension<std::sync::Arc<crate::web::auth::RemoteAccessAuthority>>>,
     Json(request): Json<SkillsProjectionRequest>,
 ) -> impl IntoResponse {
-    if let Err(denial) =
-        operation_policy::authorize_local_only(provenance, LocalOnlyOperation::SkillsMutation)
-    {
+    if let Err(denial) = operation_policy::authorize_request_operation(
+        provenance,
+        principal.as_ref().map(|p| &p.0),
+        authority.as_ref().map(|a| a.0.as_ref()),
+        LocalOnlyOperation::SkillsMutation,
+    ) {
         return (
             StatusCode::OK,
-            Json(IpcBody::<crate::skills::manifest::SkillManifest>::err(
-                denial.message,
-                denial.code,
+            Json(IpcBody::<crate::skills::manifest::SkillManifest>::denied(
+                denial,
             )),
         );
     }
@@ -290,16 +311,20 @@ pub async fn project(
 pub async fn repair(
     State(state): State<AppState>,
     Extension(provenance): Extension<IngressProvenance>,
+    principal: Option<Extension<crate::web::auth::RemotePrincipal>>,
+    authority: Option<Extension<std::sync::Arc<crate::web::auth::RemoteAccessAuthority>>>,
     Json(request): Json<SkillsRepairRequest>,
 ) -> impl IntoResponse {
-    if let Err(denial) =
-        operation_policy::authorize_local_only(provenance, LocalOnlyOperation::SkillsMutation)
-    {
+    if let Err(denial) = operation_policy::authorize_request_operation(
+        provenance,
+        principal.as_ref().map(|p| &p.0),
+        authority.as_ref().map(|a| a.0.as_ref()),
+        LocalOnlyOperation::SkillsMutation,
+    ) {
         return (
             StatusCode::OK,
-            Json(IpcBody::<crate::skills::manifest::SkillManifest>::err(
-                denial.message,
-                denial.code,
+            Json(IpcBody::<crate::skills::manifest::SkillManifest>::denied(
+                denial,
             )),
         );
     }
@@ -349,7 +374,7 @@ pub async fn list(
             };
             if let Some(err) = outside_err {
                 log::warn!(target: "se_manager::web::skills_api", "operation=skills_api stable_code=REJECTED");
-                return (StatusCode::OK, Json(err));
+                return (StatusCode::OK, Json(err.into()));
             }
         }
     }
@@ -420,7 +445,7 @@ pub async fn read(
             };
             if let Some(err) = outside_err {
                 log::warn!(target: "se_manager::web::skills_api", "operation=skills_api stable_code=REJECTED");
-                return (StatusCode::OK, Json(err));
+                return (StatusCode::OK, Json(err.into()));
             }
         }
     }
@@ -459,6 +484,7 @@ mod tests {
     use crate::acp::AcpManager;
     use crate::skills::api_types::{SkillsStatus, ERR_PROJECT_NOT_REGISTERED};
     use crate::skills::service::SkillsHubContext;
+    use crate::web::fs_api::IpcBody;
     use crate::web::project_registry::ProjectRegistry;
     use crate::web::sink::WsRelaySink;
     use crate::web::test_pty_manager;

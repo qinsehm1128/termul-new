@@ -61,6 +61,7 @@ import {
   parseMemorySessionDetail
 } from '@shared/types/memory-index.types'
 import type { ProjectListPayload } from '@shared/types/web-projects.types'
+import { remoteAccessHeaders } from './remote-access-credential'
 import type {
   AgentSkillContent,
   AgentSkillSummary,
@@ -91,7 +92,6 @@ function serverBase(): string {
   return window.location.origin
 }
 
-/** Shape of the HTTP response body mirroring `IpcResult<T>`. */
 export const webServerAgentHooks = {
   preview: (agent: AgentKind) =>
     getJson<string>(`/agent-hooks/preview?agent=${encodeURIComponent(agent)}`),
@@ -102,6 +102,7 @@ export const webServerAgentHooks = {
     getJson<AgentHookEvent[]>(`/agent-hooks/events${after === undefined ? '' : `?after=${after}`}`)
 }
 
+/** Shape of the HTTP response body mirroring `IpcResult<T>`. */
 type IpcBody<T> = { success: true; data: T } | { success: false; error: string; code: string }
 
 /** Map any transport/parse failure to a uniform `IpcResult` failure. */
@@ -118,7 +119,7 @@ async function postJson<T>(
   try {
     const res = await fetch(`${serverBase()}${path}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: Object.fromEntries(remoteAccessHeaders({ 'content-type': 'application/json' })),
       body: JSON.stringify(body),
       signal
     })
@@ -131,7 +132,10 @@ async function postJson<T>(
 /** GET and return the typed `IpcResult` body (or NETWORK_ERROR). */
 async function getJson<T>(path: string): Promise<IpcResult<T>> {
   try {
-    const res = await fetch(`${serverBase()}${path}`, { method: 'GET' })
+    const res = await fetch(`${serverBase()}${path}`, {
+      method: 'GET',
+      headers: remoteAccessHeaders()
+    })
     return await parseBody<T>(res)
   } catch (err) {
     return networkError(err instanceof Error ? err.message : String(err))
@@ -143,7 +147,7 @@ async function putJson<T>(path: string, body: unknown): Promise<IpcResult<T>> {
   try {
     const res = await fetch(`${serverBase()}${path}`, {
       method: 'PUT',
-      headers: { 'content-type': 'application/json' },
+      headers: Object.fromEntries(remoteAccessHeaders({ 'content-type': 'application/json' })),
       body: JSON.stringify(body)
     })
     return await parseBody<T>(res)
@@ -155,6 +159,23 @@ async function putJson<T>(path: string, body: unknown): Promise<IpcResult<T>> {
 /** Parse the `IpcBody<T>` JSON body into `IpcResult<T>`. */
 async function parseBody<T>(res: Response): Promise<IpcResult<T>> {
   if (!res.ok) {
+    try {
+      const denial = (await res.json()) as { code?: unknown; error?: unknown; capability?: unknown }
+      if (
+        typeof denial.code === 'string' &&
+        ['FORBIDDEN', 'DEVICE_REVOKED', 'INVALID_CREDENTIAL', 'RATE_LIMITED'].includes(denial.code)
+      ) {
+        const error =
+          typeof denial.error === 'string'
+            ? denial.error
+            : typeof denial.capability === 'string'
+              ? `Forbidden: ${denial.capability}`
+              : denial.code
+        return { success: false, code: denial.code, error }
+      }
+    } catch {
+      // Non-JSON failures retain the existing transport-error contract.
+    }
     return networkError(`HTTP ${res.status} ${res.statusText}`)
   }
   let body: IpcBody<T>
@@ -490,6 +511,11 @@ export const webServerMemoryIndex = {
 }
 
 export const webServerCliSessions = {
+  async live(): Promise<unknown> {
+    const res = await getJson<unknown>('/cli-sessions/live')
+    if (!res.success) throw new Error(res.error)
+    return res.data
+  },
   async list(args?: CliSessionListArgs): Promise<CliSessionListResult> {
     const res = await postJson<unknown>('/cli-sessions', args ?? {})
     if (!res.success) throw new Error(res.error)
@@ -511,11 +537,6 @@ function skillsError(result: { error: string; code?: string }): Error {
 }
 
 function skillsQuery(request: SkillsCatalogRequest = {}): string {
-  async live(): Promise<unknown> {
-    const res = await getJson<unknown>('/cli-sessions/live')
-    if (!res.success) throw new Error(res.error)
-    return res.data
-  },
   const params = new URLSearchParams()
   if (request.projectId) params.set('projectId', request.projectId)
   if (request.projectRoot) params.set('projectRoot', request.projectRoot)

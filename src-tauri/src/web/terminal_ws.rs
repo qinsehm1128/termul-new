@@ -29,7 +29,6 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::conversation::ConversationId;
@@ -37,7 +36,7 @@ use crate::conversation::TerminalSpawnIntentV1;
 use crate::pty::manager::{TerminalReplay, TerminalResumeRequest};
 use crate::trackers::TerminalDisplayMode;
 use crate::web::auth::{
-    auth_error_response, RemoteAccessAuthority, RemoteAuthError, RemoteCapability, RemotePrincipal,
+    auth_error_response, RemoteAccessAuthority, RemoteAuthError, RemotePrincipal,
 };
 use crate::web::upgraded_connections::{UpgradedConnectionKind, UpgradedConnectionRegistry};
 use crate::web::ws::AppState;
@@ -220,10 +219,15 @@ pub async fn terminal_ws_upgrade(
     ws.on_upgrade(move |socket| async move {
         // Registered only once upgraded, so a rejected upgrade leaves nothing
         // behind; refused outright once the host has begun shutting down.
-        let Some(ticket) = registry.admit(UpgradedConnectionKind::Terminal) else {
+        let ticket = match admitted.as_ref() {
+            Some(principal) => {
+                registry.admit_device(UpgradedConnectionKind::Terminal, principal.device_id())
+            }
+            None => registry.admit(UpgradedConnectionKind::Terminal),
+        };
+        let Some(ticket) = ticket else {
             return;
         };
-        let cancel = ticket.cancel_token();
         run(
             socket,
             state,
@@ -231,7 +235,7 @@ pub async fn terminal_ws_upgrade(
             admitted,
             peer_ip,
             binary_output,
-            cancel,
+            ticket,
         )
         .await;
     })
@@ -263,7 +267,7 @@ fn admit_terminal_upgrade(
         .filter(|token| !token.is_empty())
         .ok_or(RemoteAuthError::InvalidCredential)?;
     let principal = authority.verify_bearer_for_peer(token, peer)?;
-    authority.authorize(&principal, RemoteCapability::Mutate)?;
+    authority.require_scope(&principal, "view")?;
     Ok(Some(principal))
 }
 
@@ -350,14 +354,16 @@ async fn run(
     mut principal: Option<RemotePrincipal>,
     peer: IpAddr,
     binary_output: bool,
-    cancel: CancellationToken,
+    ticket: crate::web::upgraded_connections::UpgradedConnectionTicket,
 ) {
+    let cancel = ticket.cancel_token();
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::channel::<Message>(MAX_RECONNECT_FRAMES);
 
     let write_task = tokio::spawn(async move {
         while let Some(message) = rx.recv().await {
-            if sink.send(message).await.is_err() {
+            let closing = matches!(message, Message::Close(_));
+            if sink.send(message).await.is_err() || closing {
                 break;
             }
         }
@@ -375,6 +381,9 @@ async fn run(
     );
 
     let mut generation_rx = authority.subscribe_generation();
+    let mut devices_rx = authority.subscribe_devices();
+    let mut device_sweep = tokio::time::interval(std::time::Duration::from_secs(60));
+    device_sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut event_task = principal.as_ref().map(|admitted| {
         spawn_terminal_event_task(
             state.clone(),
@@ -388,6 +397,12 @@ async fn run(
     let mut ctx = ConnectionContext::new(authorized.clone(), binary_output);
 
     loop {
+        if principal
+            .as_ref()
+            .is_some_and(|principal| authority.validate_principal(principal).is_err())
+        {
+            break;
+        }
         if principal_generation_mismatch(&authority, principal.as_ref()) {
             info!(
                 target: "se_manager::web::terminal_ws",
@@ -399,6 +414,18 @@ async fn run(
             break;
         }
         tokio::select! {
+            biased;
+            _ = device_sweep.tick() => {
+                // Loop-head validation sweeps time-based device expiry.
+            }
+            changed = devices_rx.changed() => {
+                if changed.is_err() { break; }
+                if let Some(principal) = principal.as_ref() {
+                    if authority.validate_principal(principal).is_err() { break; }
+                    let revision = *devices_rx.borrow_and_update();
+                    if send_json(&tx, crate::web::ws::device_revision_event(revision)).await.is_err() { break; }
+                }
+            }
             () = cancel.cancelled() => {
                 info!(
                     target: "se_manager::web::terminal_ws",
@@ -429,7 +456,9 @@ async fn run(
                 if principal_generation_mismatch(&authority, principal.as_ref()) {
                     break;
                 }
-                let request = match serde_json::from_str::<Request>(&text) {
+                let hint = crate::web::ws::normalize_project_hint(&text);
+                let text = hint.as_deref().unwrap_or(&text);
+                let request = match serde_json::from_str::<Request>(text) {
                     Ok(request) => request,
                     Err(error) => {
                         let _ = send_error(&tx, "malformed", "VALIDATION_ERROR", error.to_string()).await;
@@ -447,6 +476,10 @@ async fn run(
                         None => Err(("UNAUTHORIZED", "pre-auth: send an `authenticate` request first".to_string())),
                     }
                 };
+                if let Some(principal) = principal.as_ref() {
+                    ticket.bind_device(principal.device_id());
+                    if authority.validate_principal(principal).is_err() { break; }
+                }
                 if event_task.is_none() {
                     if let Some(admitted) = principal.as_ref() {
                         event_task = Some(spawn_terminal_event_task(
@@ -465,12 +498,19 @@ async fn run(
                     }
                     Err((code, message)) => {
                         warn!("[terminal-ws] request failed type={op_type} code={code}");
-                        let _ = send_error(&tx, &id, code, message).await;
+                        if code == "FORBIDDEN" {
+                            let _ = send_json(&tx, json!({"id": id, "success": false, "code": code, "capability": terminal_request_scope(&op_type), "error": message})).await;
+                        } else {
+                            let _ = send_error(&tx, &id, code, message).await;
+                        }
                     }
                 }
             }
         }
     }
+
+    let frame = crate::web::ws::device_disconnect_frame(&authority, principal.as_ref());
+    let _ = tx.send(Message::Close(Some(frame))).await;
 
     // Cleanup: abort and join event/attachment tasks. PTYs are preserved.
     release_phone_fits(&state, &mut ctx).await;
@@ -757,8 +797,8 @@ fn admit_terminal_frame(
     match authority.verify_bearer_for_peer(&payload.token, peer) {
         Ok(admitted) => {
             authority
-                .authorize(&admitted, RemoteCapability::Mutate)
-                .map_err(|_| unauthorized_error("principal"))?;
+                .require_scope(&admitted, "view")
+                .map_err(|error| (error.code(), error.to_string()))?;
             *principal = Some(admitted);
             info!(
                 target: "se_manager::web::terminal_ws",
@@ -782,6 +822,17 @@ fn admit_terminal_frame(
     }
 }
 
+fn terminal_request_scope(request: &str) -> &'static str {
+    match request {
+        "spawn" => "terminal.create",
+        "authenticate" | "project_attached" | "list" | "watch" | "screen_status"
+        | "screen_read" | "get_cwd" | "get_git_branch" | "get_git_status" | "get_exit_code" => {
+            "view"
+        }
+        _ => "terminal.input",
+    }
+}
+
 async fn handle(
     request: Request,
     state: &AppState,
@@ -791,10 +842,24 @@ async fn handle(
     ctx: &mut ConnectionContext,
 ) -> Result<Value, (&'static str, String)> {
     authority
-        .authorize(principal, RemoteCapability::Mutate)
-        .map_err(|_| unauthorized_error("principal"))?;
+        .require_scope(principal, terminal_request_scope(&request.type_))
+        .map_err(|error| (error.code(), error.to_string()))?;
 
     match request.type_.as_str() {
+        "project_attached" => {
+            let project_id = request
+                .payload
+                .get("projectId")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if state.registry.switch_context(project_id).is_none() {
+                return Err(("NOT_FOUND", "unknown project".to_string()));
+            }
+            authority
+                .attach_project(principal, project_id)
+                .map_err(|error| (error.code(), error.to_string()))?;
+            Ok(json!({"projectId": project_id}))
+        }
         "authenticate" => Ok(json!({})),
         "spawn" => {
             let has_conversation = request
@@ -2596,6 +2661,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn device_terminal_scope_changes_deny_writes_but_keep_reads() {
+        let authority = terminal_authority();
+        let paired = authority
+            .pair_device(crate::web::devices::PairRequest {
+                code: authority.issue_pairing_code().unwrap().code,
+                name: "Phone".into(),
+                platform: "test".into(),
+            })
+            .unwrap();
+        let principal = authority.verify_bearer(&paired.device_token).unwrap();
+        authority
+            .set_device_scopes(&paired.device_id, vec!["view".into()])
+            .unwrap();
+        let state = terminal_test_state();
+        let (tx, _rx) = mpsc::channel(16);
+        let mut ctx =
+            ConnectionContext::new(Arc::new(parking_lot::RwLock::new(HashMap::new())), false);
+        for (request, scope) in [
+            ("spawn", "terminal.create"),
+            ("input", "terminal.input"),
+            ("resize", "terminal.input"),
+            ("attach", "terminal.input"),
+            ("resume", "terminal.input"),
+        ] {
+            let result = handle(
+                Request {
+                    id: "r".into(),
+                    type_: request.into(),
+                    payload: json!({}),
+                },
+                &state,
+                &authority,
+                &principal,
+                &tx,
+                &mut ctx,
+            )
+            .await;
+            assert_eq!(terminal_request_scope(request), scope);
+            assert_eq!(result.unwrap_err().0, "FORBIDDEN", "{request}");
+        }
+        let read = handle(
+            Request {
+                id: "read".into(),
+                type_: "list".into(),
+                payload: json!({}),
+            },
+            &state,
+            &authority,
+            &principal,
+            &tx,
+            &mut ctx,
+        )
+        .await;
+        assert!(read.is_ok(), "{read:?}");
+        authority.revoke_device(&paired.device_id).unwrap();
+        let read = handle(
+            Request {
+                id: "read".into(),
+                type_: "list".into(),
+                payload: json!({}),
+            },
+            &state,
+            &authority,
+            &principal,
+            &tx,
+            &mut ctx,
+        )
+        .await;
+        assert_eq!(read.unwrap_err().0, "DEVICE_REVOKED");
+    }
+
+    #[tokio::test]
     async fn resume_requires_authenticated_scope() {
         use tower::ServiceExt;
 
@@ -3017,9 +3154,16 @@ mod tests {
             payload,
         };
 
-        let reply = handle(request(json!({})), &state, &authority, &principal, &tx, &mut ctx)
-            .await
-            .expect("unfiltered list");
+        let reply = handle(
+            request(json!({})),
+            &state,
+            &authority,
+            &principal,
+            &tx,
+            &mut ctx,
+        )
+        .await
+        .expect("unfiltered list");
         let terminals = reply["terminals"].as_array().expect("terminals array");
         assert_eq!(terminals.len(), 2);
         for terminal in terminals {
@@ -3402,7 +3546,10 @@ mod tests {
         ctx.phone_fit.insert(terminal_id.clone());
         release_phone_fits(&state, &mut ctx).await;
         assert!(ctx.phone_fit.is_empty());
-        let after_disconnect = client.status(&terminal_id).await.expect("disconnect status");
+        let after_disconnect = client
+            .status(&terminal_id)
+            .await
+            .expect("disconnect status");
         assert_eq!(
             (after_disconnect.cols, after_disconnect.rows),
             (80, 24),

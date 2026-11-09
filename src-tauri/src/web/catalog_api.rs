@@ -29,7 +29,7 @@ use tracing::{debug, info, warn};
 
 use crate::acp::{AcpCatalog, SetCatalogOptInRequest};
 use crate::web::auth::IngressProvenance;
-use crate::web::fs_api::IpcBody;
+use crate::web::operation_policy::PolicyIpcBody as IpcBody;
 use crate::web::operation_policy::{self, LocalOnlyOperation};
 use crate::web::ws::AppState;
 
@@ -124,15 +124,17 @@ pub async fn list(
 pub async fn set_opt_in(
     State(state): State<AppState>,
     Extension(provenance): Extension<IngressProvenance>,
+    principal: Option<Extension<crate::web::auth::RemotePrincipal>>,
+    authority: Option<Extension<std::sync::Arc<crate::web::auth::RemoteAccessAuthority>>>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Err(denial) =
-        operation_policy::authorize_local_only(provenance, LocalOnlyOperation::SetCatalogOptIn)
-    {
-        return (
-            StatusCode::OK,
-            Json(IpcBody::<()>::err(denial.message, denial.code)),
-        );
+    if let Err(denial) = operation_policy::authorize_request_operation(
+        provenance,
+        principal.as_ref().map(|principal| &principal.0),
+        authority.as_ref().map(|authority| authority.0.as_ref()),
+        LocalOnlyOperation::SetCatalogOptIn,
+    ) {
+        return (StatusCode::OK, Json(IpcBody::<()>::denied(denial)));
     }
     let req: SetCatalogOptInRequest = match serde_json::from_slice(&body) {
         Ok(req) => req,

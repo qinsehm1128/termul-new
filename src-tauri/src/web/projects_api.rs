@@ -36,6 +36,8 @@ pub struct IpcBody<T> {
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capability: Option<String>,
 }
 
 impl<T> IpcBody<T> {
@@ -45,6 +47,7 @@ impl<T> IpcBody<T> {
             data: Some(data),
             error: None,
             code: None,
+            capability: None,
         }
     }
 
@@ -54,6 +57,7 @@ impl<T> IpcBody<T> {
             data: None,
             error: Some(error.into()),
             code: Some(code.into()),
+            capability: None,
         }
     }
 }
@@ -131,17 +135,25 @@ fn apply_live_terminal_counts(payload: &mut ProjectListPayload, counts: &HashMap
 pub async fn set_default_project(
     State(state): State<AppState>,
     axum::Extension(provenance): axum::Extension<IngressProvenance>,
+    principal: Option<axum::Extension<crate::web::auth::RemotePrincipal>>,
+    authority: Option<axum::Extension<std::sync::Arc<crate::web::auth::RemoteAccessAuthority>>>,
     Json(req): Json<SetDefaultProjectRequest>,
 ) -> impl IntoResponse {
     // Loopback-only guard — this route mutates host state (persists the default
     // to `FileProjectRegistry` and broadcasts `projects_changed` to ALL
     // connected clients), so a LAN peer on a `0.0.0.0` bind must not reach it.
     // Mirrors the fs/git/workspace write routes' `check_local_only` (CWE-306).
-    if let Err(denial) = crate::web::operation_policy::authorize_local_only(
+    let operation = crate::web::operation_policy::LocalOnlyOperation::SetDefaultProject;
+    let authorization = crate::web::operation_policy::authorize_request_operation(
         provenance,
-        crate::web::operation_policy::LocalOnlyOperation::SetDefaultProject,
-    ) {
-        return Json(IpcBody::<()>::err(denial.message, denial.code));
+        principal.as_ref().map(|principal| &principal.0),
+        authority.as_ref().map(|authority| authority.0.as_ref()),
+        operation,
+    );
+    if let Err(denial) = authorization {
+        let mut body = IpcBody::<()>::err(denial.message, denial.code);
+        body.capability = Some(denial.capability.to_owned());
+        return Json(body);
     }
     let project_id = req.project_id;
     // Validate via switch_context (same path as `switch_project`).
@@ -814,7 +826,7 @@ mod tests {
         // The on-disk file carries the new default under the v3 field name.
         let saved = std::fs::read_to_string(&file).expect("persisted file exists");
         let v: serde_json::Value = serde_json::from_str(&saved).expect("valid json");
-        assert_eq!(v["schemaVersion"], 3);
+        assert_eq!(v["schemaVersion"], 4);
         assert_eq!(v["defaultProjectId"], "p-2");
 
         // P11 rollback: a second request with an UNKNOWN id must NOT corrupt

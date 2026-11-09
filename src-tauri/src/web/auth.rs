@@ -120,6 +120,7 @@ pub enum RemoteCapability {
     Read,
     Mutate,
     RecoveryInspect,
+    Scope(&'static str),
 }
 
 impl RemoteCapability {
@@ -129,6 +130,7 @@ impl RemoteCapability {
             Self::Read => "read",
             Self::Mutate => "mutate",
             Self::RecoveryInspect => "recovery_inspect",
+            Self::Scope(scope) => scope,
         }
     }
 }
@@ -156,6 +158,13 @@ pub enum RemoteRouteClass {
     AcpCatalog,
     AcpInstall,
     Worktree,
+    RemoteAccess,
+    RemoteDesktop,
+    RemoteDesktopWebSocket,
+    Pair,
+    AgentHooksStatus,
+    AgentHooksManage,
+    LocalOperator,
 }
 
 impl RemoteRouteClass {
@@ -182,30 +191,79 @@ impl RemoteRouteClass {
             Self::AcpCatalog => "acp_catalog",
             Self::AcpInstall => "acp_install",
             Self::Worktree => "worktree",
+            Self::RemoteAccess => "remote_access",
+            Self::RemoteDesktop => "remote_desktop",
+            Self::RemoteDesktopWebSocket => "remote_desktop_websocket",
+            Self::Pair => "pair",
+            Self::AgentHooksStatus => "agent_hooks_status",
+            Self::AgentHooksManage => "agent_hooks_manage",
+            Self::LocalOperator => "local_operator",
+        }
+    }
+
+    /// Scope policy shared with HTTP routes and future desktop WS-input handlers.
+    pub fn required_scope(self, method: &Method) -> Option<&'static str> {
+        let read = matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS);
+        match self {
+            Self::Health | Self::Pair => None,
+            Self::RemoteAccess | Self::AgentHooksManage | Self::LocalOperator => Some("manage"),
+            Self::AgentHooksStatus => Some("view"),
+            Self::RemoteDesktop => Some(if read {
+                "screen.view"
+            } else {
+                "screen.control"
+            }),
+            Self::AcpWebSocket | Self::TerminalWebSocket => Some("view"),
+            Self::RemoteDesktopWebSocket => Some("screen.view"),
+            _ if read => Some("view"),
+            Self::Git => Some("git.write"),
+            Self::Filesystem | Self::Worktree => Some("files.write"),
+            Self::QuickTerminal => Some("terminal.create"),
+            Self::AcpInstall | Self::AcpCatalog | Self::Mcp => Some("manage"),
+            Self::Project
+            | Self::CliSession
+            | Self::Workspace
+            | Self::Conversation
+            | Self::ScheduledTask
+            | Self::Recovery => Some("agent.run"),
+            Self::Skill | Self::Search | Self::MemoryIndex => Some("files.write"),
+            Self::FrontendLog => Some("view"),
         }
     }
 
     fn capability(self, method: &Method) -> Option<RemoteCapability> {
-        match self {
-            Self::Health => None,
-            Self::AcpWebSocket | Self::TerminalWebSocket => Some(RemoteCapability::Connect),
-            Self::Recovery => Some(RemoteCapability::RecoveryInspect),
-            _ if *method == Method::GET => Some(RemoteCapability::Read),
-            _ => Some(RemoteCapability::Mutate),
-        }
+        self.required_scope(method).map(RemoteCapability::Scope)
     }
 
     fn requires_http_bearer(self) -> bool {
         !matches!(
             self,
-            Self::Health | Self::AcpWebSocket | Self::TerminalWebSocket
+            Self::Health
+                | Self::Pair
+                | Self::AcpWebSocket
+                | Self::TerminalWebSocket
+                | Self::RemoteDesktopWebSocket
         )
     }
 
     /// Compatibility fallback for focused routers outside `web::router`.
     /// Production routes attach the enum directly and never log this path.
     fn from_path(path: &str) -> Option<Self> {
-        if path == "/health" {
+        if path.starts_with("/remote-desktop/") || path.starts_with("/api/remote-desktop/") {
+            Some(Self::LocalOperator)
+        } else if matches!(path, "/agent-hooks/install" | "/agent-hooks/uninstall") {
+            Some(Self::AgentHooksManage)
+        } else if path.starts_with("/agent-hooks/") {
+            Some(Self::AgentHooksStatus)
+        } else if path == "/pair" {
+            Some(Self::Pair)
+        } else if path == "/remote/desktop/stream" {
+            Some(Self::RemoteDesktopWebSocket)
+        } else if path.starts_with("/remote/desktop/") {
+            Some(Self::RemoteDesktop)
+        } else if path.starts_with("/remote/") {
+            Some(Self::RemoteAccess)
+        } else if matches!(path, "/health" | "/info") {
             Some(Self::Health)
         } else if path == "/ws" {
             Some(Self::AcpWebSocket)
@@ -257,11 +315,18 @@ impl RemoteRouteClass {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemotePrincipal {
+    device_id: String,
     authority_source: RemoteAuthoritySource,
     generation: u64,
 }
 
 impl RemotePrincipal {
+    pub fn device_id(&self) -> &str {
+        &self.device_id
+    }
+    pub fn is_legacy(&self) -> bool {
+        self.device_id == super::devices::LEGACY_DEVICE_ID
+    }
     #[must_use]
     pub fn authority_source(&self) -> RemoteAuthoritySource {
         self.authority_source
@@ -276,6 +341,7 @@ impl RemotePrincipal {
     pub(crate) fn for_tests(generation: u64) -> Self {
         Self {
             authority_source: RemoteAuthoritySource::Test,
+            device_id: super::devices::LEGACY_DEVICE_ID.into(),
             generation,
         }
     }
@@ -289,6 +355,11 @@ pub enum RemoteAuthError {
     RateLimited,
     Forbidden,
     Provisioning,
+    ScopeDenied(&'static str),
+    DeviceRevoked,
+    InvalidPairingCode,
+    DeviceLimit,
+    InvalidDevice,
 }
 
 impl RemoteAuthError {
@@ -299,13 +370,23 @@ impl RemoteAuthError {
             Self::InvalidCredential => "UNAUTHORIZED",
             Self::InvalidOrigin | Self::Forbidden => "FORBIDDEN",
             Self::RateLimited => "RATE_LIMITED",
+            Self::ScopeDenied(_) => "FORBIDDEN",
+            Self::DeviceRevoked => "DEVICE_REVOKED",
+            Self::InvalidPairingCode => "INVALID_PAIRING_CODE",
+            Self::DeviceLimit => "DEVICE_LIMIT_REACHED",
+            Self::InvalidDevice => "INVALID_DEVICE",
         }
     }
 
     #[must_use]
     pub const fn status(self) -> StatusCode {
         match self {
-            Self::InvalidCredential => StatusCode::UNAUTHORIZED,
+            Self::InvalidCredential | Self::DeviceRevoked | Self::InvalidPairingCode => {
+                StatusCode::UNAUTHORIZED
+            }
+            Self::ScopeDenied(_) => StatusCode::FORBIDDEN,
+            Self::DeviceLimit => StatusCode::CONFLICT,
+            Self::InvalidDevice => StatusCode::BAD_REQUEST,
             Self::InvalidOrigin | Self::Forbidden => StatusCode::FORBIDDEN,
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             Self::Unconfigured | Self::Provisioning => StatusCode::INTERNAL_SERVER_ERROR,
@@ -320,7 +401,13 @@ impl RemoteAuthError {
             Self::InvalidCredential => "remote access credential is missing or invalid",
             Self::InvalidOrigin => "request Origin is missing or not allowed",
             Self::RateLimited => "too many failed authentication attempts",
-            Self::Forbidden => "remote principal lacks the required capability",
+            Self::Forbidden | Self::ScopeDenied(_) => {
+                "remote principal lacks the required capability"
+            }
+            Self::DeviceRevoked => "device credential has been revoked; pair again",
+            Self::InvalidPairingCode => "pairing code is invalid, expired, or already consumed",
+            Self::DeviceLimit => "device limit reached",
+            Self::InvalidDevice => "invalid device or device parameters",
         }
     }
 }
@@ -469,8 +556,11 @@ pub struct RemoteAccessAuthority {
     /// `allowed_origins`. Lock order: `allowed_origins` before `lan_origins`.
     lan_origins: RwLock<VecDeque<String>>,
     failures: Mutex<FailureLimiter>,
+    pairing_failures: Mutex<FailureLimiter>,
     ingress: RwLock<IngressProvenance>,
     generation_tx: watch::Sender<RemoteGenerationState>,
+    pub(super) devices: Mutex<super::devices::DeviceRegistry>,
+    pub(super) devices_tx: watch::Sender<u64>,
 }
 
 impl std::fmt::Debug for RemoteAccessAuthority {
@@ -503,8 +593,11 @@ impl RemoteAccessAuthority {
             allowed_origins: RwLock::new(HashSet::new()),
             lan_origins: RwLock::new(VecDeque::new()),
             failures: Mutex::new(FailureLimiter::default()),
+            pairing_failures: Mutex::new(FailureLimiter::default()),
             ingress: RwLock::new(IngressProvenance::LocalOperator),
             generation_tx,
+            devices: Mutex::new(super::devices::DeviceRegistry::default()),
+            devices_tx: watch::channel(0).0,
         }
     }
 
@@ -525,8 +618,11 @@ impl RemoteAccessAuthority {
             allowed_origins: RwLock::new(HashSet::new()),
             lan_origins: RwLock::new(VecDeque::new()),
             failures: Mutex::new(FailureLimiter::default()),
+            pairing_failures: Mutex::new(FailureLimiter::default()),
             ingress: RwLock::new(IngressProvenance::LocalOperator),
             generation_tx,
+            devices: Mutex::new(super::devices::DeviceRegistry::default()),
+            devices_tx: watch::channel(0).0,
         }
     }
 
@@ -573,8 +669,11 @@ impl RemoteAccessAuthority {
             allowed_origins: RwLock::new(HashSet::new()),
             lan_origins: RwLock::new(VecDeque::new()),
             failures: Mutex::new(FailureLimiter::default()),
+            pairing_failures: Mutex::new(FailureLimiter::default()),
             ingress: RwLock::new(IngressProvenance::LocalOperator),
             generation_tx,
+            devices: Mutex::new(super::devices::DeviceRegistry::default()),
+            devices_tx: watch::channel(0).0,
         }
     }
 
@@ -593,6 +692,10 @@ impl RemoteAccessAuthority {
     }
 
     #[must_use]
+    pub(super) fn host_credential_fingerprint(&self) -> Option<[u8; 32]> {
+        self.credential.read().digest
+    }
+
     pub fn subscribe_generation(&self) -> watch::Receiver<RemoteGenerationState> {
         self.generation_tx.subscribe()
     }
@@ -628,12 +731,14 @@ impl RemoteAccessAuthority {
                 return Err(RemoteAuthError::Provisioning);
             }
         }
+        self.rotate_device_credentials(digest(bearer.as_bytes()))?;
         credential.generation = generation;
         credential.digest = Some(digest(bearer.as_bytes()));
         let source = credential.source;
         drop(credential);
         self.clear_origins();
         *self.failures.lock() = FailureLimiter::default();
+        *self.pairing_failures.lock() = FailureLimiter::default();
         let _ = self.generation_tx.send(RemoteGenerationState {
             generation,
             active: true,
@@ -723,6 +828,7 @@ impl RemoteAccessAuthority {
         if invalidated {
             self.clear_origins();
             *self.failures.lock() = FailureLimiter::default();
+            *self.pairing_failures.lock() = FailureLimiter::default();
             let _ = self.generation_tx.send(RemoteGenerationState {
                 generation,
                 active: false,
@@ -753,6 +859,7 @@ impl RemoteAccessAuthority {
             generation_matched
         };
         *self.failures.lock() = FailureLimiter::default();
+        *self.pairing_failures.lock() = FailureLimiter::default();
         let failure_state_cleared = generation_matched;
         if credential_invalidated {
             let _ = self.generation_tx.send(RemoteGenerationState {
@@ -794,6 +901,7 @@ impl RemoteAccessAuthority {
         let generation = credential.generation;
         drop(credential);
         *self.failures.lock() = FailureLimiter::default();
+        *self.pairing_failures.lock() = FailureLimiter::default();
         let _ = self.generation_tx.send(RemoteGenerationState {
             generation,
             active: true,
@@ -891,21 +999,67 @@ impl RemoteAccessAuthority {
         let credential = self.credential.read();
         let expected = match credential.digest {
             Some(expected) => expected,
-            None if credential.generation > 0
-                && credential.source != RemoteAuthoritySource::Unconfigured =>
-            {
-                return Err(RemoteAuthError::InvalidCredential);
-            }
+            None if credential.generation > 0 => return Err(RemoteAuthError::InvalidCredential),
             None => return Err(RemoteAuthError::Unconfigured),
         };
         let candidate = digest(token.as_bytes());
-        if bool::from(expected.ct_eq(&candidate)) {
-            Ok(RemotePrincipal {
-                authority_source: credential.source,
-                generation: credential.generation,
-            })
+        let source = credential.source;
+        let generation = credential.generation;
+        drop(credential);
+        let device_id = if bool::from(expected.ct_eq(&candidate)) {
+            if self.devices.lock().legacy_revoked_at.is_some() {
+                return Err(RemoteAuthError::DeviceRevoked);
+            }
+            super::devices::LEGACY_DEVICE_ID.into()
         } else {
-            Err(RemoteAuthError::InvalidCredential)
+            self.verify_device_digest(candidate)?
+        };
+        Ok(RemotePrincipal {
+            authority_source: source,
+            generation,
+            device_id,
+        })
+    }
+
+    /// Pairing has a separate bounded per-peer throttle, so guessing a code
+    /// cannot lock out a legitimate device bearer (or grow state without bound).
+    pub fn pair_device_for_peer(
+        &self,
+        request: super::devices::PairRequest,
+        peer: IpAddr,
+    ) -> Result<super::devices::PairResponse, RemoteAuthError> {
+        let key = FailureKey {
+            generation: self.generation_state().generation,
+            identity: failure_identity(peer),
+        };
+        let at = Instant::now();
+        {
+            let mut failures = self.pairing_failures.lock();
+            failures.prune_expired(at);
+            if failures
+                .states
+                .get(&key)
+                .and_then(|state| state.locked_until)
+                .is_some_and(|until| until > at)
+            {
+                return Err(RemoteAuthError::RateLimited);
+            }
+        }
+        match self.pair_device(request) {
+            Ok(response) => {
+                self.pairing_failures.lock().states.remove(&key);
+                Ok(response)
+            }
+            Err(error @ (RemoteAuthError::InvalidPairingCode | RemoteAuthError::InvalidDevice)) => {
+                if self.pairing_failures.lock().record_failure(key, at)
+                    == RemoteAuthError::RateLimited
+                {
+                    Err(RemoteAuthError::RateLimited)
+                } else {
+                    Err(error)
+                }
+            }
+            Err(error) => Err(error),
         }
     }
 
@@ -923,22 +1077,15 @@ impl RemoteAccessAuthority {
         principal: &RemotePrincipal,
         capability: RemoteCapability,
     ) -> Result<(), RemoteAuthError> {
-        let credential = self.credential.read();
-        if credential.digest.is_none()
-            || principal.generation != credential.generation
-            || principal.authority_source != credential.source
-            || principal.authority_source == RemoteAuthoritySource::Unconfigured
-        {
-            log::warn!(
-                target: "se_manager::web::auth",
-                "operation=capability_authorize generation={} capability={} stable_code={}",
-                principal.generation,
-                capability.as_str(),
-                RemoteAuthError::Forbidden.code()
-            );
-            return Err(RemoteAuthError::Forbidden);
-        }
-        Ok(())
+        self.validate_principal(principal)?;
+        let scope = match capability {
+            RemoteCapability::Scope(scope) => scope,
+            RemoteCapability::Connect
+            | RemoteCapability::Read
+            | RemoteCapability::RecoveryInspect => "view",
+            RemoteCapability::Mutate => "manage",
+        };
+        self.require_scope(principal, scope)
     }
 
     pub fn verify_origin(&self, origin: Option<&HeaderValue>) -> Result<(), RemoteAuthError> {
@@ -973,6 +1120,7 @@ impl RemoteAccessAuthority {
         // lock out a caller that presents the correct generation bearer.
         match self.verify_bearer(token) {
             Ok(principal) => Ok(principal),
+            Err(RemoteAuthError::DeviceRevoked) => Err(RemoteAuthError::DeviceRevoked),
             Err(error) => {
                 let generation = {
                     let credential = self.credential.read();
@@ -1013,7 +1161,7 @@ impl RemoteAccessAuthority {
     }
 }
 
-fn generate_token() -> Result<String, RemoteAuthError> {
+pub(super) fn generate_token() -> Result<String, RemoteAuthError> {
     let mut bytes = [0_u8; TOKEN_BYTES];
     getrandom::getrandom(&mut bytes).map_err(|_| RemoteAuthError::Provisioning)?;
     Ok(URL_SAFE_NO_PAD.encode(bytes))
@@ -1026,7 +1174,7 @@ fn validate_token(token: &str) -> Result<(), RemoteAuthError> {
     Ok(())
 }
 
-fn digest(bytes: &[u8]) -> [u8; 32] {
+pub(super) fn digest(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
 
@@ -1438,6 +1586,13 @@ struct AuthFailureBody {
 }
 
 pub fn auth_error_response(error: RemoteAuthError) -> Response {
+    if let RemoteAuthError::ScopeDenied(capability) = error {
+        return (
+            error.status(),
+            Json(serde_json::json!({"code": error.code(), "capability": capability})),
+        )
+            .into_response();
+    }
     (
         error.status(),
         Json(AuthFailureBody {
@@ -1461,6 +1616,16 @@ pub async fn capability_middleware(
         .or_else(|| RemoteRouteClass::from_path(request.uri().path()));
     let Some(route_class) = route_class else {
         return next.run(request).await;
+    };
+    // This exact route is a WS handler with first-frame authentication. Never
+    // exempt desktop HTTP snapshots merely because an Upgrade header is set.
+    let route_class = if route_class == RemoteRouteClass::RemoteDesktop
+        && request.uri().path() == "/remote/desktop/stream"
+        && request.method() == Method::GET
+    {
+        RemoteRouteClass::RemoteDesktopWebSocket
+    } else {
+        route_class
     };
     let method = request.method().clone();
     let Some(capability) = route_class.capability(&method) else {
@@ -1545,7 +1710,16 @@ pub async fn capability_middleware(
             return auth_error_response(error);
         }
     };
-    if let Err(error) = authority.authorize(&principal, capability) {
+    let authorization = authority.authorize(&principal, capability).and_then(|()| {
+        if route_class == RemoteRouteClass::LocalOperator
+            && provenance != IngressProvenance::LocalOperator
+        {
+            authority.deny_scope(&principal, "manage")
+        } else {
+            Ok(())
+        }
+    });
+    if let Err(error) = authorization {
         log_boundary_outcome(
             &method,
             route_class,
@@ -1594,7 +1768,7 @@ fn reject_invalid_optional_terminal_bearer(
         .map_or(IpAddr::from([0, 0, 0, 0]), |value| value.0.ip());
     match authority.verify_bearer_for_peer(token, peer) {
         Ok(principal) => {
-            if let Err(error) = authority.authorize(&principal, RemoteCapability::Mutate) {
+            if let Err(error) = authority.authorize(&principal, RemoteCapability::Scope("view")) {
                 log_boundary_outcome(
                     request.method(),
                     RemoteRouteClass::TerminalWebSocket,
@@ -2350,7 +2524,7 @@ mod tests {
         for required in [
             "operation=remote_boundary",
             "route_class=conversation",
-            "capability=mutate",
+            "capability=agent.run",
             "provenance=public_tunnel",
             "stable_code=OK",
             "http_status=204",
@@ -2412,7 +2586,7 @@ mod tests {
             for required in [
                 "method=GET",
                 "route_class=conversation",
-                "capability=read",
+                "capability=view",
                 "provenance=local_operator",
                 "stable_code=OK",
                 "http_status=200",

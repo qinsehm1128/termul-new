@@ -29,13 +29,13 @@ artifact: {"work_id":null,"created_by_session":"session_lizard_1794024668506_6ff
 
 ### 统计
 
-本表按 `src-tauri/src/lib.rs` 的 `generate_handler!` 逐条核对（2026-11-07 宿主 MCP、SSH 命令黑名单及独立记忆入口退役同步后用脚本比对）：后端共 327 个命令，全部已分类。合并为同一 op 的命令按各自原有分类计入，重复登记的只计一次。
+本表按 `src-tauri/src/lib.rs` 的 `generate_handler!` 逐条核对（2026-11-07 宿主 MCP、SSH 命令黑名单及独立记忆入口退役同步后用脚本比对）：后端共 344 个命令，全部已分类。合并为同一 op 的命令按各自原有分类计入，重复登记的只计一次。
 
 | 来源 | 总数 | OPEN | OPEN-REDACTED | SECRET-EXCLUDED | INTERNAL |
 |---|---|---|---|---|---|
-| 后端 Tauri 命令 | 327 | 290 | 12 | 8 | 17 |
+| 后端 Tauri 命令 | 344 | 306 | 12 | 9 | 17 |
 | 前端独有能力（无 Rust 命令） | 39 | 39 | 0 | 0 | 0 |
-| **合计** | **366** | **329** | **12** | **8** | **17** |
+| **合计** | **383** | **345** | **12** | **9** | **17** |
 
 各部分的范围：
 - A：Agent、会话、对话、记忆、Skills、定时任务、AI 渠道、MCP、远程访问、插件；
@@ -293,6 +293,15 @@ Conventions: `confirm=none` (read or harmless), `grant` (install-time grant is e
 | se.remote.getAccessIntent | remote_access_intent_get `commands.rs:4896` | R | profile | none | OPEN | out `{wanted, publishMode}` |
 | se.remote.setAccessIntent | remote_access_intent_set `commands.rs:4909` | W | profile | grant | OPEN | in `{wanted?, publishMode?}` (lan|tunnel) |
 | se.remote.rotateCredential | remote_server_rotate_credential `commands.rs:4941` | W | profile | per-call | OPEN-REDACTED | rotates the remote bearer; out `RemoteStatus` — strip the new token |
+| se.remote.devices.list | remote_devices_list `web/devices_api.rs` | R | profile | none | OPEN | local operator/manage only; host-wide device metadata and connection counts, never credential digests |
+| se.remote.devices.rename | remote_device_rename `web/devices_api.rs` | W | profile | grant | OPEN | local operator/manage only; in id,name |
+| se.remote.devices.setScopes | remote_device_set_permissions `web/devices_api.rs` | W | profile | per-call | OPEN | local operator/manage only; eight grantable scopes; remote devices can never receive manage |
+| se.remote.devices.grantAll | remote_device_grant_all `web/devices_api.rs` | W | profile | per-call | OPEN | local operator/manage only; grants eight scopes, excludes manage |
+| se.remote.devices.disconnect | remote_device_disconnect `web/devices_api.rs` | W | profile | grant | OPEN | local operator/manage only; closes this device's connections without invalidating credential |
+| se.remote.devices.revoke | remote_device_revoke `web/devices_api.rs` | W | profile | per-call | OPEN | local operator/manage only; durable credential revocation and WS policy close 1008; re-pair required |
+| se.remote.devices.disconnectAll | remote_devices_disconnect_all `web/devices_api.rs` | W | profile | per-call | OPEN | local operator/manage only; force revokes all paired devices and legacy host bearer |
+| se.remote.devices.audit | remote_devices_audit `web/devices_api.rs` | R | profile | none | OPEN | local operator/manage only; durable boundary events contain device ids, never tokens |
+| se.remote.pairingCode | remote_pairing_code `web/devices_api.rs` | S | profile | — | SECRET-EXCLUDED | one-time pairing credential, TTL60s; desktop operator only; never expose through plugins |
 | se.remote.syncProjects | remote_sync_projects `commands.rs:5030` | W | project | grant | OPEN | in `{projects[], groups[], defaultProjectId}`; broadcasts `acp:projects_changed`; project summaries redact env by omission |
 | se.remote.syncChatHistory | remote_sync_chat_history `commands.rs:5128` | W | project | grant | OPEN | pushes desktop chat history into the project file; **long-running** |
 | se.remote.syncMcpRegistry | remote_sync_mcp_registry `commands.rs:5157` | W | project | grant | OPEN-REDACTED | in registry document (may hold env/header secrets) → `mcp-servers.json`; never echo |
@@ -310,11 +319,12 @@ Conventions: `confirm=none` (read or harmless), `grant` (install-time grant is e
 | se.sessions.resolveCli | resolve_cli_sessions_cmd `cli_session/commands.rs:24` | R | project | none | OPEN | in `{files[]}`; reads those transcripts |
 | se.terminals.detectLiveAgents | detect_live_agent_sessions_cmd `cli_session/commands.rs:40`; GET /cli-sessions/live (`web/cli_session_api.rs`) | R | terminal | none | OPEN | in `rootPids[]`; reads this machine's process table. Web route derives roots from live terminal-service PTYs and returns `{sessions:[{terminalId,projectId?,rootPid,agentId,sessionId,selfDev?,codexHome?,cwd?}],scannedAt}` — read-only, no secrets |
 
-| se.agentHooks.status | agent_hooks_status `agent_hooks/commands.rs`; GET /agent-hooks/status (`web/agent_hooks_api.rs`) | R | global | none | OPEN | read-only per-agent install/version/config-path status; never installs or probes by running an agent |
-| se.agentHooks.preview | agent_hooks_preview `agent_hooks/commands.rs`; GET /agent-hooks/preview (`web/agent_hooks_api.rs`) | R | global | none | OPEN | owner-only read-only exact managed config diff preview in `{agent}`; no config/backup/script writes |
-| se.agentHooks.install | agent_hooks_install `agent_hooks/commands.rs`; POST /agent-hooks/install (`web/agent_hooks_api.rs`) | W | global | explicit click | OPEN | owner-only host config write; in `{agent}`; backup + atomic managed-entry merge; exact path shown before confirmation; never automatic |
-| se.agentHooks.uninstall | agent_hooks_uninstall `agent_hooks/commands.rs`; POST /agent-hooks/uninstall (`web/agent_hooks_api.rs`) | W | global | explicit click | OPEN | owner-only removal of Se-owned entries/files; preserves concurrent user edits and restores original bytes when unchanged |
-| se.agentHooks.events | agent_hook_events `agent_hooks/commands.rs`; GET /agent-hooks/events (`web/agent_hooks_api.rs`) | R | project | none | OPEN | bounded metadata-only cursor tail in `{after?}`; no prompts, tool inputs or secrets; C1 can tail by sequence |
+| se.agentHooks.status | agent_hooks_status `agent_hooks/commands.rs`; GET /agent-hooks/status (`web/agent_hooks_api.rs`) | R | global | none | OPEN | read-only per-agent install/version/config-path status using login-shell PATH and bounded version probes; never installs |
+| se.agentHooks.preview | agent_hooks_preview `agent_hooks/commands.rs`; GET /agent-hooks/preview (`web/agent_hooks_api.rs`) | R | global | none | OPEN | under view grant, read-only exact managed config diff preview in `{agent}`; no config/backup/script writes |
+| se.agentHooks.install | agent_hooks_install `agent_hooks/commands.rs`; POST /agent-hooks/install (`web/agent_hooks_api.rs`) | W | global | per-call | OPEN | owner-only host config write; in `{agent}`; backup + atomic managed-entry merge; exact path shown before confirmation; never automatic |
+| se.agentHooks.uninstall | agent_hooks_uninstall `agent_hooks/commands.rs`; POST /agent-hooks/uninstall (`web/agent_hooks_api.rs`) | W | global | per-call | OPEN | owner-only removal of Se-owned entries/files; preserves concurrent user edits and restores original bytes when unchanged |
+| se.agentHooks.events | agent_hook_events `agent_hooks/commands.rs`; GET /agent-hooks/events (`web/agent_hooks_api.rs`) | R | global | none | OPEN | bounded metadata-only cursor tail in `{after?}` under host view grant; no prompts, tool inputs or secrets; C1 can tail by sequence; WS subscriptions filter selected project, not a project ACL |
+| se.agentHooks.ingest | POST /agent-hooks/{agent} (`agent_hooks/server.rs`) | W | terminal | none | INTERNAL | native-host-only ingestion for se.agentHooks.events; isolated IPv4 loopback listener, per-launch Bearer and PTY identity headers; never mounted on remote HTTP router, no Tauri/plugin twin, no secret-returning API |
 
 ---
 
@@ -932,6 +942,27 @@ bridge 的独立 token 不是外部 MCP bearer，也不是插件授权令牌。H
 - **纯管理 preview：** `mcp_host_access_preview(request)` 输入 `{profileId,operation:"execute"或"job_start",command,policy?:HostAccessPolicy}`，policy 是可选未保存草稿；输出 `{outcome:"matched"或"not_matched",matches:[{id,source:"global"或"profile"}],policyRevision,draft,blockedBy?}`。返回匹配 ID/来源，不回显原始 command、pattern 或匹配片段；非法规则经 IPC 错误返回，不伪装成 `not_matched`。未命中不等于可执行，仍需展示 blockedBy；draft 不写盘、不授予权限、不替换权威策略。
 - **无执行副作用与隐私：** preview 不读取 credentials、不联网、不取得 worker permit/排队、不创建 jobs、不持久化；允许读取必要的策略/profile 管理元数据，不宣称零磁盘读取。测试文本/草稿只在内存，不进 URL、localStorage 或 analytics；日志/审计仅稳定操作、结果码、revision 等元数据，不记 command、pattern、匹配片段或完整异常。规则字段本身不是凭据值，但管理策略/规则文本可能敏感，仍需按调用方 scope 最小化投影，不能把管理员完整 policy 公开给无权限插件。
 - **transport 已接线：** IPC `src-tauri/src/commands.rs:5679-5693`、注册 `src-tauri/src/lib.rs:4066`；HTTP `POST /mcp/host/access/preview` 对应 `src-tauri/src/web/mcp_host_api.rs:120-140`，`src-tauri/src/web/router.rs:83,95` 在两种 provenance 分支均注册（请求 body 上限 1 MiB），但 handler 仍 `require_local`：无 principal 401，PublicTunnel/非 LocalOperator 403，缺服务返回 `UNAVAILABLE`。HTTP twin 不另计能力；桌面、shared-live、standalone 与 browser 复用同一 preview 服务，不提供 public tunnel 只读豁免。
+
+### Remote desktop host (P0/P1/P2)
+
+| op id | source cmd (file:line) | class | scope | confirm | exposure | notes |
+|---|---|---|---|---|---|---|
+| se.remote.desktop.getSettings | get_remote_desktop_settings — remote/desktop.rs | R | profile | none | OPEN | Local operator only; `{supported,viewEnabled,controlEnabled,permissions:{screenRecording,accessibility}}`; view defaults on, control off. Browser facade returns unsupported; Linux host supported:false. No secrets. |
+| se.remote.desktop.setSettings | set_remote_desktop_settings — remote/desktop.rs | W | profile | grant | OPEN | Local operator only; `(viewEnabled,controlEnabled)` returns complete settings. Paired devices cannot grant themselves control. Turning control on rearms native input; off invalidates controllers. |
+| se.remote.desktop.emergencyStop | remote_desktop_emergency_stop — remote/desktop.rs | W | profile | none | OPEN | Safety action requires no confirmation: kill input, close every desktop stream, persist control=false. In-app ⌃⌥⌘. fallback only (no global-shortcut dependency). |
+
+| op id | source route | class | scope | confirm | exposure | notes |
+|---|---|---|---|---|---|---|
+| se.remote.desktop.info | GET /remote/desktop/info — web/router.rs; web/remote_desktop.rs | R | profile | none | OPEN | RemoteDesktop classification, screen.view plus viewEnabled. Returns settings/permissions plus displays; Linux supported:false and displays:[]. LAN and tunnel share policy. |
+| se.remote.desktop.screenshot | GET /remote/desktop/screenshot — web/router.rs; web/remote_desktop.rs | R | profile | none | OPEN | RemoteDesktop; screen.view plus viewEnabled; query display, format=jpeg/png, quality. Image bytes, no-store and MIME; pixels never logged. |
+| se.remote.desktop.stream | GET /remote/desktop/stream — web/router.rs; web/remote_desktop.rs | W | profile | per-call | OPEN | RemoteDesktop WS upgrade; Origin and bearer/first-frame auth match terminal WS. Viewing needs screen.view plus viewEnabled; each input needs screen.control plus desktop-local controlEnabled. Stream begin is caller initiation; local consent remains mandatory. Device-tagged cancellation closes 1008; bounded try_send drops video and requests keyframe. |
+| se.remote.desktop.webGetSettings | GET /remote-desktop/settings; GET /api/remote-desktop/settings — web/router.rs | R | profile | none | OPEN | LocalOperator only; facade parity with get_remote_desktop_settings; paired tokens/tunnel cannot operate consent. |
+| se.remote.desktop.webSetSettings | PUT /remote-desktop/settings; PUT /api/remote-desktop/settings — web/router.rs | W | profile | grant | OPEN | LocalOperator only; full camelCase boolean update; same persistence as Tauri. |
+| se.remote.desktop.webEmergencyStop | POST /remote-desktop/stop; POST /api/remote-desktop/stop — web/router.rs | W | profile | none | OPEN | LocalOperator safety stop, returns `{ok:true}`. Closes viewers/controllers and disables control. |
+
+| event id | source emit (file:line) | payload summary | rate | scope |
+|---|---|---|---|---|
+| remote-desktop://state | remote/desktop.rs | `{viewers,controllers,display,controlEnabled}`; counts and selected display identity only, never pixels/input/text | activity changes and active-session replay | profile |
 
 ## 不变量
 
