@@ -24,6 +24,10 @@ final class ConnectionStore {
     var surface: WorkspaceSurface = .chat
     var errorMessage: String?
     var isScanning = false
+    /// A connected screen asked for a fresh pairing (its saved origin or its
+    /// credential can no longer open the host). Transient: the home screen
+    /// consumes it by presenting the pairing sheet.
+    var pairingRequested = false
 
     init() {
         savedLinks = Self.load()
@@ -58,6 +62,18 @@ final class ConnectionStore {
     func disconnect() {
         activeLink = nil
         surface = .chat
+    }
+
+    /// Leave a host that cannot be opened and hand the user the pairing sheet.
+    ///
+    /// Used instead of a bare retry when the saved origin no longer reaches the
+    /// host or the host refuses this device's credential: only a fresh scan can
+    /// supply the other origin or the new credential.
+    func requestRePairing() {
+        disconnect()
+        errorMessage = nil
+        pairingRequested = true
+        HostLog.session.info("Requested a fresh pairing")
     }
 
     func forget(_ link: RemoteLink) {
@@ -109,7 +125,7 @@ final class ConnectionStore {
             return SavedLinkRecord(
                 id: link.id,
                 title: link.title,
-                origin: link.originURL.absoluteString,
+                origin: link.savedOrigin,
                 createdAt: link.createdAt
             )
         }
@@ -161,7 +177,7 @@ private enum ConnectionStorePlaceholder {
             SavedLinkRecord(
                 id: $0.id,
                 title: $0.title,
-                origin: $0.originURL.absoluteString,
+                origin: $0.savedOrigin,
                 createdAt: $0.createdAt
             )
         }

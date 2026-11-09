@@ -64,6 +64,14 @@ struct HostHTTP: Sendable {
         credentials.apply(to: &request)
         let (data, response) = try await HostURLSession.shared.data(for: request)
         let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // A 401/403 means the host is up and spoke to us: the saved pairing
+        // credential is no longer accepted. Reporting that as "cannot reach the
+        // Mac" sends the user to debug Wi-Fi for a credential problem.
+        if let http = response as? HTTPURLResponse, http.statusCode == 401 || http.statusCode == 403 {
+            throw HostError.rePairingRequired(
+                String(localized: "This host no longer accepts this device's pairing. Scan its QR code again.")
+            )
+        }
         guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode), text == "OK" || text.hasPrefix("OK") else {
             if RemoteLink.isPrivateNetworkHost(origin.host() ?? "") {
                 throw HostError.network(String(localized: "The phone could not reach the Mac on this Wi-Fi. Confirm remote access is on and both devices are on the same network."))

@@ -59,6 +59,10 @@ final class WorkspaceSession {
     var workspaceTab: WorkspaceTab = .chat
     var workspace: WorkspaceKind = .home
     var phase: SessionPhase = .idle
+    /// The last open failed in a way a retry cannot fix: the saved origin no
+    /// longer reaches the host, or the host refuses this device's credential.
+    /// The caller offers a pairing scan instead of another retry.
+    private(set) var needsRePairing = false
     /// Software keyboard is covering the terminal tab. Chrome hides while typing.
     var terminalKeyboardVisible = false
     var terminalBlurToken: UInt64 = 0
@@ -136,6 +140,7 @@ final class WorkspaceSession {
             }
         }
         phase = .connecting
+        needsRePairing = false
         HostLog.session.info("Host connect started")
         do {
             await HostNetwork.waitUntilReady()
@@ -163,6 +168,7 @@ final class WorkspaceSession {
         } catch {
             guard startEpoch == epoch, !Task.isCancelled else { return }
             HostLog.session.error("Host connect failed after restart-safe retries")
+            needsRePairing = PairingRecovery.needsRePairing(error)
             phase = .failed(error.localizedDescription)
         }
     }

@@ -122,33 +122,68 @@ struct WorkspaceView: View {
     }
 
     private func failedState(_ message: String) -> some View {
-        VStack(spacing: 16) {
+        let needsRePairing = session.needsRePairing
+        return VStack(spacing: 16) {
             SeStatusBadge(status: .failed)
-            Text("Could not open this desk")
+            Text(needsRePairing
+                ? String(localized: "Pairing needed")
+                : String(localized: "Could not open this desk"))
                 .font(SeTheme.display)
                 .multilineTextAlignment(.center)
-            Text(message)
+            Text(needsRePairing
+                ? String(localized: "This host answers at a different address or no longer accepts this device. Scan its QR code once to pair again.")
+                : message)
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             VStack(spacing: 10) {
-                Button {
-                    Task { await session.retry() }
-                } label: {
-                    Text("Retry")
-                        .font(.body.bold())
-                        .frame(maxWidth: .infinity)
-                        .frame(minHeight: 48)
+                if needsRePairing {
+                    // A retry re-dials the same dead origin with the same
+                    // rejected credential. The scan is the recovery, so it is
+                    // the primary action, not a footnote.
+                    Button {
+                        store.requestRePairing()
+                    } label: {
+                        Text("Scan the QR code again")
+                            .font(.body.bold())
+                            .frame(maxWidth: .infinity)
+                            .frame(minHeight: 48)
+                    }
+                    .buttonStyle(SePrimaryButtonStyle())
+                    .accessibilityIdentifier("connect-repair")
+                } else {
+                    Button {
+                        Task { await session.retry() }
+                    } label: {
+                        Text("Retry")
+                            .font(.body.bold())
+                            .frame(maxWidth: .infinity)
+                            .frame(minHeight: 48)
+                    }
+                    .buttonStyle(SePrimaryButtonStyle())
                 }
-                .buttonStyle(SePrimaryButtonStyle())
                 Button {
-                    store.disconnect()
+                    if needsRePairing {
+                        Task { await session.retry() }
+                    } else {
+                        store.disconnect()
+                    }
                 } label: {
-                    Text("Back")
+                    Text(needsRePairing ? String(localized: "Retry anyway") : String(localized: "Back"))
                         .frame(maxWidth: .infinity)
                         .frame(minHeight: 44)
                 }
                 .buttonStyle(.bordered)
+                if needsRePairing {
+                    Button {
+                        store.disconnect()
+                    } label: {
+                        Text("Back")
+                            .frame(maxWidth: .infinity)
+                            .frame(minHeight: 44)
+                    }
+                    .buttonStyle(.bordered)
+                }
             }
             .frame(maxWidth: 280)
         }

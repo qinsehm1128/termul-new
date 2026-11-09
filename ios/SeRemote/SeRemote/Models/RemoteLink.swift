@@ -40,6 +40,14 @@ struct RemoteLink: Identifiable, Hashable, Codable {
         return components.url ?? accessURL
     }
 
+    /// What the saved-host record keeps: the origin, port included, without the
+    /// bearer (the secret lives in the keychain). The port belongs to the host
+    /// process that issued the QR, so the desktop has to present the same one on
+    /// its next launch for this record to keep working.
+    var savedOrigin: String {
+        originURL.absoluteString
+    }
+
     func url(for surface: WorkspaceSurface) -> URL {
         var base = accessURL.absoluteString
         if let hash = base.firstIndex(of: "#") {

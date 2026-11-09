@@ -98,7 +98,15 @@ struct HomeView: View {
         }
         .background(palette.canvas.ignoresSafeArea())
         .foregroundStyle(palette.ink)
-        .onAppear { activity.reload() }
+        .onAppear {
+            activity.reload()
+            consumePairingRequest()
+        }
+        // The connected screen asks for a scan when retrying cannot help; the
+        // home screen owns the pairing sheet, so the request is consumed here.
+        .onChange(of: store.pairingRequested) { _, requested in
+            if requested { consumePairingRequest() }
+        }
         .sheet(isPresented: $showPairing, onDismiss: connectPendingLink) {
             ShellPairingView { link in
                 pendingLink = link
@@ -269,5 +277,12 @@ struct HomeView: View {
         guard let link = pendingLink else { return }
         pendingLink = nil
         open(link)
+    }
+
+    private func consumePairingRequest() {
+        guard store.pairingRequested else { return }
+        store.pairingRequested = false
+        store.dismissError()
+        showPairing = true
     }
 }

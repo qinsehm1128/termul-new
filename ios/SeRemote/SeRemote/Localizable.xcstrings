@@ -1,6 +1,56 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Pairing needed" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "需要重新配对"
+          }
+        }
+      }
+    },
+    "Scan the QR code again" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "扫码重新配对"
+          }
+        }
+      }
+    },
+    "Retry anyway" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仍然重试"
+          }
+        }
+      }
+    },
+    "This host answers at a different address or no longer accepts this device. Scan its QR code once to pair again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台电脑换了地址，或已不再接受此设备。扫描一次二维码即可重新配对。"
+          }
+        }
+      }
+    },
+    "This host no longer accepts this device's pairing. Scan its QR code again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这台电脑已不再接受此设备的配对。请重新扫描二维码。"
+          }
+        }
+      }
+    },
     "" : {
       "localizations" : {
         "zh-Hans" : {

@@ -105,10 +105,14 @@ enum HostError: LocalizedError {
     case network(String)
     case ipc(String, String)
     case unexpected(String)
+    /// The host answered and refused this device's pairing credential
+    /// (`UNAUTHORIZED` / `FORBIDDEN`): the generation was rotated or retired.
+    /// Rescanning the QR is the only recovery, so it is not a network message.
+    case rePairingRequired(String)
 
     var errorDescription: String? {
         switch self {
-        case .network(let message), .unexpected(let message):
+        case .network(let message), .unexpected(let message), .rePairingRequired(let message):
             message
         case .ipc(let message, _):
             message
