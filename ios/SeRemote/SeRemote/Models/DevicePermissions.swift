@@ -26,6 +26,7 @@ extension RemoteLink {
 }
 
 struct PairExchange: Decodable, Sendable {
+    let hostId: String?
     let deviceId: String
     let deviceToken: String
     let scopes: [String]

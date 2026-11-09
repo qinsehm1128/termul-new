@@ -5,7 +5,13 @@ struct PairingClient {
     var session: URLSession = .shared
 
     func exchange(link: RemoteLink, name: String) async throws -> RemoteLink {
-        guard let code = link.pairCode else { return link }
+        guard let code = link.pairCode else {
+            var identified = link
+            if identified.stableHostID == nil {
+                identified.hostId = await HostIdentityClient(session: session).fetch(origin: link.originURL)
+            }
+            return identified
+        }
         var request = URLRequest(url: link.originURL.appendingPathComponent("pair"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -25,9 +31,13 @@ struct PairingClient {
         guard !grant.deviceId.isEmpty, !grant.deviceToken.isEmpty else { throw PairingExchangeError.failed }
         var paired = RemoteLink(id: link.id, title: link.title, accessURL: link.originURL,
                                 bearer: grant.deviceToken, createdAt: link.createdAt)
+        paired.hostId = grant.hostId
         paired.deviceId = grant.deviceId
         paired.deviceName = name
         paired.scopes = grant.scopes
+        if paired.stableHostID == nil {
+            paired.hostId = await HostIdentityClient(session: session).fetch(origin: link.originURL)
+        }
         return paired
     }
 

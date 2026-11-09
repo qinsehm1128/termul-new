@@ -13,6 +13,7 @@ struct RemoteLink: Identifiable, Hashable, Codable {
     var title: String
     var accessURL: URL
     var bearer: String?
+    var hostId: String? = nil
     var deviceId: String? = nil
     var deviceName: String? = nil
     var scopes: [String]? = nil
@@ -55,27 +56,25 @@ struct RemoteLink: Identifiable, Hashable, Codable {
         originURL.absoluteString
     }
 
-    /// Identity of the host behind this link: the pairing credential when the QR
-    /// carried one, otherwise nothing.
-    ///
-    /// A saved origin is disposable — a LAN listener can come back on another
-    /// address after a DHCP or Wi-Fi change, and a quick tunnel always comes back
-    /// on another hostname — while the credential is issued by one host and keeps
-    /// identifying it across those moves. Matching on it is what lets a rescan
-    /// update the saved record instead of adding a second one that still carries
-    /// the dead origin.
+    /// Stable, non-secret host identity, normalized for UUID casing. Missing
+    /// identities retain the older origin / same-credential matching policy.
+    var stableHostID: String? {
+        guard let value = hostId?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+        return UUID(uuidString: value)?.uuidString.lowercased() ?? value
+    }
+
     var hostIdentity: String? {
+        if let stableHostID { return "host:\(stableHostID)" }
         guard let token = pairingToken, !token.isEmpty else { return nil }
         return "credential:\(token)"
     }
 
-    /// The same saved host, possibly reachable at a different origin now.
+    /// A known identity mismatch must never be hidden by a recycled address.
     func refersToSameHost(as other: RemoteLink) -> Bool {
-        if let mine = hostIdentity, let theirs = other.hostIdentity, mine == theirs {
-            return true
+        if let mine = stableHostID, let theirs = other.stableHostID {
+            return mine == theirs
         }
-        // No credential to compare, or the host rotated it: the address is all
-        // the identity left.
+        if let mine = pairingToken, !mine.isEmpty, mine == other.pairingToken { return true }
         return originHost.caseInsensitiveCompare(other.originHost) == .orderedSame
     }
 
@@ -99,6 +98,7 @@ struct RemoteLink: Identifiable, Hashable, Codable {
             bearer: fresh.deviceId != nil ? fresh.pairingToken : (deviceId != nil ? pairingToken : fresh.pairingToken ?? pairingToken),
             createdAt: createdAt
         )
+        merged.hostId = fresh.stableHostID ?? stableHostID
         merged.deviceId = fresh.deviceId ?? deviceId
         merged.deviceName = fresh.deviceName ?? deviceName
         merged.scopes = fresh.scopes ?? scopes
@@ -124,7 +124,7 @@ struct RemoteLink: Identifiable, Hashable, Codable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, title, accessURL, accessURLString, bearer, createdAt, deviceId, deviceName, scopes, isRevoked
+        case id, title, accessURL, accessURLString, bearer, createdAt, hostId, deviceId, deviceName, scopes, isRevoked
     }
 
     init(from decoder: Decoder) throws {
@@ -141,6 +141,7 @@ struct RemoteLink: Identifiable, Hashable, Codable {
         let storedBearer = try container.decodeIfPresent(String.self, forKey: .bearer)
         accessURL = RemoteLink.attaching(token: storedBearer ?? RemoteLink.accessToken(in: raw), to: raw)
         bearer = storedBearer ?? RemoteLink.accessToken(in: accessURL)
+        hostId = try container.decodeIfPresent(String.self, forKey: .hostId)
         deviceId = try container.decodeIfPresent(String.self, forKey: .deviceId)
         deviceName = try container.decodeIfPresent(String.self, forKey: .deviceName)
         scopes = try container.decodeIfPresent([String].self, forKey: .scopes)
@@ -161,6 +162,7 @@ struct RemoteLink: Identifiable, Hashable, Codable {
         try container.encode(storedURL.absoluteString, forKey: .accessURLString)
         try container.encodeIfPresent(pairingToken, forKey: .bearer)
         try container.encode(createdAt, forKey: .createdAt)
+        try container.encodeIfPresent(stableHostID, forKey: .hostId)
         try container.encodeIfPresent(deviceId, forKey: .deviceId)
         try container.encodeIfPresent(deviceName, forKey: .deviceName)
         try container.encodeIfPresent(scopes, forKey: .scopes)

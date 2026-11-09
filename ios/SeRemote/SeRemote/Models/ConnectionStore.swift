@@ -7,6 +7,7 @@ private struct SavedLinkRecord: Codable {
     var title: String
     var origin: String
     var createdAt: Date
+    var hostId: String? = nil
     var deviceId: String? = nil
     var deviceName: String? = nil
     var scopes: [String]? = nil
@@ -75,7 +76,8 @@ final class ConnectionStore {
         var ready = try await PairingClient().exchange(link: link, name: name)
         try Task.checkCancellation()
         guard pairingGeneration == generation else { throw CancellationError() }
-        if let target = savedLinks.first(where: { $0.id == targetID }) {
+        if let target = savedLinks.first(where: { $0.id == targetID }),
+           target.stableHostID == nil || ready.stableHostID == nil || target.stableHostID == ready.stableHostID {
             ready = target.adoptingRescan(ready)
         }
         pairingTargetID = nil
@@ -115,7 +117,26 @@ final class ConnectionStore {
         errorMessage = nil
         self.surface = surface
         activeLink = stored
+        if stored.stableHostID == nil {
+            Task { [weak self] in
+                guard let hostID = await HostIdentityClient().fetch(origin: stored.originURL) else { return }
+                self?.rememberHostIdentity(hostID, for: stored)
+            }
+        }
         return stored
+    }
+
+    /// Enrich old saved records without replacing a mounted workspace or letting
+    /// a late response attach identity to a record that has since moved.
+    private func rememberHostIdentity(_ hostID: String, for opened: RemoteLink) {
+        guard let index = savedLinks.firstIndex(where: {
+            $0.id == opened.id && $0.originURL == opened.originURL && !$0.isRevoked
+        }), savedLinks[index].stableHostID == nil else { return }
+        savedLinks[index].hostId = hostID
+        if activeLink?.id == opened.id, activeLink?.originURL == opened.originURL {
+            activeLink = savedLinks[index]
+        }
+        persist()
     }
 
     func disconnect() {
@@ -194,9 +215,15 @@ final class ConnectionStore {
         rescan link: RemoteLink,
         into saved: [RemoteLink]
     ) -> (stored: RemoteLink, saved: [RemoteLink]) {
-        let stored = saved.first { $0.id == link.id || $0.refersToSameHost(as: link) }?.adoptingRescan(link) ?? link
+        // Identity beats a stale or recycled address and any legacy fallback.
+        let identified = link.stableHostID.flatMap { hostID in
+            saved.first { $0.stableHostID == hostID }
+        }
+        let fallback = saved.first { $0.refersToSameHost(as: link) }
+        let stored = (identified ?? fallback)?.adoptingRescan(link) ?? link
         let remaining = saved.filter { candidate in
-            candidate.id != stored.id
+            if let mine = candidate.stableHostID, let theirs = stored.stableHostID, mine != theirs { return true }
+            return candidate.id != stored.id
                 && !candidate.refersToSameHost(as: stored)
                 && candidate.accessURL.absoluteString != stored.accessURL.absoluteString
         }
@@ -215,7 +242,7 @@ final class ConnectionStore {
                 title: link.title,
                 origin: link.savedOrigin,
                 createdAt: link.createdAt,
-                deviceId: link.deviceId, deviceName: link.deviceName,
+                hostId: link.stableHostID, deviceId: link.deviceId, deviceName: link.deviceName,
                 scopes: link.scopes, isRevoked: link.isRevoked
             )
         }
@@ -238,6 +265,7 @@ final class ConnectionStore {
                     id: record.id, title: record.title, accessURL: origin,
                     bearer: bearer, createdAt: record.createdAt
                 )
+                link.hostId = record.hostId
                 link.deviceId = record.deviceId
                 link.deviceName = record.deviceName
                 link.scopes = record.scopes
@@ -268,7 +296,7 @@ private enum ConnectionStorePlaceholder {
                 title: $0.title,
                 origin: $0.savedOrigin,
                 createdAt: $0.createdAt,
-                deviceId: $0.deviceId, deviceName: $0.deviceName,
+                hostId: $0.stableHostID, deviceId: $0.deviceId, deviceName: $0.deviceName,
                 scopes: $0.scopes, isRevoked: $0.isRevoked
             )
         }
