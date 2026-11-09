@@ -10,6 +10,8 @@ enum WorkspaceFilesFilter {
     }
 }
 
+/// Prototype file list: `.scard` rows with a 3pt spine, name, real size/date
+/// metadata and a chevron. Folder summaries come from the host listing.
 @MainActor
 struct WorkspaceFileListView: View {
     @Environment(\.sePalette) private var palette
@@ -28,74 +30,43 @@ struct WorkspaceFileListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: SeSpace.xs) {
-                SeSectionHeader(title: String(localized: "Files"), detail: String(localized: "Read only"))
-                HStack(spacing: SeSpace.xs) {
-                    Image(systemName: "line.3.horizontal.decrease")
-                        .foregroundStyle(palette.inkSecondary)
-                        .accessibilityHidden(true)
-                    TextField("Filter names in this folder", text: $query)
-                        .font(SeFont.support)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .submitLabel(.done)
-                        .frame(minHeight: SeSpace.hitTarget)
-                        .accessibilityIdentifier("files-name-filter")
-                    if !query.isEmpty {
-                        Button {
-                            query = ""
-                        } label: {
-                            Label("Clear name filter", systemImage: "xmark.circle.fill")
-                                .labelStyle(.iconOnly)
-                                .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
-                        }
-                    }
-                }
-                .padding(.horizontal, SeSpace.sm)
-                .frame(minHeight: SeSpace.hitTarget)
-                .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
-                Text("Names in this folder only. File contents are not searched.")
-                    .font(SeFont.caption)
-                    .foregroundStyle(palette.inkSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(SeSpace.screenInset)
-
-            if isLoading {
-                ProgressView("Loading files…")
-                    .font(SeFont.support)
-                    .tint(palette.accent)
-                    .padding(SeSpace.sm)
-            }
-
+            filterField
+                .padding(.horizontal, 18)
+                .padding(.bottom, 4)
             ScrollView {
-                if entries.isEmpty && !isLoading {
-                    SeEmptyState(
-                        title: hasError ? String(localized: "Folder unavailable") : String(localized: "No files"),
-                        systemImage: hasError ? "folder.badge.questionmark" : "folder",
-                        message: hasError
-                            ? String(localized: "Use Retry above to load this folder again.")
-                            : String(localized: "This folder is empty.")
-                    )
-                } else if filteredEntries.isEmpty && !isLoading {
-                    SeEmptyState(
-                        title: String(localized: "No matching names"),
-                        systemImage: "line.3.horizontal.decrease",
-                        message: String(localized: "Try another name or clear the filter to see this folder's files."),
-                        actionTitle: String(localized: "Clear filter"),
-                        action: { query = "" }
-                    )
-                } else {
-                    LazyVStack(spacing: SeSpace.xxs) {
+                LazyVStack(spacing: 8) {
+                    if isLoading {
+                        ProgressView()
+                            .tint(palette.accent)
+                            .padding(.vertical, SeSpace.md)
+                    }
+                    if entries.isEmpty && !isLoading {
+                        SeEmptyState(
+                            title: hasError ? String(localized: "Folder unavailable") : String(localized: "No files"),
+                            systemImage: hasError ? "folder.badge.questionmark" : "folder",
+                            message: hasError
+                                ? String(localized: "Use Refresh above to load this folder again.")
+                                : String(localized: "This folder is empty.")
+                        )
+                        .frame(maxWidth: .infinity, minHeight: 160)
+                    } else if filteredEntries.isEmpty && !isLoading {
+                        SeEmptyState(
+                            title: String(localized: "No matching names"),
+                            systemImage: "line.3.horizontal.decrease",
+                            message: String(localized: "Try another name or clear the filter to see this folder's files."),
+                            actionTitle: String(localized: "Clear filter"),
+                            action: { query = "" }
+                        )
+                        .frame(maxWidth: .infinity, minHeight: 160)
+                    } else {
                         ForEach(filteredEntries) { entry in
                             row(entry)
                                 .id(entry.path)
                         }
                     }
-                    .scrollTargetLayout()
-                    .padding(.horizontal, SeSpace.screenInset)
-                    .padding(.bottom, SeSpace.sm)
                 }
+                .padding(.horizontal, 18)
+                .padding(.bottom, 16)
             }
             .scrollPosition(id: $scrollPath)
             .refreshable { await refresh() }
@@ -105,55 +76,85 @@ struct WorkspaceFileListView: View {
         .accessibilityIdentifier("files-list")
     }
 
+    private var filterField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "line.3.horizontal.decrease")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(palette.inkTertiary)
+                .accessibilityHidden(true)
+            TextField("Filter names in this folder", text: $query)
+                .font(.system(size: 12))
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.done)
+                .frame(minHeight: SeSpace.hitTarget)
+                .accessibilityIdentifier("files-name-filter")
+            if !query.isEmpty {
+                Button {
+                    query = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(palette.inkTertiary)
+                        .frame(width: SeSpace.hitTarget, height: SeSpace.hitTarget)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("Clear name filter"))
+            }
+        }
+        .padding(.leading, 10)
+        .frame(minHeight: 36)
+        .background(palette.card, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .stroke(palette.stroke, lineWidth: 1)
+        }
+    }
+
     private func row(_ entry: DirectoryEntry) -> some View {
         let selected = selectedPath == entry.path
         return Button {
             open(entry)
         } label: {
-            HStack(spacing: SeSpace.sm) {
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(selected ? palette.accent : palette.strokeStrong)
-                    .frame(width: 3, height: 30)
-                    .accessibilityHidden(true)
-                if entry.isDirectory {
-                    Image(systemName: "folder")
-                        .foregroundStyle(palette.inkSecondary)
-                        .accessibilityHidden(true)
-                }
-                VStack(alignment: .leading, spacing: SeSpace.xxs) {
+            HStack(spacing: 11) {
+                R2Spine(tone: selected ? .live : (entry.isDirectory ? .attention : .quiet))
+                VStack(alignment: .leading, spacing: 3) {
                     Text(entry.name)
-                        .font(SeFont.label)
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(palette.ink)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                    HStack(spacing: SeSpace.xs) {
-                        if !entry.isDirectory, let size = SessionFilesPresentation.byteCount(entry.size) {
+                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        if entry.isDirectory {
+                            Text("Folder")
+                        } else if let size = SessionFilesPresentation.byteCount(entry.size) {
                             Text(size)
                         }
                         if let modified = SessionFilesPresentation.modificationDate(entry.modifiedAt) {
+                            Text("Modified")
                             Text(modified, style: .relative)
                         }
                     }
-                    .font(SeFont.caption)
-                    .foregroundStyle(palette.inkSecondary)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(palette.inkTertiary)
+                    .lineLimit(1)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Image(systemName: "chevron.right")
-                    .font(SeFont.caption)
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(palette.inkTertiary)
                     .accessibilityHidden(true)
             }
-            .padding(.horizontal, SeSpace.sm)
-            .padding(.vertical, SeSpace.sm)
+            .padding(12)
             .frame(minHeight: SeSpace.hitTarget)
-            .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.card))
+            .background(palette.card, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: SeNocturneRadius.card)
-                    .strokeBorder(selected ? palette.accent : palette.strokeStrong, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .stroke(selected ? palette.accent.opacity(0.6) : palette.stroke, lineWidth: 1)
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(SePressableRowStyle())
+        .buttonStyle(.plain)
         .disabled(isLoading)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected ? .isSelected : [])

@@ -1,49 +1,38 @@
 import SwiftUI
 import UIKit
 
-enum TerminalInputMode: String, CaseIterable, Identifiable {
-    case live
-    case buffered
-
-    var id: String { rawValue }
-}
-
+/// Prototype terminal accessory row (`.keyrow`) and command dock (`.cmdline`).
+///
+/// The Ctrl key keeps the existing latch/hold contract: a tap latches exactly
+/// one compatible key, a hold applies while pressed. Repeatable keys (arrows,
+/// backspace) repeat while held. Live keyboard focus and buffered commands are
+/// both preserved so no input route from the old dock is lost.
 struct TerminalInputDock: View {
     @Environment(\.sePalette) private var palette
     var isEnabled: Bool
     var isKeyboardVisible: Bool
-    var displayMode: TerminalDisplayMode = .phone
-    var textScale: CGFloat
     @Binding var controlModifier: TerminalControlModifier
     var onSend: (String) -> Void
     var onFocusTerminal: () -> Void
     var onDismissKeyboard: () -> Void
-    var onToggleDisplayMode: () -> Void = {}
-    var onNudgeTextScale: (Int) -> Void
 
-    @State private var mode: TerminalInputMode = .live
     @State private var command = ""
-    @State private var repeatingId: String?
-    @State private var repeatTask: Task<Void, Never>?
     @State private var controlPressStarted: Date?
     @GestureState private var controlTouchDown = false
     @FocusState private var commandFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
-            accessoryBar
-            if mode == .buffered {
-                bufferedBar
-            } else {
-                liveBar
-            }
+            keyRow
+            commandLine
         }
-        .background(palette.card)
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(palette.strokeStrong)
-                .frame(height: 1)
-        }
+        .padding(.horizontal, 14)
+        .padding(.top, 10)
+        .padding(.bottom, 10)
+        .background(palette.surface)
+        .opacity(isEnabled ? 1 : 0.35)
+        .allowsHitTesting(isEnabled)
+        .disabled(!isEnabled)
         .onChange(of: isKeyboardVisible) { _, visible in
             if !visible {
                 commandFocused = false
@@ -56,101 +45,62 @@ struct TerminalInputDock: View {
             }
         }
         .onDisappear {
-            stopRepeat()
             controlModifier.releaseHold()
             controlPressStarted = nil
         }
     }
 
-    private var accessoryBar: some View {
-        VStack(spacing: SeSpace.xxs) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: SeSpace.xxs) {
-                    accessoryChip(
-                        label: displayMode == .phone
-                            ? String(localized: "Phone")
-                            : String(localized: "Desktop fit"),
-                        isActive: true,
-                        accessibility: displayMode == .phone
-                            ? String(localized: "Switch to desktop fit")
-                            : String(localized: "Fit the phone")
-                    ) { onToggleDisplayMode() }
-                    accessoryChip(label: "A−", accessibility: String(localized: "Smaller terminal text")) {
-                        onNudgeTextScale(-1)
-                    }
-                    accessoryChip(label: "A+", accessibility: String(localized: "Larger terminal text")) {
-                        onNudgeTextScale(1)
-                    }
-                    .accessibilityValue(Text("\(Int((textScale * 100).rounded())) percent"))
-                    accessoryChip(
-                        label: mode == .live ? String(localized: "Live") : String(localized: "Command"),
-                        isActive: mode == .buffered,
-                        accessibility: mode == .live
-                            ? String(localized: "Switch to command field")
-                            : String(localized: "Switch to live keyboard")
-                    ) {
-                        mode = mode == .live ? .buffered : .live
-                        if mode == .live {
-                            if isKeyboardVisible { onFocusTerminal() }
-                        } else {
-                            commandFocused = true
-                        }
-                    }
-                    if isKeyboardVisible {
-                        accessoryChip(
-                            label: nil,
-                            systemImage: "keyboard.chevron.compact.down",
-                            accessibility: String(localized: "Hide keyboard")
-                        ) { dismissKeyboard() }
-                    }
-                }
-            }
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: SeSpace.xxs) {
-                    controlKey
-                    ForEach(TerminalAccessoryCatalog.keys) { key in
-                        if key.repeatable {
-                            accessoryChip(label: key.label, accessibility: key.accessibilityLabel, action: nil)
-                                .gesture(repeatGesture(for: key))
-                                .accessibilityAction { send(key.bytes) }
-                        } else {
-                            accessoryChip(label: key.label, accessibility: key.accessibilityLabel) {
-                                send(key.bytes)
-                            }
-                        }
-                    }
-                    if UIPasteboard.general.hasStrings {
-                        accessoryChip(
-                            label: String(localized: "Paste"),
-                            accessibility: String(localized: "Paste from clipboard")
+    // MARK: - Accessory keys
+
+    private var keyRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                controlKey
+                ForEach(TerminalAccessoryCatalog.keys) { key in
+                    if key.repeatable {
+                        R2KeyChip(
+                            label: key.label,
+                            repeatable: true,
+                            accessibilityLabel: key.accessibilityLabel,
+                            action: { send(key.bytes) },
+                            repeatAction: { send(key.bytes) }
+                        )
+                    } else {
+                        R2KeyChip(
+                            label: key.label,
+                            accessibilityLabel: key.accessibilityLabel
                         ) {
-                            if let text = UIPasteboard.general.string, !text.isEmpty { send(text) }
+                            send(key.bytes)
                         }
                     }
                 }
+                if UIPasteboard.general.hasStrings {
+                    R2KeyChip(
+                        label: String(localized: "Paste"),
+                        accessibilityLabel: String(localized: "Paste from clipboard")
+                    ) {
+                        if let text = UIPasteboard.general.string, !text.isEmpty { send(text) }
+                    }
+                }
             }
+            .padding(.vertical, 2)
         }
-        .padding(.horizontal, SeSpace.sm)
-        .padding(.vertical, SeSpace.xs)
-        .opacity(isEnabled ? 1 : 0.35)
-        .allowsHitTesting(isEnabled)
-        .disabled(!isEnabled)
     }
 
     private var controlKey: some View {
-        accessoryChip(
+        R2KeyChip(
             label: controlModifier.isHeld ? String(localized: "Ctrl · Held")
                 : controlModifier.isLatched ? String(localized: "Ctrl · Latched") : String(localized: "Ctrl"),
             isActive: controlModifier.isActive,
-            accessibility: String(localized: "Control key")
+            accessibilityLabel: String(localized: "Control key"),
+            action: { controlModifier.toggleLatch() }
         )
         .accessibilityValue(Text(controlModifier.isHeld
             ? String(localized: "Held")
             : controlModifier.isLatched ? String(localized: "Latched") : String(localized: "Off")))
         .accessibilityHint(Text("Tap to latch the next key, or hold while typing a key."))
-        .accessibilityAddTraits(controlModifier.isActive ? .isSelected : [])
-        .accessibilityAction { controlModifier.toggleLatch() }
-        .gesture(
+        .accessibilityIdentifier("terminal-control-key")
+        .simultaneousGesture(
             DragGesture(minimumDistance: 0)
                 .updating($controlTouchDown) { _, pressed, _ in pressed = true }
                 .onChanged { _ in
@@ -164,53 +114,23 @@ struct TerminalInputDock: View {
                     controlPressStarted = nil
                 }
         )
-        .accessibilityIdentifier("terminal-control-key")
     }
 
-    private var liveBar: some View {
-        Button {
-            if isKeyboardVisible {
-                dismissKeyboard()
-            } else {
-                onFocusTerminal()
-            }
-        } label: {
-            HStack(spacing: 10) {
-                Text("$")
-                    .font(.body.monospaced().weight(.semibold))
-                    .foregroundStyle(palette.live)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Live input")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(palette.ink)
-                    Text(isKeyboardVisible ? String(localized: "Tap to hide keyboard") : String(localized: "Tap to show keyboard"))
-                        .font(.caption)
-                        .foregroundStyle(palette.inkSecondary)
-                }
-                Spacer()
-            }
-            .padding(.horizontal, 14)
-            .frame(minHeight: 46, alignment: .center)
-            .background(palette.cardAlt)
-            .clipShape(RoundedRectangle(cornerRadius: SeNocturneRadius.control, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .disabled(!isEnabled)
-        .padding(.horizontal, 12)
-        .padding(.bottom, 10)
-        .accessibilityLabel(
-            Text(isKeyboardVisible ? String(localized: "Hide keyboard") : String(localized: "Show keyboard for live terminal input"))
-        )
-    }
+    // MARK: - Command dock (prototype `.cmdline`)
 
-    private var bufferedBar: some View {
+    private var commandLine: some View {
         HStack(spacing: 8) {
-            TextField(String(localized: "Type a command…"), text: $command)
+            Text("$")
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(palette.live)
+                .accessibilityHidden(true)
+
+            TextField("Type a command, or hold the microphone", text: $command)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .keyboardType(.asciiCapable)
-                .font(.body.monospaced())
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(palette.ink)
                 .submitLabel(.send)
                 .focused($commandFocused)
                 .onSubmit { submitCommand() }
@@ -222,101 +142,60 @@ struct TerminalInputDock: View {
                         send(text)
                     }
                 }
-                .padding(.horizontal, 12)
-                .frame(minHeight: SeSpace.hitTarget)
-                .background(palette.cardAlt)
-                .clipShape(RoundedRectangle(cornerRadius: SeNocturneRadius.control, style: .continuous))
+                .frame(minHeight: 32)
+
+            if isKeyboardVisible {
+                Button {
+                    commandFocused = false
+                    onDismissKeyboard()
+                } label: {
+                    Image(systemName: "keyboard.chevron.compact.down")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(palette.inkSecondary)
+                        .frame(width: 30, height: 30)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("Hide keyboard"))
+            } else {
+                Button {
+                    onFocusTerminal()
+                } label: {
+                    Image(systemName: "keyboard")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(palette.inkSecondary)
+                        .frame(width: 30, height: 30)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("Show keyboard for live terminal input"))
+            }
+
             Button {
                 submitCommand()
             } label: {
                 Image(systemName: "arrow.up")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(palette.canvas)
-                    .frame(width: SeSpace.hitTarget, height: SeSpace.hitTarget)
-                    .background(palette.ink, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(palette.onAccent)
+                    .frame(width: 30, height: 30)
+                    .background(palette.accent, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .contentShape(Rectangle())
             }
-            .disabled(!isEnabled || command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .buttonStyle(.plain)
+            .disabled(command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .opacity(command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.45 : 1)
             .accessibilityLabel(Text("Send command"))
         }
-        .padding(.horizontal, 12)
-        .padding(.bottom, 10)
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button(String(localized: "Hide keyboard")) {
-                    dismissKeyboard()
-                }
-            }
+        .padding(.leading, 11)
+        .padding(.trailing, 6)
+        .frame(height: 44)
+        .background(palette.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(commandFocused ? palette.accent : palette.strokeStrong, lineWidth: 1)
         }
-    }
-
-    @ViewBuilder
-    private func accessoryChip(
-        label: String?,
-        systemImage: String? = nil,
-        isActive: Bool = false,
-        accessibility: String,
-        action: (() -> Void)? = nil
-    ) -> some View {
-        let chip = Group {
-            if let systemImage {
-                Image(systemName: systemImage)
-                    .font(.footnote.weight(.semibold))
-            } else if let label {
-                Text(label)
-                    .font(.caption.weight(.semibold).monospaced())
-            }
-        }
-        .foregroundStyle(isActive ? palette.accent : palette.ink)
-        .padding(.horizontal, 10)
-        .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
-        .background(isActive ? palette.accentSubtle : palette.cardAlt)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(palette.strokeStrong, lineWidth: 1)
-        )
-        .accessibilityLabel(Text(accessibility))
-        .accessibilityAddTraits(.isButton)
-
-        if let action {
-            Button(action: action) { chip }
-                .buttonStyle(.plain)
-        } else {
-            chip
-        }
-    }
-
-    private func repeatGesture(for key: TerminalAccessoryKey) -> some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { _ in
-                guard key.repeatable, repeatingId != key.id else { return }
-                startRepeat(key)
-            }
-            .onEnded { _ in
-                if repeatingId == key.id {
-                    stopRepeat()
-                }
-            }
-    }
-
-    private func startRepeat(_ key: TerminalAccessoryKey) {
-        stopRepeat()
-        repeatingId = key.id
-        send(key.bytes)
-        repeatTask = Task {
-            try? await Task.sleep(for: .milliseconds(380))
-            while !Task.isCancelled, repeatingId == key.id {
-                send(key.bytes)
-                try? await Task.sleep(for: .milliseconds(70))
-            }
-        }
-    }
-
-    private func stopRepeat() {
-        repeatingId = nil
-        repeatTask?.cancel()
-        repeatTask = nil
+        .animation(SeNocturneMotion.resolved(SeNocturneMotion.quick, reduceMotion: false), value: commandFocused)
+        .padding(.top, 8)
     }
 
     private func submitCommand() {
@@ -329,10 +208,5 @@ struct TerminalInputDock: View {
     private func send(_ bytes: String) {
         guard isEnabled else { return }
         onSend(bytes)
-    }
-
-    private func dismissKeyboard() {
-        commandFocused = false
-        onDismissKeyboard()
     }
 }

@@ -1,6 +1,11 @@
 import SwiftUI
 import UIKit
 
+/// The session workbench (prototype `data-screen="chat|terminal|files"`).
+///
+/// One navbar and one mode switch frame three identity-stable panes. The
+/// SwiftTerm host and the chat/files panes stay mounted across mode switches,
+/// rotation and size-class changes; only opacity/offset changes.
 struct SessionScreen: View {
     @Bindable var session: WorkspaceSession
     var hostDirectory: AnyView? = nil
@@ -30,16 +35,13 @@ struct SessionScreen: View {
         @Bindable var chat = session.chat
         VStack(spacing: 0) {
             workbenchHeader
-            VStack(spacing: SeSpace.sm) {
-                SessionModeSwitch(session: session)
-                SessionStatusRibbon(status: status, detail: modelName)
-            }
-            .padding(.horizontal, SeSpace.md)
-            .padding(.bottom, SeSpace.sm)
+            SessionModeSwitch(session: session)
+                .padding(.horizontal, 18)
+                .padding(.top, 12)
             adaptiveContent
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { containerWidth = $0 }
-        .background(palette.canvas.ignoresSafeArea())
+        .background(palette.surface.ignoresSafeArea())
         .foregroundStyle(palette.ink)
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
@@ -114,7 +116,8 @@ struct SessionScreen: View {
         return layout {
             Group {
                 if session.workspace == .project {
-                    SeEmptyState(title: String(localized: "Chat"), systemImage: "bubble.left.and.bubble.right",
+                    SeEmptyState(title: String(localized: "Chat"),
+                                 systemImage: "bubble.left.and.bubble.right",
                                  message: String(localized: "Project view is terminals only. Open a session to talk."))
                 } else {
                     SessionChatView(session: session)
@@ -133,50 +136,41 @@ struct SessionScreen: View {
         }
     }
 
-    private var modelName: String? {
-        guard let models = session.chat.models,
-              let id = models.currentModelId else { return nil }
-        return models.availableModels?.first(where: { $0.modelId == id })?.name ?? id
-    }
-
-    private var status: NocturneSessionPresentation.Status {
-        NocturneSessionPresentation.status(
-            phase: session.phase,
-            connected: session.workspaceTab == .terminal
-                ? session.terminalSocket.isConnected : session.acp.state == .connected,
-            permissions: session.chat.permissions.count,
-            questions: session.chat.questions.count,
-            streaming: session.chat.messages.contains(where: \.streaming)
-        )
-    }
+    // MARK: - Navbar (prototype `.navbar`)
 
     private var workbenchHeader: some View {
-        HStack(spacing: SeSpace.sm) {
+        HStack(spacing: 10) {
             Button {
                 if let onBack { onBack() } else { dismiss() }
             } label: {
                 Image(systemName: "chevron.left")
-                    .frame(width: 44, height: 44)
-                    .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(palette.inkSecondary)
+                    .frame(width: 32, height: 32)
+                    .background(palette.card, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                     .overlay {
-                        RoundedRectangle(cornerRadius: SeNocturneRadius.control).stroke(palette.strokeStrong, lineWidth: 1)
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .stroke(palette.stroke, lineWidth: 1)
                     }
+                    .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Back")
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.headline).lineLimit(1)
-                Text(NocturneSessionPresentation.subtitle(
-                    host: session.origin.host ?? String(localized: "Host"),
-                    agent: session.workspace == .conversation ? session.chat.agentLabel : nil,
-                    model: modelName
-                ))
-                .font(.caption.monospaced())
-                .foregroundStyle(palette.inkSecondary)
-                .lineLimit(1)
+            .accessibilityLabel(Text("Back"))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(palette.ink)
+                    .lineLimit(1)
+                Text(headerSubtitle)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(palette.inkTertiary)
+                    .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
+
             Menu {
                 if session.workspace == .conversation {
                     Button("Agent", systemImage: "cpu") { session.chat.showAgentSheet = true }
@@ -187,18 +181,24 @@ struct SessionScreen: View {
                 }
             } label: {
                 Image(systemName: "ellipsis")
-                    .frame(width: 44, height: 44)
-                    .background(palette.cardAlt, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(palette.inkSecondary)
+                    .frame(width: 32, height: 32)
+                    .background(palette.card, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                     .overlay {
-                        RoundedRectangle(cornerRadius: SeNocturneRadius.control).stroke(palette.strokeStrong, lineWidth: 1)
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .stroke(palette.stroke, lineWidth: 1)
                     }
+                    .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
+                    .contentShape(Rectangle())
             }
-            .accessibilityLabel("Workspace actions")
+            .accessibilityLabel(Text("Workspace actions"))
         }
-        .padding(SeSpace.md)
+        .padding(.horizontal, 18)
+        .padding(.top, 8)
     }
 
-    // MARK: Shortcuts
+    // MARK: - Shortcuts
 
     private func handleShortcut(_ shortcut: ShortcutCenter.Shortcut) {
         guard NocturneSessionPresentation.acceptsShortcut(isActive: isActive, enabled: ShortcutAvailability.shared.sessionActive) else { return }
@@ -244,7 +244,7 @@ struct SessionScreen: View {
         Task { await session.revealTerminal(list[index].id) }
     }
 
-    // MARK: Meta
+    // MARK: - Meta
 
     private var title: String {
         switch session.workspace {
@@ -257,15 +257,30 @@ struct SessionScreen: View {
         }
     }
 
-    private var subtitle: String? {
+    private var headerSubtitle: String {
+        let host = session.origin.host ?? String(localized: "Host")
         switch session.workspace {
         case .conversation:
-            session.conversations.active?.workspaceCwd
+            return NocturneSessionPresentation.subtitle(
+                host: host,
+                agent: session.chat.agentLabel,
+                model: modelName
+            )
         case .project:
-            session.projects.active?.path
+            return NocturneSessionPresentation.subtitle(
+                host: host,
+                agent: session.projects.active?.name,
+                model: session.terminals.terminals.first(where: { $0.id == session.terminals.activeId })?.gitBranch
+            )
         case .home:
-            nil
+            return host
         }
+    }
+
+    private var modelName: String? {
+        guard let models = session.chat.models,
+              let id = models.currentModelId else { return nil }
+        return models.availableModels?.first(where: { $0.modelId == id })?.name ?? id
     }
 
     private var workspaceTaskId: String {

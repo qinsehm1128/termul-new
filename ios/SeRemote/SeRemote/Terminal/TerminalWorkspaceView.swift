@@ -1,5 +1,11 @@
 import SwiftUI
 
+/// Nocturne terminal surface (prototype `data-screen="terminal"`).
+///
+/// Chrome order matches the prototype: mono PTY meta line, the near-black term
+/// canvas, then accessory keys + command dock. The SwiftTerm host subtree is
+/// identity-stable: it is created once per terminal id and never recreated by
+/// mode switches, rotation, size-class changes or text-scale changes.
 struct TerminalWorkspaceView: View {
     @Environment(\.sePalette) private var palette
     @Bindable var session: WorkspaceSession
@@ -14,50 +20,21 @@ struct TerminalWorkspaceView: View {
                 terminalErrorBanner(error)
             }
             if let id = session.terminals.activeId {
-                terminalStatusBar
-                hostScreenObservation
-                ZStack {
-                    TerminalScreen(
-                        terminalId: id,
-                        buffered: session.terminals.pendingOutput[id] ?? Data(),
-                        hostCols: activeTerminal?.cols ?? 80,
-                        lockToHostCols: session.terminals.displayMode == .desktop,
-                        textScale: textScale,
-                        onSend: sendTerminalInput,
-                        onResize: { cols, rows in
-                            session.terminals.resize(cols: cols, rows: rows)
-                        },
-                        onReady: { feed in
-                            session.terminals.onFeed = { incomingId, data in
-                                if incomingId == id {
-                                    feed(data)
-                                }
-                            }
-                        },
-                        onTextScaleChange: { scale, settled in
-                            textScale = scale
-                            showScaleHud(scale)
-                            if settled {
-                                TerminalTextScale.current = scale
-                            }
-                        },
-                        focusToken: focusToken,
-                        blurToken: session.terminalBlurToken
-                    )
-                    .id(id)
-                    .transaction { $0.animation = nil }
-                    .onAppear {
-                        session.terminals.pendingOutput[id] = nil
+                terminalMeta
+                terminalCanvas(id: id)
+                TerminalInputDock(
+                    isEnabled: true,
+                    isKeyboardVisible: session.terminalKeyboardVisible,
+                    controlModifier: $controlModifier,
+                    onSend: sendTerminalInput,
+                    onFocusTerminal: {
+                        focusToken &+= 1
+                    },
+                    onDismissKeyboard: {
+                        session.dismissTerminalKeyboard()
                     }
-                    if let scaleHud {
-                        Text(scaleHud)
-                            .font(.subheadline.weight(.semibold).monospaced())
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(.ultraThinMaterial, in: Capsule())
-                            .allowsHitTesting(false)
-                    }
-                }
+                )
+                .padding(.bottom, 8)
             } else {
                 SeEmptyState(
                     title: String(localized: "No live terminal"),
@@ -67,37 +44,9 @@ struct TerminalWorkspaceView: View {
                     action: canSpawnTerminal ? { Task { await session.spawnTerminal() } } : nil
                 )
             }
-            TerminalInputDock(
-                isEnabled: session.terminals.activeId != nil,
-                isKeyboardVisible: session.terminalKeyboardVisible,
-                displayMode: session.terminals.displayMode,
-                textScale: textScale,
-                controlModifier: $controlModifier,
-                onSend: sendTerminalInput,
-                onFocusTerminal: {
-                    focusToken &+= 1
-                },
-                onDismissKeyboard: {
-                    session.dismissTerminalKeyboard()
-                },
-                onToggleDisplayMode: {
-                    Task {
-                        let next: TerminalDisplayMode =
-                            session.terminals.displayMode == .phone ? .desktop : .phone
-                        await session.terminals.setDisplayMode(next)
-                    }
-                },
-                onNudgeTextScale: { direction in
-                    let next = TerminalTextScale.nudge(textScale, by: direction)
-                    textScale = next
-                    TerminalTextScale.current = next
-                    showScaleHud(next)
-                    HostLog.session.info("Terminal text scale \(next, privacy: .public)")
-                }
-            )
-            .zIndex(1)
         }
-        .background(SeTheme.codeCanvas)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(palette.surface)
         .onChange(of: session.terminals.activeId) { _, _ in
             controlModifier = TerminalControlModifier()
         }
@@ -126,112 +75,141 @@ struct TerminalWorkspaceView: View {
         }
     }
 
-    private var terminalStatusBar: some View {
-        HStack(spacing: SeSpace.xs) {
-            Circle()
-                .fill(session.terminals.isConnecting ? palette.warning : (session.terminalSocket.isConnected ? palette.live : palette.inkSecondary))
-                .frame(width: 6, height: 6)
-                .accessibilityHidden(true)
-            Text(session.terminals.isConnecting ? String(localized: "Connecting…") : "PTY")
-                .font(.caption.monospaced())
-                .foregroundStyle(palette.inkSecondary)
-            Spacer(minLength: SeSpace.xs)
+    // MARK: - Meta (prototype `.termmeta`)
+
+    private var terminalMeta: some View {
+        HStack(spacing: 8) {
+            R2Dot(tone: session.terminals.isConnecting ? .attention : (session.terminalSocket.isConnected ? .live : .quiet))
+            Text(terminalMetaLabel)
+                .foregroundStyle(palette.inkTertiary)
+            Spacer(minLength: 4)
             if let dimensions = SessionTerminalPresentation.dimensions(cols: activeTerminal?.cols, rows: activeTerminal?.rows) {
                 Text(dimensions)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(palette.inkSecondary)
+                    .foregroundStyle(palette.inkTertiary)
                     .lineLimit(1)
             }
-            Button {
+            R2FitChip(label: "FIT", isActive: session.terminals.displayMode == .phone) {
                 Task { await session.terminals.setDisplayMode(.phone) }
-            } label: {
-                Text("FIT").font(.caption.monospaced())
-                    .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
             }
             .accessibilityLabel(Text("Phone Fit"))
             .accessibilityValue(Text(session.terminals.displayMode == .phone ? String(localized: "Active") : String(localized: "Idle")))
-            Menu {
-                Button { nudgeTextScale(-1) } label: {
-                    Label(String(localized: "Smaller Text"), systemImage: "textformat.size.smaller")
-                }
-                Button { nudgeTextScale(1) } label: {
-                    Label(String(localized: "Larger Text"), systemImage: "textformat.size.larger")
-                }
-                Button { applyTextScale(TerminalTextScale.defaultValue) } label: {
-                    Label(String(localized: "Reset Text Size"), systemImage: "arrow.counterclockwise")
-                }
-            } label: {
-                Text("A+").font(.caption.monospaced())
-                    .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
-            }
-            .accessibilityLabel(Text("Text Size"))
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(palette.ink)
-        .padding(.horizontal, SeSpace.md)
-        .background(palette.canvas)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(palette.strokeStrong).frame(height: 1)
-        }
-        .seHaptic(trigger: session.terminals.displayMode) { _, _ in .selection }
-        .seHaptic(trigger: textScale) { _, _ in .selection }
-    }
-
-    private var activeTerminal: LiveTerminal? {
-        session.terminals.terminals.first(where: { $0.id == session.terminals.activeId })
-    }
-
-    /// A host snapshot, not agent activity, the engine preference, or the
-    /// phone renderer's health. Only the refresh button issues screen_status.
-    private var hostScreenObservation: some View {
-        let observation = activeTerminal?.screenObservation ?? .legacyHost
-        return HStack(alignment: .top, spacing: 12) {
-            DisclosureGroup {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Read-only · last host report; not live monitoring")
-                    Text("Applied \(observation.appliedSeq) / captured \(observation.capturedSeq)")
-                        .monospacedDigit()
-                    if let buildId = observation.observerBuildId {
-                        Text("Observer build: \(buildId)")
-                            .textSelection(.enabled)
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            } label: {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Host screen observation")
-                        .font(.caption.weight(.semibold))
-                    Text(observationSummary(observation))
-                        .font(.caption)
-                        .foregroundStyle(observation.isReady ? Color.green : Color.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
+            textScaleMenu
             Button {
                 Task { await session.terminals.refreshScreenObservation() }
             } label: {
                 Image(systemName: "arrow.clockwise")
-                    .frame(minWidth: 44, minHeight: 44)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(palette.inkTertiary)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
             .disabled(session.terminals.isRefreshingScreenObservation)
             .accessibilityLabel(Text("Refresh host screen observation"))
             .accessibilityHint(Text("Read-only status request for the current terminal"))
             .accessibilityIdentifier("refresh-host-screen-observation")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 4)
-        .background(SeTheme.surface)
-        .accessibilityIdentifier("host-screen-observation")
+        .font(.system(size: 9, design: .monospaced))
+        .padding(.horizontal, 18)
+        .padding(.top, 10)
+        .padding(.bottom, 6)
+        .seHaptic(trigger: session.terminals.displayMode) { _, _ in .selection }
+        .seHaptic(trigger: textScale) { _, _ in .selection }
     }
 
-    private func observationSummary(_ observation: HostScreenObservation) -> String {
-        let summary = "\(observation.terminalScreenEngine.rawValue) · \(observation.state.rawValue)"
-        if let reason = observation.reason {
-            return "\(summary) · \(reason.rawValue)"
+    private var terminalMetaLabel: String {
+        NocturneR2Presentation.terminalMetaLabel(
+            isConnecting: session.terminals.isConnecting,
+            isConnected: session.terminalSocket.isConnected
+        )
+    }
+
+    private var textScaleMenu: some View {
+        Menu {
+            Button { nudgeTextScale(-1) } label: {
+                Label(String(localized: "Smaller Text"), systemImage: "textformat.size.smaller")
+            }
+            Button { nudgeTextScale(1) } label: {
+                Label(String(localized: "Larger Text"), systemImage: "textformat.size.larger")
+            }
+            Button { applyTextScale(TerminalTextScale.defaultValue) } label: {
+                Label(String(localized: "Reset Text Size"), systemImage: "arrow.counterclockwise")
+            }
+        } label: {
+            Text("A+")
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(palette.inkSecondary)
+                .padding(.horizontal, 6)
+                .frame(minHeight: 28)
+                .background(palette.card, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .stroke(palette.stroke, lineWidth: 1)
+                }
+                .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
+                .contentShape(Rectangle())
         }
-        return summary
+        .accessibilityLabel(Text("Text Size"))
+    }
+
+    // MARK: - Term canvas (prototype `.term`)
+
+    private func terminalCanvas(id: String) -> some View {
+        ZStack {
+            TerminalScreen(
+                terminalId: id,
+                buffered: session.terminals.pendingOutput[id] ?? Data(),
+                hostCols: activeTerminal?.cols ?? 80,
+                lockToHostCols: session.terminals.displayMode == .desktop,
+                textScale: textScale,
+                onSend: sendTerminalInput,
+                onResize: { cols, rows in
+                    session.terminals.resize(cols: cols, rows: rows)
+                },
+                onReady: { feed in
+                    session.terminals.onFeed = { incomingId, data in
+                        if incomingId == id {
+                            feed(data)
+                        }
+                    }
+                },
+                onTextScaleChange: { scale, settled in
+                    textScale = scale
+                    showScaleHud(scale)
+                    if settled {
+                        TerminalTextScale.current = scale
+                    }
+                },
+                focusToken: focusToken,
+                blurToken: session.terminalBlurToken
+            )
+            .id(id)
+            .transaction { $0.animation = nil }
+            .onAppear {
+                session.terminals.pendingOutput[id] = nil
+            }
+            if let scaleHud {
+                Text(scaleHud)
+                    .font(.subheadline.weight(.semibold).monospaced())
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .allowsHitTesting(false)
+            }
+        }
+        .padding(13)
+        .background(palette.terminalCanvas)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(palette.strokeStrong, lineWidth: 1)
+        }
+        .padding(.horizontal, 14)
+        .frame(maxHeight: .infinity)
+    }
+
+    private var activeTerminal: LiveTerminal? {
+        session.terminals.terminals.first(where: { $0.id == session.terminals.activeId })
     }
 
     private var canSpawnTerminal: Bool {
@@ -250,7 +228,8 @@ struct TerminalWorkspaceView: View {
             retryTitle: String(localized: "Dismiss"),
             retry: { session.terminals.errorMessage = nil }
         )
-        .padding(SeSpace.md)
+        .padding(.horizontal, 18)
+        .padding(.top, 8)
         .accessibilityIdentifier("terminal-error")
     }
 

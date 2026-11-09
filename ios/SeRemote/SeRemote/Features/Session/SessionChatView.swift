@@ -61,40 +61,46 @@ enum NocturneSessionPresentation {
     }
 }
 
+/// Prototype `.sessionmode` segmented mode bar. Visual height stays 30pt; the
+/// button frame keeps a 44pt hit target.
 struct SessionModeSwitch: View {
     @Bindable var session: WorkspaceSession
     @Environment(\.sePalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 0) {
             ForEach(WorkspaceTab.allCases) { tab in
+                let selected = session.workspaceTab == tab
                 Button {
                     // This method owns the geometry lease ordering; never write workspaceTab.
                     session.setWorkspaceTab(tab)
                 } label: {
                     Text(tab.title)
-                        .font(.subheadline.weight(session.workspaceTab == tab ? .semibold : .regular))
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                        .foregroundStyle(session.workspaceTab == tab ? palette.canvas : palette.inkSecondary)
-                        .background {
-                            if session.workspaceTab == tab {
-                                RoundedRectangle(cornerRadius: SeNocturneRadius.control).fill(palette.ink)
-                            }
-                        }
+                        .font(.system(size: 12, weight: selected ? .medium : .regular))
+                        .foregroundStyle(selected ? palette.canvas : palette.inkSecondary)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 30)
+                        .background(
+                            selected ? palette.ink : .clear,
+                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        )
+                        .frame(height: SeSpace.hitTarget)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .disabled(!NocturneSessionPresentation.modeAvailable(tab, workspace: session.workspace))
-                .accessibilityAddTraits(session.workspaceTab == tab ? .isSelected : [])
+                .opacity(NocturneSessionPresentation.modeAvailable(tab, workspace: session.workspace) ? 1 : 0.35)
+                .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }
-        .padding(4)
-        .background(palette.cardAlt, in: RoundedRectangle(cornerRadius: SeNocturneRadius.strip))
+        .padding(3)
+        .background(palette.cardAlt.opacity(0.65), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: SeNocturneRadius.strip).stroke(palette.strokeStrong, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .stroke(palette.strokeStrong, lineWidth: 1)
         }
-        .animation(SeNocturneMotion.resolved(.smooth(duration: 0.18), reduceMotion: reduceMotion), value: session.workspaceTab)
+        .animation(SeNocturneMotion.resolved(SeNocturneMotion.quick, reduceMotion: reduceMotion), value: session.workspaceTab)
     }
 }
 
@@ -110,63 +116,59 @@ struct NocturneSessionButtonStyle: ButtonStyle {
             .frame(minHeight: 44)
             .padding(.horizontal, 12)
             .foregroundStyle(primary ? palette.canvas : palette.inkSecondary)
-            .background(primary ? palette.ink : palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
+            .background(primary ? palette.ink : palette.card, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: SeNocturneRadius.control).stroke(palette.strokeStrong, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .stroke(palette.strokeStrong, lineWidth: 1)
             }
             .opacity(!isEnabled ? 0.45 : (configuration.isPressed ? 0.7 : 1))
     }
 }
 
+/// Prototype `.ribbon`: a mono status strip inside the chat surface.
 struct SessionStatusRibbon: View {
     let status: NocturneSessionPresentation.Status
     var detail: String?
     @Environment(\.sePalette) private var palette
 
-    private var tint: Color {
+    private var tone: R2Tone {
         switch status.tone {
-        case .live: palette.live
-        case .attention: palette.warning
-        case .quiet: palette.inkSecondary
-        case .failed: palette.danger
+        case .live: .live
+        case .attention: .attention
+        case .quiet: .quiet
+        case .failed: .failed
         }
     }
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) {
-                stateLabel
-                Spacer(minLength: 4)
-                if let detail { detailLabel(detail) }
+            HStack(spacing: 7) {
+                R2Dot(tone: tone)
+                Text(status.title)
+                    .foregroundStyle(tone.color(palette))
+                if let detail {
+                    Text(detail)
+                        .foregroundStyle(palette.inkTertiary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
             }
-            VStack(alignment: .leading, spacing: 4) {
-                stateLabel
-                if let detail { detailLabel(detail) }
+            HStack(spacing: 7) {
+                R2Dot(tone: tone)
+                Text(status.title)
+                    .foregroundStyle(tone.color(palette))
+                Spacer(minLength: 0)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
+        .font(.system(size: 10, design: .monospaced))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(palette.card, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: SeNocturneRadius.control).stroke(palette.strokeStrong, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .stroke(palette.stroke, lineWidth: 1)
         }
         .accessibilityElement(children: .combine)
-    }
-
-    private var stateLabel: some View {
-        Label {
-            Text(status.title)
-        } icon: {
-            Circle().fill(tint).frame(width: 6, height: 6)
-        }
-        .font(.caption.monospaced())
-        .foregroundStyle(tint)
-    }
-
-    private func detailLabel(_ text: String) -> some View {
-        Text(text)
-            .font(.caption.monospaced())
-            .foregroundStyle(palette.inkSecondary)
-            .lineLimit(1)
+        .accessibilityLabel(Text(status.title))
     }
 }

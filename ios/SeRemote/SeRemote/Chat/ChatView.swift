@@ -1,5 +1,12 @@
 import SwiftUI
 
+/// Nocturne session chat (prototype `data-screen="chat"`).
+///
+/// Layout mirrors the prototype: a mono status ribbon, an open transcript with
+/// right-aligned user pills and agent rows, inline tool/reasoning chips, and a
+/// floating composer with quick prompts, a model chip and a send button. All
+/// transcript, streaming, permission acknowledgement and retry behavior stays
+/// owned by ChatStore; this view only renders and forwards intent.
 struct ChatView: View {
     @Environment(\.sePalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -35,8 +42,27 @@ struct ChatView: View {
         }
     }
 
+    private var status: NocturneSessionPresentation.Status {
+        NocturneSessionPresentation.status(
+            phase: session.phase,
+            connected: session.acp.state == .connected,
+            permissions: session.chat.permissions.count,
+            questions: session.chat.questions.count,
+            streaming: session.chat.messages.contains(where: \.streaming)
+        )
+    }
+
+    private var modelName: String? {
+        guard let models = session.chat.models,
+              let id = models.currentModelId else { return nil }
+        return models.availableModels?.first(where: { $0.modelId == id })?.name ?? id
+    }
+
     var body: some View {
         VStack(spacing: 0) {
+            SessionStatusRibbon(status: status, detail: ribbonDetail)
+                .padding(.horizontal, 18)
+                .padding(.top, 12)
             messageList
             permissionStack
             if let error = session.chat.errorMessage, !error.isEmpty {
@@ -47,7 +73,7 @@ struct ChatView: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { composer }
-        .background(palette.canvas)
+        .background(palette.surface)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { containerWidth = $0 }
         .seHaptic(.send, trigger: sendHaptic)
         .seHaptic(trigger: cardHapticSerial) { _, _ in cardHaptic }
@@ -90,6 +116,14 @@ struct ChatView: View {
         }
     }
 
+    private var ribbonDetail: String? {
+        NocturneR2Presentation.ribbonDetail(
+            agent: session.chat.agentLabel,
+            model: modelName,
+            readableFiles: NocturneR2Presentation.readableFileCount(session.files.entries)
+        )
+    }
+
     private var messageList: some View {
         ScrollViewReader { proxy in
             // Single timeline materialization per body: rows must not each
@@ -97,7 +131,7 @@ struct ChatView: View {
             let items = renderedTimeline
             let lastAgentId = latestAgentId(in: items)
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     if !session.chat.hasVisibleTranscript && !session.chat.isLoading {
                         SeEmptyState(
                             title: String(localized: "Continue the conversation"),
@@ -114,13 +148,16 @@ struct ChatView: View {
                     if session.chat.isLoading {
                         ProgressView()
                             .frame(maxWidth: .infinity)
+                            .padding(.vertical, SeSpace.lg)
                     }
                 }
-                .padding(SeSpace.md)
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 24)
                 .frame(maxWidth: columnWidth)
                 .frame(maxWidth: .infinity)
             }
-            .background(palette.canvas)
+            .background(palette.surface)
             // History sessions open pinned to the newest message instead of
             // relying on scroll-to-bottom racing the first layout pass.
             .defaultScrollAnchor(.bottom)
@@ -207,6 +244,7 @@ struct ChatView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
         .padding(16)
+        .padding(.bottom, 120)
         .accessibilityLabel(Text("Jump to latest"))
         .accessibilityValue(unreadCount > 0 ? Text("\(unreadCount) new") : Text(""))
         .accessibilityHidden(isAtBottom)
@@ -233,6 +271,7 @@ struct ChatView: View {
         case .agent(let message):
             MessageBubble(
                 message: message,
+                agentName: session.chat.agentLabel,
                 onRetry: message.id == lastAgentId
                     ? { performSend { await session.chat.regenerateLastTurn(in: session.conversations.active) } }
                     : nil
@@ -257,7 +296,7 @@ struct ChatView: View {
     private var permissionStack: some View {
         if !renderedPermissions.isEmpty || !session.chat.questions.isEmpty {
             ScrollView {
-                VStack(spacing: SeSpace.sm) {
+                VStack(spacing: 12) {
                     ForEach(renderedPermissions) { card in
                         PermissionCardView(card: card, submission: session.chat.permissionSubmissions[card.id]) { option in
                             guard session.chat.permissionSubmissions[card.id] != .submitting else { return }
@@ -290,12 +329,12 @@ struct ChatView: View {
                         }
                     }
                 }
-                .padding(.horizontal, SeSpace.md)
-                .padding(.bottom, SeSpace.xs)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
                 .frame(maxWidth: columnWidth)
                 .frame(maxWidth: .infinity)
             }
-            .frame(maxHeight: 300)
+            .frame(maxHeight: 320)
             .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -360,29 +399,96 @@ struct ChatView: View {
         }
     }
 
+    // MARK: - Composer (prototype `.composer`)
+
     private var composer: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            composerChips
-            HStack(alignment: .bottom, spacing: 10) {
-                TextField("Message the host agent", text: $draft, axis: .vertical)
-                    .textInputAutocapitalization(.sentences)
-                    .lineLimit(1 ... 6)
-                    .focused($composerFocused)
-                    .padding(12)
-                    .background(palette.cardAlt)
-                    .clipShape(RoundedRectangle(cornerRadius: SeNocturneRadius.card, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: SeNocturneRadius.card).stroke(palette.strokeStrong, lineWidth: 1)
+        VStack(alignment: .leading, spacing: 8) {
+            quickRow
+            composerBox
+            Text("Only text is sent. Running commands still needs your permission.")
+                .font(.system(size: 10))
+                .foregroundStyle(palette.inkTertiary)
+                .frame(maxWidth: .infinity)
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 14)
+        .padding(.bottom, 18)
+        .frame(maxWidth: columnWidth)
+        .frame(maxWidth: .infinity)
+        .background(alignment: .top) {
+            LinearGradient(
+                colors: [palette.surface.opacity(0), palette.surface.opacity(0.86), palette.surface],
+                startPoint: .top,
+                endPoint: .center
+            )
+            .ignoresSafeArea()
+        }
+        .seAnimation(.control, value: session.chat.isSending)
+    }
+
+    private var quickRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(quickPrompts, id: \.self) { prompt in
+                    Button {
+                        draft = prompt
+                        composerFocused = true
+                    } label: {
+                        Text(prompt)
+                            .font(.system(size: 11))
+                            .foregroundStyle(palette.inkSecondary)
+                            .padding(.horizontal, 9)
+                            .frame(minHeight: 30)
+                            .background(palette.card, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                    .stroke(palette.stroke, lineWidth: 1)
+                            }
                     }
+                    .buttonStyle(.plain)
+                    .frame(minHeight: SeSpace.hitTarget)
+                }
+            }
+            .padding(.horizontal, 2)
+        }
+    }
+
+    private var quickPrompts: [String] {
+        [
+            String(localized: "Keep fixing"),
+            String(localized: "Run tests"),
+            String(localized: "Show diff"),
+            String(localized: "Try another angle")
+        ]
+    }
+
+    private var composerBox: some View {
+        VStack(spacing: 6) {
+            TextField("Continue this session…", text: $draft, axis: .vertical)
+                .textInputAutocapitalization(.sentences)
+                .lineLimit(1 ... 6)
+                .font(.system(size: 13))
+                .foregroundStyle(palette.ink)
+                .focused($composerFocused)
+                .padding(.horizontal, 12)
+                .padding(.top, 9)
+                .frame(minHeight: 32, alignment: .topLeading)
+            HStack(spacing: 6) {
+                modelChip
+                Spacer(minLength: 0)
                 if session.chat.isSending {
                     Button {
                         Task { await session.chat.cancel() }
                     } label: {
-                        Label("Stop", systemImage: "stop.fill")
-                            .font(.subheadline.weight(.semibold))
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(palette.onAccent)
+                            .frame(width: 31, height: 31)
+                            .background(palette.danger, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                             .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
                     }
-                    .buttonStyle(NocturneSessionButtonStyle())
+                    .buttonStyle(.plain)
                     .accessibilityLabel(Text("Stop response"))
                 } else {
                     Button {
@@ -391,103 +497,58 @@ struct ChatView: View {
                         composerFocused = false
                         performSend { await session.chat.send(text, in: session.conversations.active) }
                     } label: {
-                        Label("Send", systemImage: "arrow.up")
-                            .font(.subheadline.weight(.semibold))
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(palette.onAccent)
+                            .frame(width: 31, height: 31)
+                            .background(palette.accent, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                             .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
                     }
-                    .buttonStyle(NocturneSessionButtonStyle(primary: true))
+                    .buttonStyle(.plain)
                     .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                               || session.chat.isLoading || session.chat.isSwitchingAgent)
+                    .opacity(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.45 : 1)
                     .accessibilityLabel(Text("Send"))
                 }
             }
+            .padding(.horizontal, 9)
+            .padding(.bottom, 8)
         }
-        .padding(SeSpace.md)
-        .frame(maxWidth: columnWidth)
-        .frame(maxWidth: .infinity)
-        .background(palette.canvas)
-        .overlay(alignment: .top) { Rectangle().fill(palette.strokeStrong).frame(height: 1) }
-        .seAnimation(.control, value: session.chat.isSending)
+        .background(palette.card, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                .stroke(composerFocused ? palette.accent : palette.strokeStrong, lineWidth: 1)
+        }
+        .animation(SeNocturneMotion.resolved(SeNocturneMotion.quick, reduceMotion: reduceMotion), value: composerFocused)
     }
 
-    private var composerChips: some View {
-        ViewThatFits(in: .horizontal) {
-            chipRow
-            ScrollView(.horizontal, showsIndicators: false) { chipRow }
-        }
-    }
-
-    private var chipRow: some View {
-        HStack(spacing: SeSpace.xs) {
-            agentChip
-            if let modes = session.chat.modes?.availableModes, !modes.isEmpty {
-                Menu {
-                    ForEach(modes) { mode in
-                        Button {
-                            Task { await session.chat.setMode(mode.id) }
-                        } label: {
-                            if mode.id == session.chat.modes?.currentModeId {
-                                Label(mode.name, systemImage: "checkmark")
-                            } else {
-                                Text(mode.name)
-                            }
-                        }
-                    }
-                } label: {
-                    chipLabel(session.chat.modes?.availableModes?.first(where: { $0.id == session.chat.modes?.currentModeId })?.name ?? String(localized: "Mode"))
-                }
-                .accessibilityLabel(Text("Mode"))
-            }
-            if let models = session.chat.models?.availableModels, !models.isEmpty {
-                Menu {
-                    ForEach(models) { model in
-                        Button {
-                            Task { await session.chat.setModel(model.modelId) }
-                        } label: {
-                            if model.modelId == session.chat.models?.currentModelId {
-                                Label(model.name, systemImage: "checkmark")
-                            } else {
-                                Text(model.name)
-                            }
-                        }
-                    }
-                } label: {
-                    chipLabel(session.chat.models?.availableModels?.first(where: { $0.modelId == session.chat.models?.currentModelId })?.name ?? String(localized: "Model"))
-                }
-                .accessibilityLabel(Text("Model"))
-            }
-            if let thought = session.chat.thoughtOption, let values = thought.options, !values.isEmpty {
-                Menu {
-                    ForEach(values) { value in
-                        Button {
-                            Task { await session.chat.setConfig(optionId: thought.id, valueId: value.value) }
-                        } label: {
-                            if value.value == thought.currentValue {
-                                Label(value.name, systemImage: "checkmark")
-                            } else {
-                                Text(value.name)
-                            }
-                        }
-                    }
-                } label: {
-                    chipLabel(values.first(where: { $0.value == thought.currentValue })?.name ?? thought.name)
-                }
-                .accessibilityLabel(Text("Thinking"))
-            }
-        }
-    }
-
-    private var agentChip: some View {
+    @ViewBuilder
+    private var modelChip: some View {
+        let title = modelName ?? session.chat.agentLabel
         Button {
             session.chat.showAgentSheet = true
         } label: {
-            chipLabel(session.chat.agentLabel, systemImage: "cpu")
-        }
-        .accessibilityLabel(Text("Agent"))
-    }
-
-    private func chipLabel(_ title: String, systemImage: String = "chevron.down") -> some View {
-        SeChip(title: title, systemImage: systemImage)
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(palette.accent)
+                    .frame(width: 4, height: 4)
+                Text(title)
+                    .font(.system(size: 10, design: .monospaced))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(palette.inkSecondary)
+            .padding(.horizontal, 7)
+            .frame(height: 24)
+            .background(palette.cardAlt, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(palette.stroke, lineWidth: 1)
+            }
             .frame(minHeight: SeSpace.hitTarget)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("Agent and model"))
     }
 }

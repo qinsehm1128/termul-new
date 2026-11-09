@@ -1,5 +1,11 @@
 import SwiftUI
 
+/// Nocturne files browse + read-only preview (prototype `data-screen="files"`).
+///
+/// Compact width shows the prototype's breadcrumb, group label, `.scard` list
+/// and a "Recently read" preview card pinned below. Regular width keeps the
+/// list/preview split. Browsing, refresh, filter and search-opened previews all
+/// remain owned by FileStore.
 @MainActor
 struct FileBrowserView: View {
     @Environment(\.sePalette) private var palette
@@ -23,7 +29,7 @@ struct FileBrowserView: View {
             } else {
                 NavigationStack {
                     browser
-                        .navigationTitle(session.files.previewName ?? session.files.crumbs.last?.name ?? String(localized: "Files"))
+                        .navigationTitle(title)
                         .navigationBarTitleDisplayMode(.inline)
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) {
@@ -47,6 +53,12 @@ struct FileBrowserView: View {
         }
     }
 
+    private var title: String {
+        session.files.previewName
+            ?? session.files.crumbs.last?.name
+            ?? String(localized: "Files")
+    }
+
     private var browser: some View {
         GeometryReader { geometry in
             let split = SeLayout.columns(
@@ -55,57 +67,68 @@ struct FileBrowserView: View {
                 largeText: dynamicTypeSize.isAccessibilitySize
             ) != .single
             VStack(spacing: 0) {
-                crumbs
+                breadcrumb
                 if let message = session.files.errorMessage {
                     SeErrorBanner(message: message) {
                         Task { await refresh() }
                     }
                     .disabled(busy)
-                    .padding(SeSpace.sm)
+                    .padding(.horizontal, 18)
+                    .padding(.top, 8)
                     .accessibilityIdentifier("files-error")
                 }
                 if split {
                     HStack(spacing: 0) {
-                        fileList
-                            .frame(width: min(SeLayout.sidebarWidth.upperBound, geometry.size.width * 0.4))
-                        Rectangle().fill(palette.strokeStrong).frame(width: 1)
-                        preview
+                        VStack(spacing: 0) {
+                            R2GroupLabel(title: folderLabel, detail: String(localized: "RO"))
+                                .padding(.horizontal, 18)
+                            fileList
+                        }
+                        .frame(width: min(320, geometry.size.width * 0.4))
+                        Rectangle().fill(palette.stroke).frame(width: 1)
+                        previewPane
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
-                } else if session.files.preview != nil {
-                    preview
                 } else {
+                    R2GroupLabel(title: folderLabel, detail: String(localized: "RO"))
+                        .padding(.horizontal, 18)
                     fileList
                 }
                 desktopOnlyFooter
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(palette.canvas)
+            .background(palette.surface)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if !split, session.files.preview != nil {
+                    previewCard
+                }
+            }
         }
     }
 
-    private var crumbs: some View {
-        HStack(spacing: SeSpace.xs) {
+    // MARK: - Breadcrumb (prototype mono path)
+
+    private var breadcrumb: some View {
+        HStack(spacing: 8) {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: SeSpace.xxs) {
+                HStack(spacing: 5) {
                     ForEach(Array(session.files.crumbs.enumerated()), id: \.element.id) { index, crumb in
                         if index > 0 {
                             Text("/")
-                                .font(.caption.monospaced())
                                 .foregroundStyle(palette.inkTertiary)
                                 .accessibilityHidden(true)
                         }
                         Button {
                             Task { await popTo(crumb) }
                         } label: {
-                            HStack(spacing: SeSpace.xs) {
-                                Text(crumb.name).lineLimit(1)
-                            }
-                            .font(.caption.monospaced())
-                            .foregroundStyle(palette.inkSecondary)
-                            .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
+                            Text(crumb.name)
+                                .lineLimit(1)
+                                .foregroundStyle(index == session.files.crumbs.count - 1
+                                    ? palette.ink : palette.inkTertiary)
+                                .frame(minHeight: SeSpace.hitTarget)
+                                .contentShape(Rectangle())
                         }
-                        .buttonStyle(SePressableRowStyle())
+                        .buttonStyle(.plain)
                         .disabled(busy || (index == session.files.crumbs.count - 1 && session.files.preview == nil && session.files.errorMessage == nil))
                         .accessibilityHint(Text("Open this folder"))
                     }
@@ -114,16 +137,28 @@ struct FileBrowserView: View {
             Button {
                 Task { await refresh() }
             } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
-                    .labelStyle(.iconOnly)
-                    .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(palette.inkTertiary)
+                    .frame(width: SeSpace.hitTarget, height: SeSpace.hitTarget)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
             .disabled(busy || session.files.crumbs.isEmpty)
+            .accessibilityLabel(Text("Refresh"))
             .accessibilityIdentifier("files-refresh")
         }
-        .padding(.horizontal, SeSpace.screenInset)
-        .overlay(alignment: .bottom) { Rectangle().fill(palette.strokeStrong).frame(height: 1) }
+        .font(.system(size: 10, design: .monospaced))
+        .padding(.horizontal, 18)
+        .padding(.top, 12)
         .accessibilityIdentifier("files-crumbs")
+    }
+
+    private var folderLabel: String {
+        NocturneR2Presentation.folderSummary(
+            name: session.files.crumbs.last?.name,
+            count: session.files.entries.count
+        )
     }
 
     private var fileList: some View {
@@ -140,14 +175,19 @@ struct FileBrowserView: View {
     }
 
     @ViewBuilder
-    private var preview: some View {
+    private var previewPane: some View {
         if let content = session.files.preview {
-            WorkspaceFilePreviewView(
-                name: session.files.previewName ?? String(localized: "File preview"),
-                content: content,
-                isLoading: busy,
-                refresh: { await refresh() }
-            )
+            VStack(spacing: 0) {
+                R2GroupLabel(title: String(localized: "Recently read"), detail: String(localized: "RO"))
+                    .padding(.horizontal, 18)
+                WorkspaceFilePreviewView(
+                    name: session.files.previewName ?? String(localized: "File preview"),
+                    content: content,
+                    isLoading: busy,
+                    refresh: { await refresh() }
+                )
+            }
+            .background(palette.surface)
         } else {
             SeEmptyState(
                 title: String(localized: "Select a file"),
@@ -157,16 +197,37 @@ struct FileBrowserView: View {
         }
     }
 
+    /// Compact width: the prototype pins the recently read card below the list.
+    private var previewCard: some View {
+        VStack(spacing: 0) {
+            R2GroupLabel(title: String(localized: "Recently read"), detail: String(localized: "RO"))
+                .padding(.horizontal, 18)
+            if let content = session.files.preview {
+                WorkspaceFilePreviewView(
+                    name: session.files.previewName ?? String(localized: "File preview"),
+                    content: content,
+                    isLoading: busy,
+                    refresh: { await refresh() }
+                )
+                .frame(maxHeight: 260)
+            }
+        }
+        .background(palette.surface)
+        .overlay(alignment: .top) {
+            Rectangle().fill(palette.stroke).frame(height: 1)
+        }
+    }
+
     /// Paired phones have no fs mutation routes. Keep this boundary visible in previews too.
     private var desktopOnlyFooter: some View {
         Label("File editing is desktop-only. Changes need the host's local web client.", systemImage: "lock.shield")
-            .font(SeFont.caption)
-            .foregroundStyle(palette.inkSecondary)
+            .font(.system(size: 10))
+            .foregroundStyle(palette.inkTertiary)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, SeSpace.screenInset)
-            .padding(.vertical, SeSpace.sm)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 8)
             .background(palette.card)
-            .overlay(alignment: .top) { Rectangle().fill(palette.strokeStrong).frame(height: 1) }
+            .overlay(alignment: .top) { Rectangle().fill(palette.stroke).frame(height: 1) }
             .accessibilityIdentifier("files-desktop-only")
     }
 

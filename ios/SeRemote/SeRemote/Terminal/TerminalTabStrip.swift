@@ -1,33 +1,40 @@
 import SwiftUI
 
+/// Prototype `.tabstrip`: index + title tabs with a 2pt accent underline and a
+/// compact add button. Terminal close has no host route on the phone, so the
+/// prototype's `x` is intentionally omitted rather than faked.
 struct TerminalTabStrip: View {
     @Environment(\.sePalette) private var palette
     @Bindable var session: WorkspaceSession
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: SeSpace.xs) {
+            HStack(spacing: 0) {
                 ForEach(Array(session.terminals.terminals.enumerated()), id: \.element.id) { index, item in
                     let isSelected = session.terminals.activeId == item.id
                     Button {
                         Task { await session.revealTerminal(item.id) }
                     } label: {
-                        HStack(spacing: SeSpace.xs) {
+                        HStack(spacing: 6) {
                             Text("\(index + 1)")
-                                .font(.caption.monospaced())
-                                .foregroundStyle(palette.inkTertiary)
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(palette.inkTertiary.opacity(0.6))
                             Text(item.title)
-                                .font(SeFont.label)
+                                .font(.system(size: 12))
                                 .lineLimit(1)
                         }
-                        .foregroundStyle(isSelected ? palette.ink : palette.inkSecondary)
-                        .padding(.horizontal, SeSpace.sm)
-                        .frame(minHeight: SeSpace.hitTarget)
+                        .foregroundStyle(isSelected ? palette.ink : palette.inkTertiary)
+                        .padding(.horizontal, 11)
+                        .frame(height: 34)
                         .overlay(alignment: .bottom) {
                             if isSelected {
-                                Capsule().fill(palette.accent).frame(height: 2)
+                                Capsule()
+                                    .fill(palette.accent)
+                                    .frame(height: 2)
+                                    .padding(.horizontal, 8)
                             }
                         }
+                        .frame(minHeight: SeSpace.hitTarget)
                         .contentShape(Rectangle())
                         // Selection chrome only; no animation reaches the PTY.
                         .seAnimation(.control, value: isSelected)
@@ -48,21 +55,27 @@ struct TerminalTabStrip: View {
                     Task { await session.spawnTerminal() }
                 } label: {
                     Image(systemName: "plus")
-                        .foregroundStyle(palette.ink)
-                        .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(palette.inkTertiary)
+                        .frame(width: 28, height: 28)
+                        .background(palette.card, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                         .overlay {
-                            RoundedRectangle(cornerRadius: SeNocturneRadius.control).strokeBorder(palette.strokeStrong, lineWidth: 1)
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .stroke(palette.stroke, lineWidth: 1)
                         }
+                        .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(Text("New Terminal"))
+                .padding(.leading, 2)
             }
-            .padding(.horizontal, SeSpace.md)
-            .padding(.vertical, SeSpace.xs)
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
         }
-        .background(palette.canvas)
+        .background(palette.surface)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(palette.strokeStrong).frame(height: 1)
+            Rectangle().fill(palette.stroke).frame(height: 1)
         }
         .seHaptic(trigger: session.terminals.activeId) { old, new in
             old != nil && new != nil ? .selection : nil
