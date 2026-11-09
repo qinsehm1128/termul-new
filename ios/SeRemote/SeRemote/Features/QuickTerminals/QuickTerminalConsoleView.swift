@@ -56,6 +56,9 @@ struct QuickTerminalConsoleView: View {
     @State private var textScale = TerminalTextScale.current
     @State private var controlModifier = TerminalControlModifier()
     @State private var focusToken: UInt64 = 0
+    /// This cover's own keyboard overlap. The session flag describes the
+    /// workbench underneath and stays false for a console opened from chat.
+    @State private var keyboardHeight: CGFloat = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -74,7 +77,7 @@ struct QuickTerminalConsoleView: View {
                 canvas(viewer)
                 TerminalInputDock(
                     isEnabled: viewer.isAttached && !viewer.hasExited,
-                    isKeyboardVisible: session.terminalKeyboardVisible,
+                    isKeyboardVisible: TerminalKeyboard.isVisible(keyboardHeight),
                     controlModifier: $controlModifier,
                     onSend: { text in viewer.send(controlModifier.apply(to: text)) },
                     onFocusTerminal: { focusToken &+= 1 },
@@ -87,6 +90,7 @@ struct QuickTerminalConsoleView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(palette.canvas.ignoresSafeArea())
+        .terminalKeyboardHeight($keyboardHeight)
         .task { await start() }
         .onDisappear { release() }
         .onChange(of: terminalId) { _, _ in
@@ -184,7 +188,8 @@ struct QuickTerminalConsoleView: View {
                     textScale = scale
                     if settled { TerminalTextScale.current = scale }
                 },
-                focusToken: focusToken
+                focusToken: focusToken,
+                blurToken: session.terminalBlurToken
             )
             .id(viewer.terminalId)
             .transaction { $0.animation = nil }
@@ -268,7 +273,10 @@ struct QuickTerminalConsoleView: View {
                 return
             }
             viewer = created
-            focusToken &+= 1
+            // No auto-focus: the console opens on the whole screen and a tap
+            // on the terminal (SwiftTerm's own single tap) or the dock's
+            // keyboard control is the one way in. Grabbing first responder
+            // here is what left the keyboard up with nothing to close it.
         } catch {
             guard !Task.isCancelled else { return }
             attachError = Self.failureMessage(unattachableNotice: unattachableNotice, error: error)

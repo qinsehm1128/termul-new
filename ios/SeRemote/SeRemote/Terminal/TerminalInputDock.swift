@@ -7,6 +7,11 @@ import UIKit
 /// one compatible key, a hold applies while pressed. Repeatable keys (arrows,
 /// backspace) repeat while held. Live keyboard focus and buffered commands are
 /// both preserved so no input route from the old dock is lost.
+///
+/// The system keyboard has one owner at a time: either the live terminal canvas
+/// or the command field. The accessory row's keyboard control is the single
+/// hide/show affordance, and it is pinned outside the scrolling key strip so
+/// hiding never depends on what is on screen.
 struct TerminalInputDock: View {
     @Environment(\.sePalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -53,34 +58,70 @@ struct TerminalInputDock: View {
 
     // MARK: - Accessory keys
 
+    /// Keys scroll horizontally; the keyboard toggle stays pinned so the one
+    /// escape from the keyboard never scrolls out of reach.
     private var keyRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                // Prototype order: Esc, Tab, Ctrl, arrows, then the real host
-                // extras (Enter/Backspace/control letters). The prototype's
-                // Option/Meta chord keys are omitted because the phone input
-                // model has no modifier-chord route.
-                ForEach(headKeys) { key in
-                    keyChip(key)
-                }
-                controlKey
-                ForEach(arrowKeys) { key in
-                    keyChip(key)
-                }
-                ForEach(remainingKeys) { key in
-                    keyChip(key)
-                }
-                if UIPasteboard.general.hasStrings {
-                    R2KeyChip(
-                        label: String(localized: "Paste"),
-                        accessibilityLabel: String(localized: "Paste from clipboard")
-                    ) {
-                        if let text = UIPasteboard.general.string, !text.isEmpty { send(text) }
+        HStack(spacing: 6) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    // Prototype order: Esc, Tab, Ctrl, arrows, then the real host
+                    // extras (Enter/Backspace/control letters). The prototype's
+                    // Option/Meta chord keys are omitted because the phone input
+                    // model has no modifier-chord route.
+                    ForEach(headKeys) { key in
+                        keyChip(key)
+                    }
+                    controlKey
+                    ForEach(arrowKeys) { key in
+                        keyChip(key)
+                    }
+                    ForEach(remainingKeys) { key in
+                        keyChip(key)
+                    }
+                    if UIPasteboard.general.hasStrings {
+                        R2KeyChip(
+                            label: String(localized: "Paste"),
+                            accessibilityLabel: String(localized: "Paste from clipboard")
+                        ) {
+                            if let text = UIPasteboard.general.string, !text.isEmpty { send(text) }
+                        }
                     }
                 }
+                .padding(.vertical, 2)
             }
-            .padding(.vertical, 2)
+            keyboardToggle
         }
+    }
+
+    /// One input path for the system keyboard: hide it, or hand focus back to
+    /// the live terminal. The command field is the buffered route and never
+    /// competes for the same responder at the same time.
+    private var keyboardToggle: some View {
+        Button {
+            if isKeyboardVisible {
+                commandFocused = false
+                onDismissKeyboard()
+            } else {
+                onFocusTerminal()
+            }
+        } label: {
+            Image(systemName: isKeyboardVisible ? "keyboard.chevron.compact.down" : "keyboard")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(isKeyboardVisible ? palette.ink : palette.inkSecondary)
+                .frame(width: 30, height: 30)
+                .background(palette.card, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(isKeyboardVisible ? palette.accent : palette.stroke, lineWidth: 1)
+                }
+                .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(isKeyboardVisible
+            ? "Hide keyboard"
+            : "Show keyboard for live terminal input"))
+        .accessibilityIdentifier("terminal-keyboard-toggle")
     }
 
     private var headKeys: [TerminalAccessoryKey] {
@@ -176,35 +217,6 @@ struct TerminalInputDock: View {
                     }
                 }
                 .frame(minHeight: 32)
-
-            if isKeyboardVisible {
-                Button {
-                    commandFocused = false
-                    onDismissKeyboard()
-                } label: {
-                    Image(systemName: "keyboard.chevron.compact.down")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(palette.inkSecondary)
-                        .frame(width: 30, height: 30)
-                        .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(Text("Hide keyboard"))
-            } else {
-                Button {
-                    onFocusTerminal()
-                } label: {
-                    Image(systemName: "keyboard")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(palette.inkSecondary)
-                        .frame(width: 30, height: 30)
-                        .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(Text("Show keyboard for live terminal input"))
-            }
 
             Button {
                 submitCommand()

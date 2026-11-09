@@ -162,12 +162,22 @@ final class PhoneTerminalView: TerminalView {
     var onTextScaleChange: ((CGFloat, Bool) -> Void)?
 
     private var lastFitKey = ""
+    /// The fit the current bounds resolved to. Phone mode uses its font size
+    /// (the grid then follows from the cell metrics); desktop mode also forces
+    /// its column count onto the terminal.
+    private var pendingFit: TerminalGridFit.Fit?
     private var pinchStart: CGFloat = TerminalTextScale.defaultValue
     private var didInstallPinch = false
+    private var didInstallDismissDrag = false
+    private var dismissDragFired = false
+
+    /// Downward travel that reads as "swipe the keyboard away".
+    private static let dismissDragDistance: CGFloat = 24
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
         installPinchIfNeeded()
+        installDismissDragIfNeeded()
     }
 
     override func layoutSubviews() {
@@ -209,40 +219,120 @@ final class PhoneTerminalView: TerminalView {
         setNeedsLayout()
     }
 
+    /// Cell metrics of the live face, measured once per layout rather than
+    /// hard-coding SF Mono: the fallback face is whatever the system picks.
+    private func measuredMetrics() -> (advance: CGFloat, lineHeight: CGFloat) {
+        let sample = UIFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let advance = max("W".size(withAttributes: [.font: sample]).width / 12, 0.1)
+        // Round the row box up: a row taller than SwiftTerm's own cell height
+        // would clip the bottom line and its cursor.
+        let lineHeight = max(sample.lineHeight.rounded(.up) / 12, 0.5)
+        return (advance, lineHeight)
+    }
+
     private func applyColumnFit() {
-        let width = bounds.width
-        guard width > 8 else { return }
+        let size = bounds.size
+        guard size.width > 8 else { return }
+        let metrics = measuredMetrics()
+        let fit: TerminalGridFit.Fit
+        let mode: String
         if lockToHostCols {
-            let cols = max(hostCols, 20)
-            let key = "desktop:\(Int(width.rounded())):\(cols):\(Int((textScale * 100).rounded()))"
-            guard key != lastFitKey else { return }
-            lastFitKey = key
-            let sample = UIFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-            let sampleWidth = max("W".size(withAttributes: [.font: sample]).width, 1)
-            let fitted = 12 * (width / (sampleWidth * CGFloat(cols))) * textScale
-            let size = min(22, max(6, (fitted * 2).rounded() / 2))
-            if abs(font.pointSize - size) >= 0.25 {
-                font = UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
-            }
-            return
+            mode = "desktop"
+            fit = TerminalGridFit.desktopFit(
+                size: size,
+                hostCols: hostCols,
+                textScale: textScale,
+                advanceRatio: metrics.advance,
+                lineHeightRatio: metrics.lineHeight
+            )
+        } else {
+            mode = "phone"
+            fit = TerminalGridFit.phoneFit(
+                size: size,
+                textScale: textScale,
+                advanceRatio: metrics.advance,
+                lineHeightRatio: metrics.lineHeight
+            )
         }
-        let key = "phone:\(Int(width.rounded())):\(Int((textScale * 100).rounded()))"
+        // Height belongs in the key: the keyboard showing/hiding changes only
+        // the rows, and the phone grid must be recomputed for it.
+        let key = "\(mode):\(Int(size.width.rounded()))x\(Int(size.height.rounded())):\(fit.cols)x\(fit.rows):\(Int((textScale * 100).rounded()))"
         guard key != lastFitKey else { return }
         lastFitKey = key
-        let size = min(20, max(10, (13 * textScale * 2).rounded() / 2))
-        if abs(font.pointSize - size) >= 0.25 {
-            font = UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
+        pendingFit = fit
+        if abs(font.pointSize - fit.fontSize) >= 0.25 {
+            font = UIFont.monospacedSystemFont(ofSize: fit.fontSize, weight: .regular)
         }
     }
 
+    /// Hold the host column count in desktop mode.
+    ///
+    /// Phone mode must not call `resize` here: `TerminalView.resize` runs
+    /// `softReset`, which clears cursor-keypad and origin modes — a running TUI
+    /// would break on every keyboard toggle. SwiftTerm's own layout fit already
+    /// lays out the exact grid `TerminalGridFit` sized the font for, and reports
+    /// it through `sizeChanged`, which is what reaches the host.
     private func lockGridIfNeeded() {
-        guard lockToHostCols, bounds.height > 8 else { return }
-        let cols = max(hostCols, 20)
-        let cellHeight = max(font.lineHeight, 1)
-        let rows = max(4, Int(bounds.height / cellHeight))
+        guard lockToHostCols, bounds.height > 8, let fit = pendingFit else { return }
+        let cols = max(fit.cols, 1)
+        let rows = max(fit.rows, 1)
         let terminal = getTerminal()
         if terminal.cols != cols || terminal.rows != rows {
             resize(cols: cols, rows: rows)
         }
+    }
+
+    // MARK: - Keyboard dismissal
+
+    /// A downward drag over the canvas drops the keyboard, matching the
+    /// `scrollDismissesKeyboard` gesture the rest of the app uses. Recognition
+    /// runs alongside SwiftTerm's scroll/selection pans and the dock's field.
+    private func installDismissDragIfNeeded() {
+        guard !didInstallDismissDrag else { return }
+        didInstallDismissDrag = true
+        let drag = UIPanGestureRecognizer(target: self, action: #selector(handleDismissDrag))
+        drag.cancelsTouchesInView = false
+        drag.delegate = self
+        addGestureRecognizer(drag)
+    }
+
+    @objc
+    private func handleDismissDrag(_ gesture: UIPanGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            dismissDragFired = false
+        case .changed:
+            guard !dismissDragFired else { return }
+            let translation = gesture.translation(in: self)
+            guard translation.y >= Self.dismissDragDistance,
+                  abs(translation.y) > abs(translation.x)
+            else { return }
+            dismissDragFired = true
+            dismissKeyboard()
+        case .ended, .cancelled, .failed:
+            dismissDragFired = false
+        default:
+            break
+        }
+    }
+
+    private func dismissKeyboard() {
+        // Either the canvas or the dock's command field can own the keyboard;
+        // resign the whole chain so both paths converge on one hidden state.
+        if isFirstResponder {
+            _ = resignFirstResponder()
+        }
+        KeyboardGuard.resign()
+    }
+}
+
+extension PhoneTerminalView: UIGestureRecognizerDelegate {
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        // SwiftTerm scrolls scrollback with its own pans; dismissing on a
+        // downward drag must not steal those touches.
+        true
     }
 }
