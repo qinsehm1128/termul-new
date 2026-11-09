@@ -1,7 +1,5 @@
 import SwiftUI
 
-// MARK: - Model
-
 struct OfflineSession: Identifiable, Equatable, Sendable {
     let id: String
     let title: String
@@ -9,12 +7,9 @@ struct OfflineSession: Identifiable, Equatable, Sendable {
     let badge: String
 }
 
-// MARK: - Screen
-
-/// Read-only cache is offered only when an actual transcript exists.
+/// 离线: cached sessions stay readable; reconnect and wake are the only
+/// actions, and neither claims success before the host answers.
 struct OfflineView: View {
-    @Environment(\.sePalette) private var palette
-
     var host: String
     var lastSeen: String
     var cached: [OfflineSession]
@@ -25,177 +20,109 @@ struct OfflineView: View {
     var onOpenSettings: (() -> Void)? = nil
     var onOpenCached: (OfflineSession) -> Void = { _ in }
 
+    @Environment(\.sePalette) private var palette
+    @Environment(\.seThemeMode) private var mode
+
     var body: some View {
-        ScrollView {
+        ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
-                header
-                    .padding(.top, SeSpace.xs)
-                title
-                    .padding(.top, SeSpace.lg)
-                connectionCard
-                    .padding(.top, SeSpace.lg)
-                if !cached.isEmpty {
-                Text("Cached sessions")
-                    .font(SeNocturneType.monoSmall)
-                    .foregroundStyle(palette.inkTertiary)
-                    .padding(.top, SeSpace.xl)
-                    .padding(.bottom, 8)
-                cachedList
-                Text("Cached transcripts are read only.")
-                    .font(SeNocturneType.font(9.5))
-                    .foregroundStyle(palette.inkTertiary)
-                    .padding(.top, 14)
-                }
-            }
-            .padding(.horizontal, SeSpace.lg)
-            .padding(.bottom, SeSpace.xxl)
-        }
-        .scrollIndicators(.hidden)
-        .background(palette.canvas.ignoresSafeArea())
-    }
+                SeNavBar(
+                    title: host,
+                    subtitle: subtitle,
+                    onBack: onBack,
+                    onTrailing: onOpenSettings
+                )
 
-    private var header: some View {
-        HStack(spacing: 10) {
-            iconButton(systemImage: "chevron.left", label: String(localized: "Back"), action: onBack)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(verbatim: host)
-                    .font(SeNocturneType.font(SeNocturneType.sectionTitleSize, weight: .semibold))
-                    .foregroundStyle(palette.ink)
-                Text(lastSeen.isEmpty ? String(localized: "Offline") : String(localized: "Offline · last seen \(lastSeen)"))
-                    .font(SeNocturneType.monoSmall)
-                    .foregroundStyle(palette.inkTertiary)
-            }
-            Spacer(minLength: 8)
-            if let onOpenSettings {
-                iconButton(systemImage: "slider.horizontal.3", label: String(localized: "Settings"), action: onOpenSettings)
-            }
+                hostHead
 
-        }
-    }
+                VStack(alignment: .leading, spacing: 0) {
+                    SeEyebrow(text: "连接已断开")
+                    Text("这台主机现在不在线。已缓存的会话仍然可以读，但不能发送新的指令。")
+                        .font(SeNocturneType.font(12))
+                        .foregroundStyle(palette.inkSecondary)
+                        .lineSpacing(3)
+                        .padding(.top, 7)
 
-    private var title: some View {
-        HStack(spacing: 7) {
-            Circle()
-                .fill(palette.inkTertiary)
-                .frame(width: 6, height: 6)
-            Text(verbatim: host)
-                .font(SeNocturneType.monoSmall)
-                .foregroundStyle(palette.inkTertiary)
-        }
-    }
+                    SeSolidButton(title: "重新连接", action: onReconnect)
+                        .padding(.top, 14)
 
-    private var connectionCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("Connection lost")
-                .font(SeNocturneType.monoSmall)
-                .foregroundStyle(palette.inkTertiary)
-            Text(cached.isEmpty ? String(localized: "Connection lost. Reconnect to continue.") : String(localized: "Connection lost. Cached transcripts are readable, but new instructions cannot be sent."))
-                .font(SeNocturneType.secondary)
-                .foregroundStyle(palette.inkSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 7)
-
-            Button(action: onReconnect) {
-                Text("Reconnect")
-                    .font(SeNocturneType.font(SeNocturneType.secondarySize, weight: .semibold))
-                    .foregroundStyle(palette.surface)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 44)
-                    .background(palette.ink, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
-            }
-            .buttonStyle(.plain)
-            .padding(.top, 14)
-
-            if let onWake {
-            Button(action: onWake) {
-                Text("Try Wake on LAN")
-                    .font(SeNocturneType.monoSmall)
-                    .foregroundStyle(palette.inkTertiary)
-                    .padding(.top, 10)
-            }
-            .buttonStyle(.plain)
-            .frame(minHeight: 44)
-            }
-        }
-        .padding(13)
-        .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.card))
-        .overlay {
-            RoundedRectangle(cornerRadius: SeNocturneRadius.card)
-                .strokeBorder(palette.strokeStrong, lineWidth: 1)
-        }
-    }
-
-    private var cachedList: some View {
-        VStack(spacing: 6) {
-            ForEach(cached) { session in
-                Button {
-                    onOpenCached(session)
-                } label: {
-                    HStack(spacing: 10) {
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(palette.inkTertiary)
-                            .frame(width: 3, height: 24)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(verbatim: session.title)
-                                .font(SeNocturneType.rowTitle)
-                                .foregroundStyle(palette.ink)
-                                .lineLimit(1)
-                            Text(verbatim: session.meta)
-                                .font(SeNocturneType.monoSmall)
-                                .foregroundStyle(palette.inkTertiary)
-                                .lineLimit(1)
+                    if let onWake {
+                        Button(action: onWake) {
+                            Text("尝试局域网唤醒")
+                                .font(SeNocturneType.font(11.5))
+                                .foregroundStyle(palette.accent)
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                                .contentShape(Rectangle())
                         }
-                        Spacer(minLength: 8)
-                        Text(verbatim: session.badge)
-                            .font(SeNocturneType.monoSmall)
-                            .foregroundStyle(palette.inkTertiary)
-                            .padding(.horizontal, 6)
-                            .frame(height: 20)
-                            .background(palette.cardAlt, in: RoundedRectangle(cornerRadius: 5))
-                    }
-                    .padding(11)
-                    .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.card))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: SeNocturneRadius.card)
-                            .strokeBorder(palette.stroke, lineWidth: 1)
+                        .buttonStyle(SePressable())
+                        .padding(.top, 2)
                     }
                 }
-                .buttonStyle(.plain)
+                .padding(14)
+                .background(palette.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(mode.strongHairline.opacity(0.6), lineWidth: 1)
+                }
+                .padding(.horizontal, 18)
+                .padding(.top, 20)
+
+                SeGroupLabel(title: "缓存会话", count: String(format: "%02d", cached.count))
+
+                if cached.isEmpty {
+                    Text("这台主机还没有缓存下来的会话。")
+                        .font(SeNocturneType.font(11))
+                        .foregroundStyle(palette.inkSecondary)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 12)
+                } else {
+                    VStack(spacing: 8) {
+                        ForEach(cached) { item in
+                            SeSessionRow(
+                                title: item.title,
+                                meta: item.meta,
+                                time: nil,
+                                status: .idle,
+                                trailing: item.badge,
+                                onTap: { onOpenCached(item) }
+                            )
+                        }
+                    }
+                    .padding(.horizontal, 18)
+                }
+
+                Text("缓存只保留最近 7 天。重新连接后，会话会续上原来的 PTY。")
+                    .font(SeNocturneType.font(10))
+                    .foregroundStyle(palette.inkTertiary)
+                    .padding(.horizontal, 18)
+                    .padding(.top, 14)
+                    .padding(.bottom, 28)
             }
         }
+        .background(palette.canvas)
+        .foregroundStyle(palette.ink)
     }
 
-    private func iconButton(systemImage: String, label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 14, weight: .regular))
-                .foregroundStyle(palette.inkSecondary)
-                .frame(width: 44, height: 44)
-                .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
-                .overlay {
-                    RoundedRectangle(cornerRadius: SeNocturneRadius.control)
-                        .strokeBorder(palette.stroke, lineWidth: 1)
-                }
+    private var subtitle: String {
+        lastSeen.isEmpty ? "离线" : "离线 · 上次在线 \(lastSeen)"
+    }
+
+    private var hostHead: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            SeEyebrow(text: "主机")
+            Text(host)
+                .font(SeNocturneType.font(26, weight: .semibold))
+                .tracking(-0.8)
+                .foregroundStyle(palette.ink)
+                .lineLimit(1)
+            HStack(spacing: 5) {
+                SeNeedDot(kind: .off, size: 5)
+                Text(subtitle)
+                    .font(SeNocturneType.font(9, mono: true))
+                    .foregroundStyle(palette.inkTertiary)
+            }
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
+        .padding(.horizontal, 18)
+        .padding(.top, 16)
     }
-}
-
-#Preview("Offline · Night") {
-    OfflineView(
-        host: "Mac mini",
-        lastSeen: "3h ago",
-        cached: [
-            OfflineSession(id: "o1", title: "优化远程连接恢复", meta: "Claude Code · read only · 3h ago", badge: "Cached"),
-            OfflineSession(id: "o2", title: "检查 ACP 消息流", meta: "Terminal · read only · yesterday", badge: "Cached"),
-            OfflineSession(id: "o3", title: "夜间冒烟测试", meta: "Schedule · not running", badge: "Paused")
-        ]
-    )
-    .seThemeMode(.night)
-}
-
-#Preview("Offline · Day") {
-    OfflineView(host: "Mac mini", lastSeen: "3h ago", cached: [])
-        .seThemeMode(.day)
 }

@@ -9,14 +9,17 @@ struct ScannerView: View {
     @State private var cameraError: String?
 
     var body: some View {
-        NavigationStack {
+        ZStack {
+            Color(hex: 0x05070A).ignoresSafeArea()
+
             Group {
                 if let cameraError {
                     ContentUnavailableView(
-                        "Camera unavailable",
+                        "摄像头不可用",
                         systemImage: "camera.fill",
                         description: Text(cameraError)
                     )
+                    .foregroundStyle(.white)
                 } else if DataScannerViewController.isSupported, DataScannerViewController.isAvailable {
                     ZStack {
                         DataScannerRepresentable(onScan: onScan, onError: { cameraError = $0 })
@@ -24,21 +27,41 @@ struct ScannerView: View {
                     }
                 } else {
                     ContentUnavailableView(
-                        String(localized: "Camera unavailable"),
+                        "摄像头不可用",
                         systemImage: "qrcode.viewfinder",
-                        description: Text("Close the scanner and paste the desktop access URL instead. Camera access may be unavailable or disabled in iOS Settings.")
+                        description: Text("关闭扫码后，可以粘贴桌面的访问链接。摄像头可能不可用，或已在 iOS 设置里关闭。")
                     )
+                    .foregroundStyle(.white)
                 }
             }
-            .navigationTitle(String(localized: "Scan QR"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(String(localized: "Close"), systemImage: "xmark") {
+
+            VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    Button {
                         dismiss()
+                    } label: {
+                        SeIconView(icon: .close, size: 14, stroke: 1.7, color: Color(hex: 0xF2F0E8))
+                            .frame(width: 34, height: 34)
+                            .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                            .contentShape(Rectangle())
+                            .frame(width: 44, height: 44)
                     }
-                    .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("关闭扫码")
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("扫码配对")
+                            .font(SeNocturneType.font(19, weight: .semibold))
+                            .tracking(-0.5)
+                            .foregroundStyle(Color(hex: 0xF2F0E8))
+                        Text("SE REMOTE · PAIR")
+                            .font(SeNocturneType.font(9, mono: true))
+                            .foregroundStyle(Color(hex: 0xA9AEBB))
+                    }
+                    Spacer(minLength: 0)
                 }
+                .padding(.horizontal, 18)
+                .padding(.top, 8)
+                Spacer()
             }
         }
         .tint(palette.accent)

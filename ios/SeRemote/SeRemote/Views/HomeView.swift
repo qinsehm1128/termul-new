@@ -1,45 +1,108 @@
 import SwiftUI
 
+/// The pre-connection home: the prototype's 夜间作业 page reduced to the data
+/// this phone actually has — saved hosts and real open/connection timestamps.
 @MainActor
 struct HomeView: View {
     @Bindable var store: ConnectionStore
     @Bindable var settings: AppSettings
+
     @Environment(\.horizontalSizeClass) private var sizeClass
-    @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.sePalette) private var palette
-    @State private var selectedHostID: UUID?
-    @State private var usesSplitLayout = false
+    @Environment(\.seThemeMode) private var mode
+
     @State private var showPairing = false
     @State private var showSettings = false
     @State private var pendingLink: RemoteLink?
     @State private var renamingLink: RemoteLink?
     @State private var renameTitle = ""
     @State private var deletingLink: RemoteLink?
+    @State private var actionLink: RemoteLink?
     @State private var activity = ShellPairingActivity()
 
-    var body: some View {
-        GeometryReader { geometry in
-            let split =
-                SeLayout.columns(
-                    width: geometry.size.width,
-                    isRegular: sizeClass == .regular,
-                    largeText: typeSize.isAccessibilitySize
-                ) != .single
-            Group {
-                if split {
-                    NavigationSplitView {
-                        hostList
-                            .navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 380)
-                    } detail: {
-                        selectedHostDetail
-                    }
-                    .navigationSplitViewStyle(.balanced)
-                } else {
-                    NavigationStack { hostList }
-                }
+    private var recentHost: RemoteLink? {
+        var best: (link: RemoteLink, date: Date)?
+        for link in store.savedLinks {
+            let date = activityDate(for: link)
+            if best == nil || date > best!.date {
+                best = (link, date)
             }
-            .onChange(of: split, initial: true) { _, value in usesSplitLayout = value }
         }
+        return best?.link
+    }
+
+    private func activityDate(for link: RemoteLink) -> Date {
+        if let connected = activity.connectedDate(for: link) { return connected }
+        if let opened = activity.date(for: link) { return opened }
+        return link.createdAt
+    }
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 0) {
+                    pageTop
+                    if let recentHost {
+                        resumeRow(recentHost)
+                            .padding(.horizontal, 18)
+                            .padding(.top, 12)
+                    }
+
+                    SeGroupLabel(title: "最近主机", count: String(format: "%02d", store.savedLinks.count))
+
+                    if store.savedLinks.isEmpty {
+                        emptyState
+                            .padding(.horizontal, 18)
+                    } else {
+                        VStack(spacing: 0) {
+                            ForEach(Array(store.savedLinks.enumerated()), id: \.element.id) { index, link in
+                                SeHostRowView(
+                                    index: String(format: "%02d", index + 1),
+                                    name: link.title,
+                                    meta: meta(for: link),
+                                    latency: nil,
+                                    online: store.activeLink?.id == link.id,
+                                    onTap: { open(link) },
+                                    onMore: { actionLink = link }
+                                )
+                                .contextMenu {
+                                    Button("打开") { open(link) }
+                                    Button("重命名") { beginRename(link) }
+                                    Button("解除", role: .destructive) { deletingLink = link }
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 18)
+                    }
+
+                    SeLinkRow(title: "用配对链接添加主机") {
+                        store.dismissError()
+                        showPairing = true
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.top, 4)
+
+                    if let error = store.errorMessage {
+                        SeErrorBanner(message: error)
+                            .padding(.horizontal, 18)
+                            .padding(.top, 8)
+                    }
+
+                    Text("配对需要在你的主机上确认。屏幕之外，没有别的入口。")
+                        .font(SeNocturneType.font(10))
+                        .foregroundStyle(palette.inkTertiary)
+                        .padding(.horizontal, 18)
+                        .padding(.top, 14)
+                        .padding(.bottom, 120)
+                }
+                .frame(maxWidth: 680)
+                .frame(maxWidth: .infinity)
+            }
+
+            dock
+        }
+        .background(palette.canvas.ignoresSafeArea())
+        .foregroundStyle(palette.ink)
         .onAppear { activity.reload() }
         .sheet(isPresented: $showPairing, onDismiss: connectPendingLink) {
             ShellPairingView { link in
@@ -47,354 +110,177 @@ struct HomeView: View {
                 showPairing = false
             }
             .presentationDetents([.large])
-            .presentationDragIndicator(.visible)
+            .presentationDragIndicator(.hidden)
         }
         .sheet(isPresented: $showSettings) {
             SettingsView(settings: settings, store: store)
         }
-        .alert(
-            "Rename",
-            isPresented: Binding(
-                get: { renamingLink != nil },
-                set: { if !$0 { renamingLink = nil } }
-            ), presenting: renamingLink
-        ) { link in
-            TextField("Name", text: $renameTitle)
-            Button("Cancel", role: .cancel) { renamingLink = nil }
-            Button("Save") {
+        .alert("重命名", isPresented: Binding(
+            get: { renamingLink != nil },
+            set: { if !$0 { renamingLink = nil } }
+        ), presenting: renamingLink) { link in
+            TextField("名称", text: $renameTitle)
+            Button("取消", role: .cancel) { renamingLink = nil }
+            Button("保存") {
                 store.rename(link, title: renameTitle)
                 renamingLink = nil
             }
             .disabled(renameTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
-        .confirmationDialog(
-            "Delete saved host?",
-            isPresented: Binding(
-                get: { deletingLink != nil },
-                set: { if !$0 { deletingLink = nil } }
-            ), titleVisibility: .visible, presenting: deletingLink
-        ) { link in
-            Button("Delete", role: .destructive) {
+        .confirmationDialog("主机操作", isPresented: Binding(
+            get: { actionLink != nil },
+            set: { if !$0 { actionLink = nil } }
+        ), titleVisibility: .visible, presenting: actionLink) { link in
+            Button("打开") { actionLink = nil; open(link) }
+            Button("重命名") { actionLink = nil; beginRename(link) }
+            Button("解除", role: .destructive) { actionLink = nil; deletingLink = link }
+            Button("取消", role: .cancel) { actionLink = nil }
+        }
+        .confirmationDialog("解除这台主机？", isPresented: Binding(
+            get: { deletingLink != nil },
+            set: { if !$0 { deletingLink = nil } }
+        ), titleVisibility: .visible, presenting: deletingLink) { link in
+            Button("解除", role: .destructive) {
                 activity.forget(link)
                 store.forget(link)
                 deletingLink = nil
             }
-            Button("Cancel", role: .cancel) { deletingLink = nil }
+            Button("取消", role: .cancel) { deletingLink = nil }
         } message: { _ in
-            Text("This removes the saved host and its access secret from this device. It does not change your desktop.")
+            Text("这会从本机删除主机和已保存的访问密钥。不会改变你的桌面。")
         }
         .tint(palette.accent)
     }
 
-    private var hostList: some View {
-        List {
-            Section {
-                introduction
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(rowInsets)
-            }
+    // MARK: - Page
 
-            Section {
-                if store.savedLinks.isEmpty {
-                    SeEmptyState(
-                        title: String(localized: "Your desktop, within reach."),
-                        systemImage: "desktopcomputer",
-                        message: String(
-                            localized: "Pair a trusted host to return to your sessions, terminal and files.")
-                    )
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(rowInsets)
-                } else {
-                    ForEach(store.savedLinks) { link in
-                        hostRow(link)
-                            .listRowBackground(
-                                Color.clear
-                            )
-                            .accessibilityAddTraits(usesSplitLayout && selectedHost?.id == link.id ? .isSelected : [])
-                            .listRowInsets(EdgeInsets(top: SeSpace.xs, leading: SeSpace.screenInset, bottom: SeSpace.xs, trailing: SeSpace.screenInset))
-                            .listRowSeparator(.hidden)
-                            .contextMenu { hostActions(link) }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                Button(role: .destructive) {
-                                    deletingLink = link
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
-                                Button {
-                                    beginRename(link)
-                                } label: {
-                                    Label("Rename", systemImage: "pencil")
-                                }
-                                .tint(palette.inkSecondary)
-                            }
-                            .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                                Button {
-                                    open(link)
-                                } label: {
-                                    Label("Open", systemImage: "arrow.up.right")
-                                }
-                                .tint(palette.accent)
-                            }
-                            .accessibilityAction(named: Text("Rename")) { beginRename(link) }
-                            .accessibilityAction(named: Text("Delete")) { deletingLink = link }
-                    }
+    private var pageTop: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                SeEyebrow(text: today)
+                Spacer(minLength: 0)
+                SeIconButton(icon: .refresh, accessibilityLabel: "刷新", size: 34) {
+                    activity.reload()
                 }
-            } header: {
-                Text("Saved hosts")
-                    .font(SeNocturneType.sectionTitle)
-                    .foregroundStyle(palette.inkSecondary)
-                    .padding(.top, SeSpace.sm)
-                    .textCase(nil)
-            }
-
-            Section {
-                pairingAction
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(rowInsets)
-            }
-
-            if let error = store.errorMessage {
-                Section {
-                    SeErrorBanner(message: error)
-                        .accessibilityIdentifier("home.error")
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(rowInsets)
+                SeIconButton(icon: mode == .night ? .moon : .sun, accessibilityLabel: "切换主题", size: 34) {
+                    settings.appearance = mode.toggled.appearance
                 }
-            }
-        }
-        .listStyle(.plain)
-        .listRowBackground(palette.canvas)
-        .scrollContentBackground(.hidden)
-        .frame(maxWidth: SeLayout.readableColumnMaxWidth)
-        .frame(maxWidth: .infinity)
-        .background(palette.canvas)
-        .foregroundStyle(palette.ink)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Text("SeRemote")
-                    .font(SeFont.identity)
-                    .foregroundStyle(palette.ink)
-                    .accessibilityAddTraits(.isHeader)
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
+                SeIconButton(icon: .gear, accessibilityLabel: "设置", size: 34) {
                     showSettings = true
-                } label: {
-                    Image(systemName: "gearshape")
-                        .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
-                }
-                .accessibilityLabel("Settings")
-            }
-        }
-    }
-
-    private var selectedHost: RemoteLink? {
-        store.savedLinks.first { $0.id == selectedHostID } ?? store.savedLinks.first
-    }
-
-    private var selectedHostDetail: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: SeSpace.xl) {
-                if let link = selectedHost {
-                    Image(systemName: "desktopcomputer")
-                        .font(.largeTitle)
-                        .foregroundStyle(palette.inkSecondary)
-                        .accessibilityHidden(true)
-                    Text(link.title)
-                        .font(SeFont.screenTitle)
-                        .accessibilityAddTraits(.isHeader)
-                    Text(link.originHost)
-                        .font(SeFont.body)
-                        .foregroundStyle(palette.inkSecondary)
-                    Label("Not connected", systemImage: "circle.slash")
-                        .font(SeFont.support)
-                        .foregroundStyle(palette.inkSecondary)
-                    lastActivityLabel(link)
-                    Button {
-                        open(link)
-                    } label: {
-                        Label("Open host", systemImage: "arrow.up.right")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(SePrimaryButtonStyle())
-                    HStack(spacing: SeSpace.md) {
-                        Button {
-                            beginRename(link)
-                        } label: {
-                            Label("Rename", systemImage: "pencil")
-                        }
-                        Spacer()
-                        Button(role: .destructive) {
-                            deletingLink = link
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
-                    }
-                    .frame(minHeight: SeSpace.hitTarget)
-                    Text("Host status is checked when you open it. Git and Files are read-only.")
-                        .font(SeFont.support)
-                        .foregroundStyle(palette.inkSecondary)
-                } else {
-                    introduction
-                    pairingAction
                 }
             }
-            .frame(maxWidth: SeLayout.readableColumnMaxWidth, alignment: .leading)
-            .padding(SeSpace.xxl)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            SeDisplayText(text: "夜间作业")
+                .padding(.top, 4)
+            lede
         }
-        .background(palette.canvas)
-        .foregroundStyle(palette.ink)
-        .navigationTitle(selectedHost?.title ?? String(localized: "Your hosts"))
-        .navigationBarTitleDisplayMode(.inline)
+        .padding(.horizontal, 18)
+        .padding(.top, 10)
     }
 
-    private var rowInsets: EdgeInsets {
-        EdgeInsets(top: SeSpace.md, leading: SeSpace.screenInset, bottom: SeSpace.md, trailing: SeSpace.screenInset)
-    }
-
-    private var introduction: some View {
-        VStack(alignment: .leading, spacing: SeSpace.sm) {
-            Text("REMOTE WORKSPACE")
-                .font(SeFont.label)
-                .tracking(1.2)
-                .foregroundStyle(palette.inkSecondary)
-            Text("Your hosts.")
-                .font(SeFont.screenTitle)
-                .accessibilityAddTraits(.isHeader)
-            Text("Connect to a trusted desktop to return to your sessions, terminal and files.")
-                .font(SeFont.body)
+    private var lede: some View {
+        HStack(spacing: 4) {
+            Text("\(store.savedLinks.count) 台").fontWeight(.semibold).foregroundStyle(palette.ink)
+            Text("主机").foregroundStyle(palette.inkSecondary)
+            Text("·").foregroundStyle(palette.inkTertiary)
+            Text(store.savedLinks.isEmpty ? "还没有连接" : "等你连接")
                 .foregroundStyle(palette.inkSecondary)
         }
-        .padding(.vertical, SeSpace.md)
-        .fixedSize(horizontal: false, vertical: true)
+        .font(SeNocturneType.font(12))
     }
 
-    private func hostRow(_ link: RemoteLink) -> some View {
-        Button {
-            selectedHostID = link.id
-            if !usesSplitLayout { open(link) }
-        } label: {
-            HStack(alignment: .top, spacing: SeSpace.md) {
-                Image(systemName: "desktopcomputer")
-                    .font(.title3)
-                    .foregroundStyle(palette.inkSecondary)
-                    .frame(width: SeSpace.hitTarget, height: SeSpace.hitTarget)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: SeNocturneRadius.control)
-                            .strokeBorder(palette.stroke, lineWidth: 1)
-                    }
-                    .accessibilityHidden(true)
-
-                VStack(alignment: .leading, spacing: SeSpace.xs) {
-                    Text(link.title)
-                        .font(SeFont.rowTitle)
-                        .foregroundStyle(palette.ink)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text(link.originHost)
-                        .font(SeFont.support)
-                        .foregroundStyle(palette.inkSecondary)
-                        .lineLimit(2)
-                    Label {
-                        Text(store.activeLink?.id == link.id ? "Connecting" : "Not connected")
-                    } icon: {
-                        Image(
-                            systemName: store.activeLink?.id == link.id ? "arrow.triangle.2.circlepath" : "circle.slash"
-                        )
-                    }
-                    .font(SeFont.caption)
-                    .foregroundStyle(palette.inkSecondary)
-                    lastActivityLabel(link)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                Image(systemName: "chevron.right")
-                    .font(SeFont.caption)
-                    .foregroundStyle(palette.inkSecondary)
-                    .padding(.top, SeSpace.sm)
-                    .accessibilityHidden(true)
-            }
-            .padding(SeSpace.md)
-            .background(usesSplitLayout && selectedHost?.id == link.id ? palette.cardAlt : palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.card))
-            .overlay {
-                RoundedRectangle(cornerRadius: SeNocturneRadius.card)
-                    .strokeBorder(usesSplitLayout && selectedHost?.id == link.id ? palette.strokeStrong : palette.stroke, lineWidth: 1)
-            }
-            .frame(maxWidth: .infinity, minHeight: SeSpace.hitTarget, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(SePressableRowStyle())
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("home.host.\(link.id.uuidString)")
-        .accessibilityHint(usesSplitLayout ? Text("Show host details") : Text("Open this host"))
+    private func resumeRow(_ link: RemoteLink) -> some View {
+        SeResumeRow(
+            title: link.title,
+            meta: resumeMeta(link),
+            actionTitle: "继续 →",
+            onTap: { open(link) }
+        )
     }
 
-    @ViewBuilder
-    private func lastActivityLabel(_ link: RemoteLink) -> some View {
-        if let date = activity.connectedDate(for: link) {
-            Text("Last connected \(date, format: .relative(presentation: .named))")
-                .font(SeFont.timing)
-                .foregroundStyle(palette.inkSecondary)
-        } else if let date = activity.date(for: link) {
-            // An Open action alone is not evidence of a completed handshake.
-            Text("Last opened \(date, format: .relative(presentation: .named))")
-                .font(SeFont.timing)
-                .foregroundStyle(palette.inkSecondary)
-        } else {
-            Text("Added \(link.createdAt, style: .date)")
-                .font(SeFont.timing)
-                .foregroundStyle(palette.inkSecondary)
-        }
-    }
-
-    private var pairingAction: some View {
-        VStack(alignment: .leading, spacing: SeSpace.md) {
-            Button {
-                store.dismissError()
-                showPairing = true
-            } label: {
-                Label("Pair a host", systemImage: "plus")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(SePrimaryButtonStyle())
-            .accessibilityIdentifier("home.pair")
-
-            Text("Open SeRemote on your desktop. Scan or paste its access link. You choose when to connect.")
-                .font(SeFont.support)
+    private var emptyState: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("还没有保存的主机")
+                .font(SeNocturneType.font(13, weight: .semibold))
+                .foregroundStyle(palette.ink)
+            Text("在 Mac 上打开 SeRemote，扫描二维码或粘贴访问链接。")
+                .font(SeNocturneType.font(11))
                 .foregroundStyle(palette.inkSecondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(palette.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(mode.hairline, lineWidth: 1)
+        }
+    }
 
-            HStack(alignment: .top, spacing: SeSpace.sm) {
-                Rectangle().fill(palette.accent).frame(width: 2)
-                Text("Git and Files are read-only. Pairing secrets stay in the Keychain on this phone.")
-                    .font(SeFont.support)
-                    .foregroundStyle(palette.inkSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
+    private var dock: some View {
+        HStack(spacing: 8) {
+            SeSolidButton(title: "配对新主机", icon: .plus) {
+                store.dismissError()
+                showPairing = true
             }
-            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("home.pair")
+            SeOutlineButton(title: "扫码", icon: .scan, square: true) {
+                store.dismissError()
+                showPairing = true
+            }
+            SeOutlineButton(title: "粘贴链接", icon: .link, square: true) {
+                store.dismissError()
+                showPairing = true
+            }
         }
-        .padding(.vertical, SeSpace.md)
+        .padding(.horizontal, 18)
+        .padding(.top, 20)
+        .padding(.bottom, 28)
+        .background(
+            LinearGradient(
+                stops: [
+                    .init(color: palette.canvas.opacity(0), location: 0),
+                    .init(color: palette.canvas.opacity(0.86), location: 0.45),
+                    .init(color: palette.canvas, location: 0.72)
+                ],
+                startPoint: .top, endPoint: .bottom
+            )
+            .ignoresSafeArea(edges: .bottom)
+        )
     }
 
-    @ViewBuilder
-    private func hostActions(_ link: RemoteLink) -> some View {
-        Button {
-            open(link)
-        } label: {
-            Label("Open", systemImage: "arrow.up.right")
-        }
-        Button {
-            beginRename(link)
-        } label: {
-            Label("Rename", systemImage: "pencil")
-        }
-        Button(role: .destructive) {
-            deletingLink = link
-        } label: {
-            Label("Delete", systemImage: "trash")
-        }
+    // MARK: - Data
+
+    private var today: String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_Hans_CN")
+        formatter.dateFormat = "EEEE · M 月 d 日"
+        return formatter.string(from: .now)
     }
+
+    private func meta(for link: RemoteLink) -> String {
+        if let date = activity.connectedDate(for: link) {
+            return "上次连接 " + relative(date)
+        }
+        if let date = activity.date(for: link) {
+            return "上次打开 " + relative(date)
+        }
+        return "保存于 " + link.createdAt.formatted(date: .numeric, time: .omitted)
+    }
+
+    private func resumeMeta(_ link: RemoteLink) -> String {
+        if let date = activity.connectedDate(for: link) { return "上次连接 · " + relative(date) }
+        if let date = activity.date(for: link) { return "上次打开 · " + relative(date) }
+        return "已保存"
+    }
+
+    private func relative(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = Locale(identifier: "zh_Hans_CN")
+        formatter.unitsStyle = .short
+        return formatter.localizedString(for: date, relativeTo: .now)
+    }
+
+    // MARK: - Actions
 
     private func beginRename(_ link: RemoteLink) {
         renameTitle = link.title

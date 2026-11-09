@@ -71,3 +71,30 @@ enum ShellHostProjects {
         lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
     }
 }
+
+/// Pure directory filters. The view binds these strings; tests can exercise
+/// the same mapping without a host.
+enum HostDirectoryPresentation {
+    static let all = "all"
+    static let ready = "ready"
+    static let ended = "ended"
+
+    static func conversations(_ all: [HostConversation], filter: String) -> [HostConversation] {
+        switch filter {
+        case ready:
+            return all.filter { !$0.isDeleted && $0.lifecycleState == "ready" }
+        case ended:
+            return all.filter(\.isDeleted)
+        default:
+            return all.filter { !$0.isDeleted }
+        }
+    }
+
+    static func readyCount(in conversations: [HostConversation]) -> Int {
+        conversations.filter { !$0.isDeleted && $0.lifecycleState == "ready" }.count
+    }
+
+    static func endedCount(in conversations: [HostConversation]) -> Int {
+        conversations.filter(\.isDeleted).count
+    }
+}

@@ -9,70 +9,76 @@ struct PairingSheetView: View {
     private enum Mode: String, CaseIterable, Identifiable {
         case scan, paste
         var id: String { rawValue }
+        var title: String { self == .scan ? "扫码" : "粘贴链接" }
     }
 
     @Environment(\.sePalette) private var palette
+    @Environment(\.seThemeMode) private var mode
     @Environment(\.dismiss) private var dismiss
-    @State private var mode: Mode = .scan
+
+    @State private var method: Mode = .scan
     @State private var draft = ShellPairingDraft()
     @State private var showScanner = false
     @State private var scannedValue: String?
     @State private var failureCount = 0
     @FocusState private var urlFocused: Bool
-    @ScaledMetric(relativeTo: .subheadline) private var secondarySize = SeNocturneType.secondarySize
-    @ScaledMetric(relativeTo: .title3) private var titleSize = SeNocturneType.sheetTitleSize
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: SeSpace.lg) {
-                header
-                Text("Open SeRemote on your desktop, then scan its QR code or copy its access URL.")
-                    .font(SeNocturneType.font(secondarySize))
-                    .foregroundStyle(palette.inkSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                SeSheetHeader(title: "配对新主机", onClose: { dismiss() })
 
-                Picker("Pairing method", selection: $mode) {
-                    Text("Scan").tag(Mode.scan)
-                    Text("Paste URL").tag(Mode.paste)
-                }
-                .pickerStyle(.segmented)
-                .frame(minHeight: SeSpace.hitTarget)
-                .accessibilityIdentifier("pairing.method")
+                Text("在 Mac 上打开 SeRemote → 远程访问，扫描这个码。连接要由你在主机上确认。")
+                    .font(SeNocturneType.font(11))
+                    .foregroundStyle(palette.inkTertiary)
+                    .lineSpacing(3)
+                    .padding(.top, 4)
 
-                VStack(alignment: .leading, spacing: SeSpace.md) {
-                    if mode == .scan { scanContent } else { pasteContent }
-                }
-                .padding(SeSpace.lg)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.card))
-                .overlay {
-                    RoundedRectangle(cornerRadius: SeNocturneRadius.card)
-                        .strokeBorder(palette.stroke, lineWidth: 1)
-                }
+                SeSegmented(
+                    segments: Mode.allCases.map { SeSegment($0.rawValue, $0.title) },
+                    selection: Binding(get: { method.rawValue }, set: { method = Mode(rawValue: $0) ?? .scan }),
+                    identifier: "pairing.method"
+                )
+                .padding(.top, 14)
+
+                if method == .scan { scanContent } else { pasteContent }
 
                 if let error = draft.errorMessage {
                     SeErrorBanner(message: error)
+                        .padding(.top, 12)
                         .accessibilityIdentifier("pairing.error")
                 }
-                Label {
-                    Text("Connect only to a desktop you trust. The access secret stays on this device and is sent only to that host.")
-                        .fixedSize(horizontal: false, vertical: true)
-                } icon: {
-                    Image(systemName: "lock")
+
+                steps
+                    .padding(.top, 18)
+
+                HStack(spacing: 8) {
+                    SeSolidButton(title: method == .scan ? "开始扫码" : "连接", icon: method == .scan ? .scan : .arrowRight) {
+                        method == .scan ? (showScanner = true) : submit()
+                    }
+                    .disabled(method == .paste && !draft.canSubmit)
+                    .accessibilityIdentifier(method == .scan ? "pairing.scan" : "pairing.connect")
+
+                    SeOutlineButton(title: method == .scan ? "粘贴链接" : "扫码", icon: method == .scan ? .link : .scan, square: true) {
+                        method = method == .scan ? .paste : .scan
+                    }
                 }
-                .font(SeNocturneType.font(secondarySize))
-                .foregroundStyle(palette.inkSecondary)
+                .padding(.top, 18)
+
+                Text("连接只写入这台手机的钥匙串。首次连接默认只读，写操作逐条许可。")
+                    .font(SeNocturneType.font(9.5))
+                    .foregroundStyle(palette.inkTertiary)
+                    .padding(.top, 12)
             }
-            .padding(SeSpace.lg)
-            .frame(maxWidth: SeLayout.readableColumnMaxWidth, alignment: .leading)
-            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 18)
+            .padding(.top, 10)
+            .padding(.bottom, 26)
         }
-        .background(palette.surface.ignoresSafeArea())
+        .background(mode.sheetSurface)
         .foregroundStyle(palette.ink)
-        .tint(palette.accent)
         .scrollDismissesKeyboard(.interactively)
         .presentationCornerRadius(SeNocturneRadius.sheet)
-        .onChange(of: mode) { _, newMode in urlFocused = newMode == .paste }
+        .onChange(of: method) { _, newMode in urlFocused = newMode == .paste }
         .seHaptic(.error, trigger: failureCount)
         .fullScreenCover(isPresented: $showScanner, onDismiss: acceptScan) {
             ScannerView { raw in
@@ -82,80 +88,73 @@ struct PairingSheetView: View {
         }
     }
 
-    private var header: some View {
-        HStack(spacing: SeSpace.md) {
-            Text("Pair a host")
-                .font(SeNocturneType.font(titleSize, weight: .semibold))
-                .accessibilityAddTraits(.isHeader)
-            Spacer()
-            Button { dismiss() } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(palette.inkSecondary)
-                    .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
-                    .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Cancel")
-        }
-    }
-
     private var scanContent: some View {
-        VStack(alignment: .leading, spacing: SeSpace.md) {
-            Image(systemName: "qrcode.viewfinder")
-                .font(.system(size: 52, weight: .light))
+        VStack(spacing: 12) {
+            QRBox()
+                .frame(width: 176, height: 176)
+                .padding(.top, 16)
+            Text("把主机的二维码放进框内")
+                .font(SeNocturneType.font(11))
                 .foregroundStyle(palette.inkSecondary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, SeSpace.lg)
-                .accessibilityHidden(true)
-            Text("Scan the desktop QR code")
-                .font(SeNocturneType.font(titleSize, weight: .semibold))
-            Text("Camera access is requested only when you open the scanner. You can always paste the URL instead.")
-                .font(SeNocturneType.font(secondarySize))
-                .foregroundStyle(palette.inkSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Button { showScanner = true } label: {
-                Label("Open scanner", systemImage: "qrcode.viewfinder")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(SePrimaryButtonStyle())
-            .accessibilityIdentifier("pairing.scan")
         }
+        .frame(maxWidth: .infinity)
     }
 
     private var pasteContent: some View {
-        VStack(alignment: .leading, spacing: SeSpace.md) {
-            Text("Desktop access URL")
-                .font(SeNocturneType.font(secondarySize))
-            SecureField("https://host.example/#access_token=…", text: $draft.url)
-                .font(SeNocturneType.font(secondarySize))
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .keyboardType(.URL)
-                .privacySensitive()
-                .focused($urlFocused)
-                .submitLabel(.go)
-                .onSubmit { submit() }
-                .padding(SeSpace.sm)
-                .frame(minHeight: SeSpace.hitTarget, alignment: .leading)
-                .background(palette.cardAlt, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
-                .overlay {
-                    RoundedRectangle(cornerRadius: SeNocturneRadius.control)
-                        .strokeBorder(palette.stroke, lineWidth: 1)
-                }
-                .accessibilityLabel("Desktop access URL")
-                .accessibilityIdentifier("pairing.url")
-            Text("Use the complete http or https link, including its access secret.")
-                .font(SeNocturneType.font(secondarySize))
+        VStack(alignment: .leading, spacing: 8) {
+            Text("桌面访问链接")
+                .font(SeNocturneType.font(11))
                 .foregroundStyle(palette.inkSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Button(action: submit) {
-                Label("Connect", systemImage: "arrow.right")
-                    .frame(maxWidth: .infinity)
+            HStack(spacing: 8) {
+                SeIconView(icon: .link, size: 15, stroke: 1.6, color: palette.inkTertiary)
+                SecureField("https://host.example/#access_token=…", text: $draft.url)
+                    .font(SeNocturneType.font(12, mono: true))
+                    .foregroundStyle(palette.ink)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                    .privacySensitive()
+                    .focused($urlFocused)
+                    .submitLabel(.go)
+                    .onSubmit { submit() }
+                    .accessibilityIdentifier("pairing.url")
             }
-            .buttonStyle(SePrimaryButtonStyle())
-            .disabled(!draft.canSubmit)
-            .accessibilityIdentifier("pairing.connect")
+            .padding(.horizontal, 12)
+            .frame(height: 46)
+            .background(mode.insetFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(mode.insetStroke, lineWidth: 1)
+            }
+            Text("使用完整的 http 或 https 链接，包含它的访问密钥。")
+                .font(SeNocturneType.font(9.5))
+                .foregroundStyle(palette.inkTertiary)
+        }
+        .padding(.top, 14)
+    }
+
+    private var steps: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            step(1, "主机上出现这次请求，确认设备名与地点。")
+            step(2, "凭据写入钥匙串，只对这台主机生效。")
+            step(3, "首次连接默认只读，写操作逐条许可。")
+        }
+    }
+
+    private func step(_ number: Int, _ text: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text("\(number)")
+                .font(SeNocturneType.font(9, mono: true))
+                .foregroundStyle(palette.inkTertiary)
+                .frame(width: 18, height: 18)
+                .overlay {
+                    Circle().strokeBorder(mode.strongHairline, lineWidth: 1)
+                }
+            Text(text)
+                .font(SeNocturneType.font(10.5))
+                .foregroundStyle(palette.inkSecondary)
+                .lineSpacing(2)
+            Spacer(minLength: 0)
         }
     }
 
@@ -163,9 +162,8 @@ struct PairingSheetView: View {
         guard let raw = scannedValue else { return }
         scannedValue = nil
         draft.url = raw
-        // Dismiss camera before parsing or connecting to avoid presentation races.
         submit()
-        if draft.errorMessage != nil { mode = .paste }
+        if draft.errorMessage != nil { method = .paste }
     }
 
     private func submit() {
@@ -175,5 +173,44 @@ struct PairingSheetView: View {
         }
         urlFocused = false
         onConnect(link)
+    }
+}
+
+/// A static, decorative QR frame in the prototype's bone-white box.
+private struct QRBox: View {
+    private let cells: [Bool] = (0..<144).map { index in
+        // Deterministic pattern; no data is encoded here.
+        let row = index / 12
+        let column = index % 12
+        let finder = (row < 3 && column < 3) || (row < 3 && column > 8) || (row > 8 && column < 3)
+        return finder || (row * 7 + column * 11 + row * column) % 3 == 0
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            let side = min(geometry.size.width, geometry.size.height)
+            let cell = (side - 24) / 12
+            ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color(hex: 0xF2F0E8))
+                VStack(spacing: 0) {
+                    ForEach(0..<12, id: \.self) { row in
+                        HStack(spacing: 0) {
+                            ForEach(0..<12, id: \.self) { column in
+                                Rectangle()
+                                    .fill(cells[row * 12 + column] ? Color(hex: 0x0B0D12) : Color.clear)
+                                    .frame(width: cell, height: cell)
+                            }
+                        }
+                    }
+                }
+                .padding(12)
+            }
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color(hex: 0xF2F0E8), lineWidth: 1)
+        }
+        .accessibilityLabel("二维码")
     }
 }

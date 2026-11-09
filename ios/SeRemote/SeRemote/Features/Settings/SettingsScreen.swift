@@ -9,134 +9,114 @@ struct SettingsScreen: View {
     var onBack: () -> Void = {}
 
     @Environment(\.sePalette) private var palette
+    @Environment(\.seThemeMode) private var mode
     @State private var terminalTextScale = TerminalTextScale.current
     @State private var notificationDenied = false
     @State private var hostToForget: RemoteLink?
-    @ScaledMetric(relativeTo: .subheadline) private var secondarySize = SeNocturneType.secondarySize
-    @ScaledMetric(relativeTo: .title3) private var titleSize = SeNocturneType.sheetTitleSize
-    @ScaledMetric(relativeTo: .body) private var rowSize = SeNocturneType.rowTitleSize
-    @ScaledMetric(relativeTo: .caption) private var labelSize = SeNocturneType.labelSize
-    @ScaledMetric(relativeTo: .caption) private var monoSize = SeNocturneType.monoSize
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: SeSpace.md) {
-                header
-                sectionLabel("Host")
-                group {
-                    if let host = store?.activeLink {
-                        HStack(spacing: SeSpace.md) {
-                            Image(systemName: "desktopcomputer")
-                                .foregroundStyle(palette.inkSecondary)
-                            VStack(alignment: .leading, spacing: SeSpace.xxs) {
-                                Text(verbatim: host.title).font(SeNocturneType.font(rowSize, weight: .semibold))
-                                Text(verbatim: host.originHost)
-                                    .font(SeNocturneType.font(monoSize, mono: true))
-                                    .foregroundStyle(palette.inkSecondary)
-                            }
-                            Spacer(minLength: SeSpace.sm)
-                            Text("Current host")
-                                .font(SeNocturneType.font(labelSize))
-                                .foregroundStyle(palette.inkSecondary)
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                SeNavBar(
+                    title: "设置",
+                    subtitle: hostSubtitle,
+                    onBack: onBack
+                )
+
+                SeGroupLabel(title: "主机", count: nil)
+                SeGroupCard {
+                    if let host = store?.activeLink ?? store?.savedLinks.first {
+                        SeRowItem(icon: .hosts, title: host.title, detail: host.originHost, value: nil) {
+                            EmptyView()
                         }
-                        .padding(SeSpace.md)
-                        Divider().overlay(palette.stroke)
-                        Button(role: .destructive) { hostToForget = host } label: {
-                            Text("Remove this host")
-                                .font(SeNocturneType.font(secondarySize))
-                                .foregroundStyle(palette.danger)
-                                .frame(maxWidth: .infinity, minHeight: SeSpace.hitTarget, alignment: .leading)
-                                .padding(.horizontal, SeSpace.md)
-                        }
-                        .buttonStyle(.plain)
                     } else {
-                        Label("No active host", systemImage: "desktopcomputer")
-                            .font(SeNocturneType.font(secondarySize))
-                            .foregroundStyle(palette.inkSecondary)
-                            .frame(maxWidth: .infinity, minHeight: SeSpace.hitTarget, alignment: .leading)
-                            .padding(SeSpace.md)
-                    }
-                }
-
-                sectionLabel("Appearance")
-                group {
-                    Picker("Language", selection: $settings.language) {
-                        Text("System").tag(AppLanguage.system)
-                        Text("English").tag(AppLanguage.english)
-                        Text("Simplified Chinese").tag(AppLanguage.simplifiedChinese)
-                    }
-                    .accessibilityIdentifier("settings.language")
-                    .settingsControl()
-                    Divider().overlay(palette.stroke)
-                    Picker("Appearance", selection: $settings.appearance) {
-                        Text("System").tag(AppAppearance.system)
-                        Text("Dark").tag(AppAppearance.dark)
-                        Text("Light").tag(AppAppearance.light)
-                    }
-                    .accessibilityIdentifier("settings.appearance")
-                    .settingsControl()
-                }
-                note("Language and appearance apply to this app.")
-
-                sectionLabel("Feedback")
-                group {
-                    Toggle(isOn: $settings.hapticsEnabled) {
-                        Label("Haptic feedback", systemImage: "hand.tap")
-                    }
-                    .accessibilityIdentifier("settings.haptics")
-                    .settingsControl()
-                    Divider().overlay(palette.stroke)
-                    Toggle(isOn: $settings.notificationsEnabled) {
-                        Label("Background alerts", systemImage: "bell")
-                    }
-                    .accessibilityIdentifier("settings.notifications")
-                    .settingsControl()
-                }
-                if notificationDenied {
-                    Label("Notifications are not allowed. Enable them in iOS Settings to receive background alerts.", systemImage: "bell.slash")
-                        .font(SeNocturneType.font(secondarySize))
-                        .foregroundStyle(palette.warning)
-                        .accessibilityIdentifier("settings.notificationsDenied")
-                }
-                note("Background alerts notify when an agent finishes a turn, asks for approval, or a terminal exits while the app is in the background. Haptics confirm actions and outcomes.")
-
-                sectionLabel("Terminal")
-                group {
-                    Picker("Default text size", selection: $terminalTextScale) {
-                        ForEach(TerminalTextScale.presets, id: \.self) { scale in
-                            Text(scale, format: .percent.precision(.fractionLength(0))).tag(scale)
+                        SeRowItem(icon: .hosts, title: "还没有主机", detail: "配对新主机后出现在这里") {
+                            EmptyView()
                         }
                     }
-                    .settingsControl()
-                    .accessibilityIdentifier("settings.terminalTextScale")
+                    SeRowItem(
+                        icon: .clock,
+                        title: "通知",
+                        detail: "只在需要你处理时提醒",
+                        value: settings.notificationsEnabled ? "开启" : "关闭"
+                    ) {
+                        SeToggle(isOn: $settings.notificationsEnabled, label: "通知")
+                    }
                 }
-                note("Used when opening a terminal. You can adjust the text size again in the terminal toolbar.")
+                .padding(.horizontal, 18)
 
-                sectionLabel("Privacy")
-                group {
-                    Label {
-                        Text("Pairing secrets are stored in the Keychain on this phone.")
-                            .fixedSize(horizontal: false, vertical: true)
-                    } icon: { Image(systemName: "lock") }
-                    .font(SeNocturneType.font(secondarySize))
-                    .padding(SeSpace.md)
-                    Divider().overlay(palette.stroke)
-                    Text("Git and Files are read-only. View changes and browse files without modifying your desktop.")
-                        .font(SeNocturneType.font(secondarySize))
-                        .foregroundStyle(palette.inkSecondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(SeSpace.md)
+                if notificationDenied {
+                    Text("通知未获允许。到 iOS 设置里打开，才能收到后台提醒。")
+                        .font(SeNocturneType.font(10))
+                        .foregroundStyle(palette.warning)
+                        .padding(.horizontal, 18)
+                        .padding(.top, 8)
                 }
-                HStack {
-                    LabeledContent("Version", value: ShellPairingAppInfo.version())
-                    LabeledContent("Build", value: ShellPairingAppInfo.build())
+
+                SeGroupLabel(title: "外观", count: nil)
+                SeGroupCard {
+                    SeRowItem(title: "主题", detail: "日间 / 夜间，只影响本机") {
+                        SeThemePick(mode: Binding(
+                            get: { mode },
+                            set: { settings.appearance = $0.appearance }
+                        ))
+                    }
+                    SeRowItem(title: "语言", detail: "跟随系统或手动选择") {
+                        Menu {
+                            ForEach(AppLanguage.allCases) { language in
+                                Button(languageTitle(language)) { settings.language = language }
+                            }
+                        } label: {
+                            Text(languageTitle(settings.language))
+                                .font(SeNocturneType.font(9, mono: true))
+                                .foregroundStyle(palette.inkTertiary)
+                                .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
+                        }
+                        .accessibilityIdentifier("settings.language")
+                    }
                 }
-                .font(SeNocturneType.font(monoSize, mono: true))
-                .foregroundStyle(palette.inkSecondary)
+                .padding(.horizontal, 18)
+
+                SeGroupLabel(title: "交互", count: nil)
+                SeGroupCard {
+                    SeRowItem(title: "触觉反馈", detail: "批准与拒绝时轻点一次") {
+                        SeToggle(isOn: $settings.hapticsEnabled, label: "触觉反馈")
+                    }
+                    SeRowItem(title: "终端字号", detail: "默认在打开终端时使用") {
+                        HStack(spacing: 4) {
+                            scaleButton("A−", direction: -1)
+                            scaleButton("A+", direction: 1)
+                        }
+                    }
+                }
+                .padding(.horizontal, 18)
+
+                SeGroupLabel(title: "隐私", count: nil)
+                SeGroupCard {
+                    SeRowItem(icon: .lock, title: "凭据", detail: "保存在本机钥匙串，不上传", value: "Face ID") {
+                        EmptyView()
+                    }
+                    if let host = store?.activeLink ?? store?.savedLinks.first {
+                        SeRowItem(title: "解除这台主机", destructive: true, action: {
+                            hostToForget = host
+                        }) {
+                            EmptyView()
+                        }
+                    } else {
+                        SeRowItem(title: "Git 与文件只读", detail: "查看不会修改你的桌面") {
+                            EmptyView()
+                        }
+                    }
+                }
+                .padding(.horizontal, 18)
+
+                Text(versionLine)
+                    .font(SeNocturneType.font(9, mono: true))
+                    .foregroundStyle(palette.inkTertiary)
+                    .padding(.horizontal, 18)
+                    .padding(.top, 16)
+                    .padding(.bottom, 28)
             }
-            .padding(SeSpace.lg)
-            .frame(maxWidth: SeLayout.readableColumnMaxWidth)
-            .frame(maxWidth: .infinity)
         }
         .background(palette.canvas.ignoresSafeArea())
         .foregroundStyle(palette.ink)
@@ -156,12 +136,12 @@ struct SettingsScreen: View {
         }
         .seHaptic(.selection, trigger: settings.language)
         .seHaptic(.selection, trigger: settings.appearance)
-        .alert("Forget host?", isPresented: Binding(
+        .alert("解除主机？", isPresented: Binding(
             get: { hostToForget != nil },
             set: { if !$0 { hostToForget = nil } }
         )) {
-            Button("Cancel", role: .cancel) { hostToForget = nil }
-            Button("Forget", role: .destructive) {
+            Button("取消", role: .cancel) { hostToForget = nil }
+            Button("解除", role: .destructive) {
                 if let host = hostToForget {
                     ShellPairingActivity().forget(host)
                     store?.forget(host)
@@ -169,65 +149,44 @@ struct SettingsScreen: View {
                 hostToForget = nil
             }
         } message: {
-            Text("This removes the host and its saved access secret from this phone. Pair again to reconnect.")
+            Text("这会从本机删除主机和已保存的访问密钥。重新配对后才能连接。")
         }
     }
 
-    private var header: some View {
-        HStack(spacing: SeSpace.md) {
-            Button(action: onBack) {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 14, weight: .semibold))
-                    .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
-                    .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Back")
-            Text("Settings")
-                .font(SeNocturneType.font(titleSize, weight: .semibold))
-                .accessibilityAddTraits(.isHeader)
-            Spacer()
+    private var hostSubtitle: String {
+        guard let host = store?.activeLink ?? store?.savedLinks.first else { return "本机 · 未配对" }
+        return "\(host.title) · 已保存"
+    }
+
+    private var versionLine: String {
+        "SeRemote \(ShellPairingAppInfo.version()) · build \(ShellPairingAppInfo.build())"
+    }
+
+    private func languageTitle(_ language: AppLanguage) -> String {
+        switch language {
+        case .system: "跟随系统"
+        case .english: "English"
+        case .simplifiedChinese: "简体中文"
         }
     }
 
-    private func sectionLabel(_ title: LocalizedStringKey) -> some View {
-        Text(title)
-            .font(SeNocturneType.font(labelSize))
-            .foregroundStyle(palette.inkSecondary)
-            .padding(.top, SeSpace.sm)
-            .accessibilityAddTraits(.isHeader)
+    private func scaleButton(_ title: String, direction: Int) -> some View {
+        Button {
+            terminalTextScale = TerminalTextScale.nudge(terminalTextScale, by: direction)
+        } label: {
+            Text(title)
+                .font(SeNocturneType.font(9, mono: true))
+                .foregroundStyle(palette.inkSecondary)
+                .frame(width: 30, height: 30)
+                .background(mode.insetFill, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .strokeBorder(mode.insetStroke, lineWidth: 1)
+                }
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(SePressable())
+        .accessibilityLabel(direction > 0 ? "增大终端字号" : "减小终端字号")
     }
-
-    private func note(_ text: LocalizedStringKey) -> some View {
-        Text(text)
-            .font(SeNocturneType.font(secondarySize))
-            .foregroundStyle(palette.inkSecondary)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private func group<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 0, content: content)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.card))
-            .overlay {
-                RoundedRectangle(cornerRadius: SeNocturneRadius.card)
-                    .strokeBorder(palette.stroke, lineWidth: 1)
-            }
-    }
-}
-
-private struct SettingsControlModifier: ViewModifier {
-    @ScaledMetric(relativeTo: .subheadline) private var textSize = SeNocturneType.secondarySize
-
-    func body(content: Content) -> some View {
-        content
-            .font(SeNocturneType.font(textSize))
-            .frame(minHeight: SeSpace.hitTarget)
-            .padding(.horizontal, SeSpace.md)
-            .padding(.vertical, SeSpace.xs)
-    }
-}
-
-private extension View {
-    func settingsControl() -> some View { modifier(SettingsControlModifier()) }
 }
