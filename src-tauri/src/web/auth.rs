@@ -784,6 +784,7 @@ impl RemoteAccessAuthority {
                                 .checked_add(1)
                                 .ok_or(RemoteAuthError::Provisioning)?
                         };
+                        self.adopt_device_credential(candidate)?;
                         credential.generation = generation;
                         credential.digest = Some(candidate);
                         (generation, true)
@@ -896,6 +897,7 @@ impl RemoteAccessAuthority {
             .generation
             .checked_add(1)
             .ok_or(RemoteAuthError::Provisioning)?;
+        self.adopt_device_credential(digest(token.as_bytes()))?;
         credential.digest = Some(digest(token.as_bytes()));
         credential.source = source;
         let generation = credential.generation;

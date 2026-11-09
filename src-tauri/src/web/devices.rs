@@ -526,6 +526,22 @@ impl RemoteAccessAuthority {
             Ok(())
         })
     }
+    pub(super) fn adopt_device_credential(
+        &self,
+        fingerprint: [u8; 32],
+    ) -> Result<(), RemoteAuthError> {
+        self.change_devices(|registry| {
+            if registry.host_fingerprint != Some(fingerprint) {
+                if registry.host_fingerprint.is_some() || !registry.devices.is_empty() {
+                    registry.revoke_all();
+                }
+                registry.host_fingerprint = Some(fingerprint);
+                registry.legacy_revoked_at = None;
+                registry.revision = registry.revision.saturating_add(1);
+            }
+            Ok(())
+        })
+    }
     pub(super) fn rotate_device_credentials(
         &self,
         fingerprint: [u8; 32],
@@ -944,6 +960,32 @@ mod tests {
         let (new_key, _) = authority();
         new_key.configure_device_store(path).unwrap();
         assert_eq!(new_key.host_id().unwrap(), id);
+    }
+
+    #[test]
+    fn desktop_setup_before_bearer_adoption_preserves_same_key_and_revokes_changed_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("devices.json");
+        let (first, host) = authority();
+        first.configure_device_store(path.clone()).unwrap();
+        let paired = pair(&first);
+        let host_id = first.host_id().unwrap();
+        // Real desktop setup configures the file before adopting the stored key.
+        let restarted = RemoteAccessAuthority::desktop_memory();
+        restarted.configure_device_store(path).unwrap();
+        restarted
+            .adopt_or_issue_desktop_credential(Some(&host))
+            .unwrap();
+        assert!(restarted.verify_bearer(&paired.device_token).is_ok());
+        let (_, changed_key) = authority();
+        restarted
+            .adopt_or_issue_desktop_credential(Some(&changed_key))
+            .unwrap();
+        assert_eq!(
+            restarted.verify_bearer(&paired.device_token).unwrap_err(),
+            RemoteAuthError::DeviceRevoked
+        );
+        assert_eq!(restarted.host_id().unwrap(), host_id);
     }
 
     #[test]
