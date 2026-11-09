@@ -18,8 +18,8 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
-use crate::pty::PtyManager;
 use crate::web::auth::IngressProvenance;
+use crate::web::live_terminals::live_terminals;
 use crate::web::project_registry::ProjectListPayload;
 use crate::web::sink::broadcast_projects_changed;
 use crate::web::ws::AppState;
@@ -77,17 +77,20 @@ pub struct SetDefaultProjectRequest {
 /// event when it syncs).
 pub async fn list(State(state): State<AppState>) -> impl IntoResponse {
     let mut payload: ProjectListPayload = state.registry.snapshot();
-    apply_live_terminal_counts(&mut payload, &live_terminal_counts(&state.pty));
+    apply_live_terminal_counts(&mut payload, &live_terminal_counts(&state).await);
     Json(IpcBody::ok(payload))
 }
 
-fn live_terminal_counts(pty: &PtyManager) -> HashMap<String, u32> {
+/// Count active terminals per project.
+///
+/// Reads the terminal service so Terminal-Core mode sees the PTYs that live in
+/// the separate `se-terminal-core` process. The desktop-side compatibility
+/// `PtyManager` (`state.pty`) owns no terminals in that mode, so counting it
+/// reported every project as stopped.
+async fn live_terminal_counts(state: &AppState) -> HashMap<String, u32> {
     let mut counts = HashMap::new();
-    for instance in pty.get_all() {
-        if !instance.is_active() {
-            continue;
-        }
-        let Some(project_id) = instance
+    for terminal in live_terminals(state).await {
+        let Some(project_id) = terminal
             .project_id
             .as_deref()
             .map(str::trim)
@@ -389,6 +392,64 @@ mod tests {
         apply_live_terminal_counts(&mut payload, &counts);
         assert_eq!(payload.projects[0].live_terminal_count, 2);
         assert_eq!(payload.projects[1].live_terminal_count, 0);
+    }
+
+    #[tokio::test]
+    async fn counts_service_terminals_not_the_local_tracker() {
+        use crate::pty::manager::SpawnOptions;
+
+        // Terminal-Core mode keeps the desktop-side `state.pty` empty while
+        // the service manager owns the live PTYs.
+        let local_tracker = test_pty_manager();
+        let service_pty = test_pty_manager();
+        let spawned = service_pty
+            .spawn(
+                SpawnOptions {
+                    program: Some("/bin/cat".into()),
+                    project_id: Some("p-1".into()),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .expect("spawn test terminal");
+        assert!(local_tracker.get_all().is_empty());
+
+        let registry = Arc::new(ProjectRegistry::new());
+        registry.set_with_groups(
+            vec![summary("p-1", Some("/a"), false, true)],
+            vec![],
+            Some("p-1".to_string()),
+        );
+        let mut state = crate::web::test_state_with_terminal(
+            local_tracker,
+            crate::core::TerminalServiceHandle::in_process(Arc::clone(&service_pty)),
+        );
+        state.registry = registry;
+
+        let app = axum::Router::new()
+            .route("/projects", axum::routing::get(list))
+            .with_state(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/projects")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let parsed: IpcBody<ProjectListPayload> =
+            serde_json::from_slice(&body).expect("parse body");
+        assert_eq!(
+            parsed.data.expect("data").projects[0].live_terminal_count,
+            1
+        );
+
+        let _ = service_pty.terminate(&spawned.info.id).await;
     }
 
     #[tokio::test]

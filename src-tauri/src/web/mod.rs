@@ -32,6 +32,7 @@ pub mod memory_index_api;
 #[allow(clippy::redundant_closure)]
 pub mod git_api;
 pub mod install_api;
+pub mod live_terminals;
 pub mod log_api;
 pub mod mcp_host_api;
 pub mod mcp_probe_api;
@@ -93,6 +94,43 @@ use crate::acp::AcpManager;
 use crate::pty::PtyManager;
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 use crate::web::store::WebStore;
+
+/// Minimal `AppState` for focused router/service tests. Callers choose the
+/// terminal service separately so tests can prove a route reads the service's
+/// live set, not the desktop-side compatibility manager.
+#[cfg(test)]
+pub(crate) fn test_state_with_terminal(
+    local_pty: Arc<PtyManager>,
+    terminal: crate::core::TerminalServiceHandle,
+) -> AppState {
+    let relay = Arc::new(crate::web::sink::WsRelaySink::new());
+    AppState {
+        acp: crate::core::AcpWebHostHandle::in_process(
+            Arc::new(AcpManager::new(vec![])),
+            Arc::clone(&relay),
+        ),
+        terminal,
+        terminal_events: local_pty.terminal_events(),
+        cwd_tracker: local_pty.cwd_tracker(),
+        git_tracker: local_pty.git_tracker(),
+        exit_code_tracker: local_pty.exit_code_tracker(),
+        pty: local_pty,
+        relay,
+        registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+        registry_persistence: None,
+        projects_file: None,
+        history_mode: crate::web::ws::HistoryMode::LiveOnly,
+        conversation: None,
+        conversation_creation: None,
+        workspace_manifest: None,
+        acp_catalog: None,
+        acp_install: None,
+        memory_index: None,
+        skills_hub: None,
+        store: None,
+        project_root: Arc::new(parking_lot::RwLock::new(PathBuf::new())),
+    }
+}
 
 #[cfg(test)]
 pub(crate) fn test_pty_manager() -> Arc<PtyManager> {

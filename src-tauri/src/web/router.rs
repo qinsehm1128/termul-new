@@ -202,6 +202,7 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
                 "/cli-sessions",
                 get(cli_session_api::list_get).post(cli_session_api::list_post),
             )
+            .route("/cli-sessions/live", get(cli_session_api::live_get))
             .route("/cli-sessions/resolve", post(cli_session_api::resolve_post)),
         RemoteRouteClass::CliSession,
     ))

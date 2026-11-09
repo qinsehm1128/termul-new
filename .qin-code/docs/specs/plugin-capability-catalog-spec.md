@@ -308,7 +308,7 @@ Conventions: `confirm=none` (read or harmless), `grant` (install-time grant is e
 | se.host.setDefaultProject | set_host_default_project `commands.rs:5064` | W | global | grant | OPEN | in projectId; validates switchable, broadcasts `projects_changed` |
 | se.sessions.discoverCli | list_cli_sessions_cmd `cli_session/commands.rs:9` | R | project | none | OPEN | in `{scopePaths?}`; scans local agent session files (titles/paths — may include prompt text) |
 | se.sessions.resolveCli | resolve_cli_sessions_cmd `cli_session/commands.rs:24` | R | project | none | OPEN | in `{files[]}`; reads those transcripts |
-| se.terminals.detectLiveAgents | detect_live_agent_sessions_cmd `cli_session/commands.rs:40` | R | terminal | none | OPEN | in `rootPids[]`; reads this machine's process table |
+| se.terminals.detectLiveAgents | detect_live_agent_sessions_cmd `cli_session/commands.rs:40`; GET /cli-sessions/live (`web/cli_session_api.rs`) | R | terminal | none | OPEN | in `rootPids[]`; reads this machine's process table. Web route derives roots from live terminal-service PTYs and returns `{sessions:[{terminalId,projectId?,rootPid,agentId,sessionId,selfDev?,codexHome?,cwd?}],scannedAt}` — read-only, no secrets |
 
 ---
 
