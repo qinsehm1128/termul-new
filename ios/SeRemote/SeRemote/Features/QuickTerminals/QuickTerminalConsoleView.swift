@@ -74,15 +74,22 @@ struct QuickTerminalConsoleView: View {
                     .padding(.bottom, 6)
                 }
                 canvas(viewer)
+                // Accessory keys only. The console types straight into the live
+                // canvas, so the buffered command field was a second input route
+                // that also cost a row of terminal height. Keys stay directly
+                // above the keyboard, or at the bottom safe area when it is
+                // hidden, and the canvas keeps the freed height.
                 TerminalInputDock(
                     isEnabled: viewer.isAttached && !viewer.hasExited,
                     isKeyboardVisible: TerminalKeyboard.isVisible(keyboardHeight),
+                    showsCommandLine: false,
                     controlModifier: $controlModifier,
                     onSend: { text in viewer.send(controlModifier.apply(to: text)) },
                     onFocusTerminal: { focusToken &+= 1 },
                     onDismissKeyboard: { session.dismissTerminalKeyboard() }
                 )
-                .padding(.bottom, 8)
+                // No extra bottom inset: the dock's own padding already keeps the
+                // keys off the home indicator, and the freed 8 pt goes to rows.
             } else {
                 placeholder
             }

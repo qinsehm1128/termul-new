@@ -5,8 +5,12 @@ import UIKit
 ///
 /// The Ctrl key keeps the existing latch/hold contract: a tap latches exactly
 /// one compatible key, a hold applies while pressed. Repeatable keys (arrows,
-/// backspace) repeat while held. Live keyboard focus and buffered commands are
-/// both preserved so no input route from the old dock is lost.
+/// backspace) repeat while held.
+///
+/// `showsCommandLine` lets a surface keep only the accessory row: the full-screen
+/// console types straight into the live SwiftTerm canvas, where a buffered
+/// command field would be a second, competing input route that also costs a row
+/// of terminal height. The workbench keeps both.
 ///
 /// Every accessory key is a real `Button`. Gestures are deliberately absent:
 /// a `DragGesture(minimumDistance: 0)` on a child inside a horizontal
@@ -14,15 +18,17 @@ import UIKit
 /// swallows taps. A `ButtonStyle` gives the press feedback and the long-press
 /// repeat without competing with the scroll view.
 ///
-/// The system keyboard has one owner at a time: either the live terminal canvas
-/// or the command field. The accessory row's keyboard control is the single
-/// hide/show affordance, and it is pinned outside the scrolling key strip so
-/// hiding never depends on what is on screen.
+/// The system keyboard has one owner at a time: the live terminal canvas, or —
+/// where the command field is shown — the field. The accessory row's keyboard
+/// control is the single hide/show affordance, and it is pinned outside the
+/// scrolling key strip so hiding never depends on what is on screen.
 struct TerminalInputDock: View {
     @Environment(\.sePalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var isEnabled: Bool
     var isKeyboardVisible: Bool
+    /// A surface that types into the canvas hides the buffered command field.
+    var showsCommandLine = true
     @Binding var controlModifier: TerminalControlModifier
     var onSend: (String) -> Void
     var onFocusTerminal: () -> Void
@@ -39,7 +45,9 @@ struct TerminalInputDock: View {
     var body: some View {
         VStack(spacing: 0) {
             keyRow
-            commandLine
+            if showsCommandLine {
+                commandLine
+            }
         }
         .padding(.horizontal, 12)
         .padding(.top, 8)
