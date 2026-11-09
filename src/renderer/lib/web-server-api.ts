@@ -16,7 +16,20 @@
  */
 
 import type { AgentChatControlAction, AgentChatSnapshot } from '@shared/types/agent-chat.types'
-import type { AgentHookEvent, AgentKind, HookInstallStatus } from '@shared/types/agent-hooks.types'
+import type {
+  AdapterId,
+  AdapterStatusDto,
+  HookConfirmRequest,
+  HookMutationResult,
+  HookPreviewDto,
+  HookPreviewRequest,
+  HookStateSyncRequest,
+  HookStateSyncResponse,
+  ResumePlanDto,
+  ResumePlanRequest,
+  ResumeSpawnRequest,
+  ResumeSpawnResult
+} from '@shared/types/agent-hooks.types'
 import type {
   CliSessionListArgs,
   CliSessionListResult,
@@ -104,14 +117,54 @@ export const webServerAgentChat = {
     postJson<unknown>(`/agent-chat/${encodeURIComponent(terminalId)}/control`, { action })
 }
 
+/** Hook mutations return structured CAS/validation errors even on non-2xx responses. */
+async function hookRequest<T>(path: string, body?: unknown): Promise<IpcResult<T>> {
+  try {
+    const res = await fetch(`${serverBase()}${path}`, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: remoteAccessHeaders(
+        body === undefined ? {} : { 'content-type': 'application/json' }
+      ),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) })
+    })
+    const result = (await res.json()) as IpcResult<T>
+    if (res.ok && result.success === true) return result
+    if (
+      result.success === false &&
+      typeof result.code === 'string' &&
+      typeof result.error === 'string'
+    )
+      return result
+    return { success: false, code: 'NETWORK_ERROR', error: `HTTP ${res.status}` }
+  } catch {
+    return { success: false, code: 'NETWORK_ERROR', error: 'Hook request failed' }
+  }
+}
+
 export const webServerAgentHooks = {
-  preview: (agent: AgentKind) =>
-    getJson<string>(`/agent-hooks/preview?agent=${encodeURIComponent(agent)}`),
-  status: () => getJson<HookInstallStatus[]>('/agent-hooks/status'),
-  install: (agent: AgentKind) => postJson<HookInstallStatus>('/agent-hooks/install', { agent }),
-  uninstall: (agent: AgentKind) => postJson<HookInstallStatus>('/agent-hooks/uninstall', { agent }),
-  events: (after?: number) =>
-    getJson<AgentHookEvent[]>(`/agent-hooks/events${after === undefined ? '' : `?after=${after}`}`)
+  resumePlan: (request: ResumePlanRequest) =>
+    hookRequest<ResumePlanDto>('/api/agent-hooks/resume-plan', request),
+  resumeSpawn: (request: ResumeSpawnRequest) =>
+    hookRequest<ResumeSpawnResult>('/api/agent-hooks/resume-spawn', request),
+  status: () => hookRequest<AdapterStatusDto[]>('/api/agent-hooks/status'),
+  reload: () => hookRequest<AdapterStatusDto[]>('/api/agent-hooks/reload', {}),
+  probe: (adapter_id: AdapterId) =>
+    hookRequest<AdapterStatusDto>('/api/agent-hooks/probe', { adapter_id }),
+  preview: (request: HookPreviewRequest) =>
+    hookRequest<HookPreviewDto>('/api/agent-hooks/preview', request),
+  confirm: (request: HookConfirmRequest) =>
+    hookRequest<HookMutationResult>('/api/agent-hooks/confirm', request),
+  install: (request: HookConfirmRequest) =>
+    hookRequest<HookMutationResult>('/api/agent-hooks/install', request),
+  uninstall: (request: HookConfirmRequest) =>
+    hookRequest<HookMutationResult>('/api/agent-hooks/uninstall', request),
+  state: (request: HookStateSyncRequest = {}) => {
+    const params = new URLSearchParams()
+    if (request.instance_id != null) params.set('instance_id', request.instance_id)
+    if (request.since_revision != null) params.set('since_revision', String(request.since_revision))
+    const query = params.toString()
+    return hookRequest<HookStateSyncResponse>(`/api/agent-hooks/state${query ? `?${query}` : ''}`)
+  }
 }
 
 /** Shape of the HTTP response body mirroring `IpcResult<T>`. */

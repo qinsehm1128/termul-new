@@ -5,9 +5,19 @@ import { useProjectStore } from '@/stores/project-store'
 import App from '../App'
 import TauriApp from '../TauriApp'
 
-const { mockPreventDevToolsShortcuts } = vi.hoisted(() => ({
-  mockPreventDevToolsShortcuts: vi.fn()
+const { mockPreventDevToolsShortcuts, hookApi } = vi.hoisted(() => ({
+  mockPreventDevToolsShortcuts: vi.fn(),
+  hookApi: {
+    reload: vi.fn(async () => []),
+    preview: vi.fn(),
+    install: vi.fn(),
+    uninstall: vi.fn(),
+    confirm: vi.fn(),
+    openFolder: vi.fn()
+  }
 }))
+
+vi.mock('@/lib/agent-hooks-api', () => ({ agentHooksApi: hookApi }))
 
 vi.mock('@/app/PortableAppEffects', () => ({
   PortableAppEffects: () => <div data-testid="portable-app-effects" />
@@ -43,9 +53,16 @@ vi.mock('@/pages/ProjectSettings', () => ({
   default: () => <div data-testid="portable-route" data-component="settings" />
 }))
 
-vi.mock('@/pages/AppPreferences', () => ({
-  default: () => <div data-testid="portable-route" data-component="preferences" />
-}))
+vi.mock('@/pages/AppPreferences', async () => {
+  const { AgentHooksSettings } = await import('@/components/settings/AgentHooksSettings')
+  return {
+    default: () => (
+      <div data-testid="portable-route" data-component="preferences">
+        <AgentHooksSettings />
+      </div>
+    )
+  }
+})
 
 vi.mock('@/pages/McpPage', () => ({
   default: () => <div data-testid="portable-route" data-component="mcp" />
@@ -221,6 +238,21 @@ afterEach(() => {
 })
 
 describe('renderer root runtime parity', () => {
+  it.each([
+    { name: 'web', Root: App },
+    { name: 'desktop', Root: TauriApp }
+  ])('$name opens hook settings with reload only', async ({ Root }) => {
+    const reloads = hookApi.reload.mock.calls.length
+    window.location.hash = '#/preferences'
+    const view = render(<Root />)
+    await screen.findByTestId('portable-route')
+    await waitFor(() => expect(hookApi.reload.mock.calls.length).toBe(reloads + 1))
+    expect(hookApi.preview).not.toHaveBeenCalled()
+    expect(hookApi.install).not.toHaveBeenCalled()
+    expect(hookApi.uninstall).not.toHaveBeenCalled()
+    expect(hookApi.confirm).not.toHaveBeenCalled()
+    view.unmount()
+  })
   it('renders the same real dashboard and recovery entry through WorkspaceLayout on the conversations route', async () => {
     const web = await navigateDashboardRoot(App)
     const native = await navigateDashboardRoot(TauriApp)

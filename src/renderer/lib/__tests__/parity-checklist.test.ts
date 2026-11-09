@@ -46,6 +46,40 @@ const LIB_DIR = join(__dirname, '..')
 const ROOT_DIR = join(__dirname, '..', '..', '..', '..')
 const TESTS_DIR = __dirname
 
+describe('Agent hook adapter renderer parity', () => {
+  it('shares revision reconciliation and never reintroduces the legacy event polling path', () => {
+    const facade = readFileSync(join(LIB_DIR, 'agent-hooks-api.ts'), 'utf-8')
+    const tracker = readFileSync(
+      join(ROOT_DIR, 'src/renderer/hooks/use-agent-session-tracker.ts'),
+      'utf-8'
+    )
+    const settings = readFileSync(
+      join(ROOT_DIR, 'src/renderer/components/settings/AgentHooksSettings.tsx'),
+      'utf-8'
+    )
+    expect(facade).toContain('agent-hooks-state')
+    expect(facade).toContain('subscribeAgentHookState')
+    expect(facade).not.toContain('750')
+    expect(facade).not.toContain('setInterval(')
+    expect(facade.match(/\bsetTimeout\(/g)).toHaveLength(1)
+    expect(tracker).toContain('agentHooksApi.subscribeState')
+    expect(tracker).not.toMatch(/agentHooksApi\.(state|events)\(/)
+    expect(settings).toContain('agentHooksApi.reload()')
+    expect(settings).toContain('agentHooksApi.preview(')
+    expect(settings).toContain('agentHooksApi.openFolder()')
+  })
+
+  it('mounts one portable owner in each renderer root without startup installation', () => {
+    for (const filename of ['App.tsx', 'TauriApp.tsx']) {
+      const root = readFileSync(join(ROOT_DIR, 'src/renderer', filename), 'utf-8')
+      expect(root.match(/<PortableAppEffects\s*\/>/g)).toHaveLength(1)
+      expect(root).not.toMatch(/agentHooksApi\.(install|uninstall|confirm)\(/)
+    }
+    const effects = readFileSync(join(ROOT_DIR, 'src/renderer/app/PortableAppEffects.tsx'), 'utf-8')
+    expect(effects.match(/useAgentSessionTracker\(\)/g)).toHaveLength(1)
+  })
+})
+
 describe('Project Gitignore append parity', () => {
   it('registers the Tauri command and delegates both host transports to one service', () => {
     const lib = readFileSync(join(ROOT_DIR, 'src-tauri/src/lib.rs'), 'utf-8')
