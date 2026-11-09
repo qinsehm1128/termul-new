@@ -26,6 +26,7 @@ enum SessionPhase: Equatable {
     case idle
     case connecting
     case connected
+    case revoked
     case failed(String)
 }
 
@@ -77,6 +78,7 @@ final class WorkspaceSession {
     private var runningRefreshTask: Task<Void, Never>?
     private var startEpoch = 0
     private let notificationSettings: AppSettings?
+    @ObservationIgnored nonisolated(unsafe) private var revocationObserver: NSObjectProtocol?
 
     init(accessURL: URL, bearer: String? = nil, settings: AppSettings? = nil) {
         credentials = HostCredentials(accessURL: accessURL, bearer: bearer)
@@ -98,6 +100,28 @@ final class WorkspaceSession {
         quickTerminals.attach(http: http)
         search.attach(http: http)
         terminals.attach(socket: terminalSocket, origin: origin, credentials: credentials)
+        let originString = origin.absoluteString
+        revocationObserver = NotificationCenter.default.addObserver(
+            forName: .hostDeviceRevoked, object: nil, queue: .main
+        ) { [weak self] notification in
+            guard notification.object as? String == originString else { return }
+            MainActor.assumeIsolated { self?.markDeviceRevoked() }
+        }
+    }
+
+    deinit {
+        if let revocationObserver { NotificationCenter.default.removeObserver(revocationObserver) }
+    }
+
+    /// Revoke transports without changing workspace selection, PTYs, mounted
+    /// terminal state or the existing geometry lease.
+    func markDeviceRevoked() {
+        guard phase != .revoked else { return }
+        phase = .revoked
+        needsRePairing = false
+        acp.revoke()
+        terminalSocket.revoke()
+        stop()
     }
 
     /// Fire local notifications for host events that land while backgrounded,
@@ -130,7 +154,7 @@ final class WorkspaceSession {
     }
 
     func start() async {
-        guard !isStarting else { return }
+        guard phase != .revoked, !isStarting else { return }
         startEpoch += 1
         let epoch = startEpoch
         isStarting = true
@@ -167,6 +191,17 @@ final class WorkspaceSession {
             HostLog.session.info("Host connect cancelled")
         } catch {
             guard startEpoch == epoch, !Task.isCancelled else { return }
+            if case HostError.deviceRevoked = error {
+                markDeviceRevoked()
+                return
+            }
+            if case HostError.forbidden = error {
+                // The global capability notice explains the failed operation;
+                // other scopes and the mounted workspace remain usable.
+                phase = .connected
+                startRunningRefresh()
+                return
+            }
             HostLog.session.error("Host connect failed after restart-safe retries")
             // The origin is the classifier's evidence: a timeout on a private
             // LAN address means the host moved, not that the Mac is slow.
@@ -182,6 +217,9 @@ final class WorkspaceSession {
                 try await acp.connect(origin: origin, credentials: credentials)
                 return
             } catch {
+                if case HostError.deviceRevoked = error { throw error }
+                if case HostError.forbidden = error { throw error }
+                guard phase != .revoked else { throw HostError.deviceRevoked }
                 lastError = error
                 acp.stop()
                 if attempt < 2 {
@@ -229,6 +267,7 @@ final class WorkspaceSession {
 
     func handleScene(isBackground: Bool) {
         isBackgrounded = isBackground
+        guard phase != .revoked else { return }
         acp.handleLifecycle(isBackground: isBackground)
         if !isBackground {
             // Cached grid can match while the host PTY changed in background;
@@ -244,6 +283,7 @@ final class WorkspaceSession {
     }
 
     private func reconnectIfNeeded() {
+        guard phase != .revoked else { return }
         let acpFailed: Bool
         if case .failed = acp.state {
             acpFailed = true

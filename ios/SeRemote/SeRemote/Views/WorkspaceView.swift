@@ -46,7 +46,8 @@ struct WorkspaceView: View {
                     failedState(message)
                         .transition(SeTransition.entrance(reduceMotion: reduceMotion))
                 }
-            case .connected:
+            case .connected, .revoked:
+                // Root owns revoked-device presentation; retain the mounted shell.
                 EmptyView()
             }
         }

@@ -160,6 +160,7 @@ struct HostHomeView: View {
         case .connected: state = String(localized: "Online")
         case .connecting: state = String(localized: "Connecting")
         case .idle: state = String(localized: "Not connected")
+        case .revoked: state = String(localized: "This device has been removed by the host")
         case .failed: state = String(localized: "Offline")
         }
         return String(localized: "\(state) · \(conversations.count) sessions · \(runningTerminals) terminals")

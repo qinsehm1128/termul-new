@@ -26,7 +26,7 @@ enum PairingRecovery {
             switch hostError {
             case .rePairingRequired:
                 return true
-            case .network, .ipc, .unexpected:
+            case .deviceRevoked, .forbidden, .network, .ipc, .unexpected:
                 return false
             }
         }
@@ -55,7 +55,7 @@ enum PairingRecovery {
                 // The origin answered something: a tunnel 502 or a listener that
                 // is still coming up can settle on a second try.
                 return true
-            case .rePairingRequired, .ipc, .unexpected:
+            case .deviceRevoked, .forbidden, .rePairingRequired, .ipc, .unexpected:
                 return false
             }
         }

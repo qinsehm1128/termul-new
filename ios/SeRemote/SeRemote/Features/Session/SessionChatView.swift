@@ -29,6 +29,8 @@ enum NocturneSessionPresentation {
             return Status(title: String(localized: "Disconnected"), tone: .quiet)
         case .connecting:
             return Status(title: String(localized: "Connecting…"), tone: .quiet)
+        case .revoked:
+            return Status(title: String(localized: "This device has been removed by the host"), tone: .failed)
         case .failed:
             return Status(title: String(localized: "Connection failed"), tone: .failed)
         case .connected:

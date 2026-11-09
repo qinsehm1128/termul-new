@@ -101,14 +101,47 @@ enum WireJSON {
     }
 }
 
+extension Notification.Name {
+    /// Object is the revoked host's origin.absoluteString.
+    static let hostDeviceRevoked = Notification.Name("hostDeviceRevoked")
+    /// Object is the capability; userInfo["origin"] is origin.absoluteString.
+    static let hostCapabilityDenied = Notification.Name("hostCapabilityDenied")
+}
+
 enum HostError: LocalizedError {
     case network(String)
     case ipc(String, String)
     case unexpected(String)
-    /// The host answered and refused this device's pairing credential
-    /// (`UNAUTHORIZED` / `FORBIDDEN`): the generation was rotated or retired.
-    /// Rescanning the QR is the only recovery, so it is not a network message.
+    /// A legacy pairing credential was rotated or retired.
     case rePairingRequired(String)
+    /// Terminal for this device registration; retrying cannot restore access.
+    case deviceRevoked
+    /// One operation was denied; the host connection remains usable.
+    case forbidden(String)
+
+    nonisolated static func accessFailure(code: String?, capability: String?) -> HostError? {
+        switch code {
+        case "DEVICE_REVOKED": .deviceRevoked
+        case "FORBIDDEN": .forbidden(capability ?? "unknown")
+        default: nil
+        }
+    }
+
+    /// Always delivered on MainActor, before the failing request returns to UI.
+    @MainActor
+    func publishAccessFailure(origin: URL) {
+        switch self {
+        case .deviceRevoked:
+            NotificationCenter.default.post(name: .hostDeviceRevoked, object: origin.absoluteString)
+        case .forbidden(let capability):
+            NotificationCenter.default.post(
+                name: .hostCapabilityDenied, object: capability,
+                userInfo: ["origin": origin.absoluteString]
+            )
+        default:
+            break
+        }
+    }
 
     var errorDescription: String? {
         switch self {
@@ -116,6 +149,10 @@ enum HostError: LocalizedError {
             message
         case .ipc(let message, _):
             message
+        case .deviceRevoked:
+            String(localized: "This device's access was revoked. Pair again to reconnect.")
+        case .forbidden(let capability):
+            String(localized: "This device does not have permission for \(DeviceScope.label(for: capability)).")
         }
     }
 }

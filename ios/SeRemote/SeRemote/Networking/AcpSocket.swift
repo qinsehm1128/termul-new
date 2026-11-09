@@ -25,6 +25,7 @@ final class AcpSocket {
         case idle
         case connecting
         case connected
+        case revoked
         case failed(String)
     }
 
@@ -44,6 +45,7 @@ final class AcpSocket {
     private var openGate: HostWebSocketOpenGate?
 
     func connect(origin: URL, credentials: HostCredentials) async throws {
+        guard state != .revoked else { throw HostError.deviceRevoked }
         stop()
         self.origin = origin
         state = .connecting
@@ -55,7 +57,9 @@ final class AcpSocket {
         var urlRequest = URLRequest(url: wsURL, timeoutInterval: HostTunnelSession.handshakeSeconds)
         urlRequest.assumesHTTP3Capable = false
         credentials.apply(to: &urlRequest)
-        let gate = HostWebSocketOpenGate()
+        let gate = HostWebSocketOpenGate { [weak self] in
+            Task { @MainActor in self?.handleDeviceRevoked(origin: origin) }
+        }
         openGate = gate
         let session = HostTunnelSession.make(delegate: gate)
         self.session = session
@@ -71,16 +75,22 @@ final class AcpSocket {
                 historyMode = reply.historyMode ?? "live_only"
                 runtimePolicy = reply.runtimePolicy ?? AcpRuntimePolicy()
             }
+            guard state != .revoked else { throw HostError.deviceRevoked }
             state = .connected
             startHeartbeat()
         } catch {
-            state = .failed(error.localizedDescription)
+            if case HostError.deviceRevoked = error {
+                handleDeviceRevoked(origin: origin)
+            } else if state != .revoked {
+                state = .failed(error.localizedDescription)
+            }
             stop()
-            throw error
+            throw state == .revoked ? HostError.deviceRevoked : error
         }
     }
 
     func request(_ type: String, payload: [String: Any] = [:], timeoutSeconds: Double? = 45) async throws -> Data {
+        guard state != .revoked else { throw HostError.deviceRevoked }
         requestSerial += 1
         let id = "ios-\(requestSerial)"
         let body: [String: Any] = ["id": id, "type": type, "payload": payload]
@@ -133,6 +143,20 @@ final class AcpSocket {
         }
     }
 
+    func revoke() {
+        guard state != .revoked else { return }
+        state = .revoked
+        openGate?.failOpen(HostError.deviceRevoked)
+        failPending(HostError.deviceRevoked)
+        stop()
+    }
+
+    private func handleDeviceRevoked(origin: URL) {
+        guard state != .revoked else { return }
+        revoke()
+        HostError.deviceRevoked.publishAccessFailure(origin: origin)
+    }
+
     func stop() {
         heartbeat?.cancel()
         heartbeat = nil
@@ -148,9 +172,10 @@ final class AcpSocket {
         task = nil
         session?.invalidateAndCancel()
         session = nil
-        if case .failed = state {
-            /* keep */
-        } else {
+        switch state {
+        case .failed, .revoked:
+            break
+        default:
             state = .idle
         }
     }
@@ -191,6 +216,11 @@ final class AcpSocket {
                 }
                 handleFrame(data)
             } catch {
+                guard self.task === task, state != .revoked else { return }
+                if task.closeCode == .policyViolation, let origin {
+                    handleDeviceRevoked(origin: origin)
+                    return
+                }
                 if !Task.isCancelled {
                     failPending(error)
                     openGate?.failOpen(HostError.network(error.localizedDescription))
@@ -244,7 +274,20 @@ final class AcpSocket {
         let err = object["err"] as? [String: Any]
         let message = (err?["message"] as? String) ?? String(localized: "The host rejected the request.")
         let code = (err?["code"] as? String) ?? "unsupported"
-        continuation.resume(throwing: HostError.ipc(message, code))
+        if let accessError = HostError.accessFailure(
+            code: code, capability: (err?["capability"] as? String) ?? (object["capability"] as? String)
+        ) {
+            continuation.resume(throwing: accessError)
+            if let origin {
+                if case .deviceRevoked = accessError {
+                    handleDeviceRevoked(origin: origin)
+                } else {
+                    accessError.publishAccessFailure(origin: origin)
+                }
+            }
+        } else {
+            continuation.resume(throwing: HostError.ipc(message, code))
+        }
         _ = data
     }
 

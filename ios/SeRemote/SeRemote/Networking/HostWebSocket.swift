@@ -38,14 +38,44 @@ enum HostTunnelSession {
 final class HostWebSocketOpenGate: NSObject, URLSessionWebSocketDelegate, @unchecked Sendable {
     private let lock = NSLock()
     private var didOpen = false
+    private var openFailure: Error?
+    private var revoked = false
     private var opened: CheckedContinuation<Void, Error>?
+    private let onRevoked: @Sendable () -> Void
+
+    init(onRevoked: @escaping @Sendable () -> Void = {}) {
+        self.onRevoked = onRevoked
+        super.init()
+    }
+
+    /// Used by every socket, including closures received after authentication.
+    /// A policy close is terminal, never a transient tunnel failure.
+    @discardableResult
+    func handleClose(_ code: URLSessionWebSocketTask.CloseCode) -> HostError {
+        guard code == .policyViolation else {
+            let error = HostError.network(String(localized: "Disconnected from the host."))
+            failOpen(error)
+            return error
+        }
+        lock.lock()
+        let shouldPublish = !revoked
+        revoked = true
+        lock.unlock()
+        let error = HostError.deviceRevoked
+        failOpen(error)
+        if shouldPublish { onRevoked() }
+        return error
+    }
 
     func waitForOpen(seconds: Double = 60) async throws {
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask {
                 try await withCheckedThrowingContinuation { continuation in
                     self.lock.lock()
-                    if self.didOpen {
+                    if let failure = self.openFailure {
+                        self.lock.unlock()
+                        continuation.resume(throwing: failure)
+                    } else if self.didOpen {
                         self.lock.unlock()
                         continuation.resume()
                     } else {
@@ -67,10 +97,12 @@ final class HostWebSocketOpenGate: NSObject, URLSessionWebSocketDelegate, @unche
 
     func failOpen(_ error: Error) {
         lock.lock()
+        let failure: Error = revoked ? HostError.deviceRevoked : error
+        if openFailure == nil || revoked { openFailure = failure }
         let continuation = opened
         opened = nil
         lock.unlock()
-        continuation?.resume(throwing: error)
+        continuation?.resume(throwing: failure)
     }
 
     func urlSession(
@@ -94,10 +126,14 @@ final class HostWebSocketOpenGate: NSObject, URLSessionWebSocketDelegate, @unche
         reason: Data?
     ) {
         HostLog.session.info("WebSocket closed code=\(closeCode.rawValue, privacy: .public)")
-        failOpen(HostError.network(String(localized: "Disconnected from the host.")))
+        handleClose(closeCode)
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let socket = task as? URLSessionWebSocketTask, socket.closeCode == .policyViolation {
+            handleClose(.policyViolation)
+            return
+        }
         guard let error else { return }
         HostLog.session.error("WebSocket task failed: \(error.localizedDescription, privacy: .public)")
         failOpen(HostError.network(error.localizedDescription))

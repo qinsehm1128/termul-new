@@ -84,6 +84,8 @@ struct LiveTerminalSummary: Decodable, Identifiable, Sendable {
 @Observable
 final class TerminalSocket {
     private(set) var isConnected = false
+    private(set) var isRevoked = false
+    private var origin: URL?
 
     var onBytes: (@MainActor (String, Data) -> Void)?
     var onExit: (@MainActor (String) -> Void)?
@@ -98,6 +100,8 @@ final class TerminalSocket {
     private var openGate: HostWebSocketOpenGate?
 
     func connect(origin: URL, credentials: HostCredentials) async throws {
+        guard !isRevoked else { throw HostError.deviceRevoked }
+        self.origin = origin
         stop()
         guard let token = credentials.bearer, !token.isEmpty else {
             throw HostError.unexpected(String(localized: "This access link is missing its token. Scan the QR again."))
@@ -113,7 +117,9 @@ final class TerminalSocket {
         var urlRequest = URLRequest(url: wsURL, timeoutInterval: HostTunnelSession.handshakeSeconds)
         urlRequest.assumesHTTP3Capable = false
         credentials.apply(to: &urlRequest)
-        let gate = HostWebSocketOpenGate()
+        let gate = HostWebSocketOpenGate { [weak self] in
+            Task { @MainActor in self?.handleDeviceRevoked(origin: origin) }
+        }
         openGate = gate
         let session = HostTunnelSession.make(delegate: gate)
         self.session = session
@@ -124,12 +130,16 @@ final class TerminalSocket {
         do {
             try await gate.waitForOpen()
             _ = try await self.request("authenticate", payload: ["token": token], as: EmptyPayload.self)
+            guard !isRevoked else { throw HostError.deviceRevoked }
             isConnected = true
             HostLog.session.info("terminal WebSocket authenticated")
         } catch {
+            if case HostError.deviceRevoked = error {
+                handleDeviceRevoked(origin: origin)
+            }
             HostLog.session.error("terminal WebSocket connect failed: \(error.localizedDescription, privacy: .public)")
             stop()
-            throw error
+            throw isRevoked ? HostError.deviceRevoked : error
         }
     }
 
@@ -255,6 +265,22 @@ final class TerminalSocket {
         return try await request("set_display_mode", payload: payload, as: TerminalDisplayModeState.self)
     }
 
+    /// Cancel transport work only. PTYs, mounted terminal surfaces and geometry
+    /// ownership belong to the workspace and must not be torn down here.
+    func revoke() {
+        guard !isRevoked else { return }
+        isRevoked = true
+        openGate?.failOpen(HostError.deviceRevoked)
+        failPending(HostError.deviceRevoked)
+        stop()
+    }
+
+    private func handleDeviceRevoked(origin: URL) {
+        guard !isRevoked else { return }
+        revoke()
+        HostError.deviceRevoked.publishAccessFailure(origin: origin)
+    }
+
     func stop() {
         receiveTask?.cancel()
         receiveTask = nil
@@ -274,6 +300,7 @@ final class TerminalSocket {
         as _: T.Type,
         timeoutSeconds: Double = 20
     ) async throws -> T {
+        guard !isRevoked else { throw HostError.deviceRevoked }
         requestSerial += 1
         let id = "term-\(requestSerial)"
         let body: [String: Any] = ["id": id, "type": type, "payload": payload]
@@ -321,8 +348,13 @@ final class TerminalSocket {
                 }
                 handleFrame(data)
             } catch {
-                isConnected = false
-                failPending(HostError.network(error.localizedDescription))
+                guard self.task === task, !isRevoked else { return }
+                if task.closeCode == .policyViolation, let origin {
+                    handleDeviceRevoked(origin: origin)
+                } else {
+                    isConnected = false
+                    failPending(HostError.network(error.localizedDescription))
+                }
                 return
             }
         }
@@ -414,7 +446,18 @@ final class TerminalSocket {
         } else {
             let message = (object["error"] as? String) ?? String(localized: "The host rejected the request.")
             let code = (object["code"] as? String) ?? "NETWORK_ERROR"
-            continuation.resume(throwing: HostError.ipc(message, code))
+            if let accessError = HostError.accessFailure(code: code, capability: object["capability"] as? String) {
+                continuation.resume(throwing: accessError)
+                if let origin {
+                    if case .deviceRevoked = accessError {
+                        handleDeviceRevoked(origin: origin)
+                    } else {
+                        accessError.publishAccessFailure(origin: origin)
+                    }
+                }
+            } else {
+                continuation.resume(throwing: HostError.ipc(message, code))
+            }
         }
     }
 

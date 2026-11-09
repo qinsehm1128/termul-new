@@ -84,13 +84,11 @@ struct HostHTTP: Sendable {
         credentials.apply(to: &request)
         let (data, response) = try await HostURLSession.shared.data(for: request)
         let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        // A 401/403 means the host is up and spoke to us: the saved pairing
-        // credential is no longer accepted. Reporting that as "cannot reach the
-        // Mac" sends the user to debug Wi-Fi for a credential problem.
-        if let http = response as? HTTPURLResponse, http.statusCode == 401 || http.statusCode == 403 {
-            throw HostError.rePairingRequired(
-                String(localized: "This host no longer accepts this device's pairing. Scan its QR code again.")
-            )
+        if let http = response as? HTTPURLResponse,
+           let failure = Self.responseError(statusCode: http.statusCode, data: data),
+           http.statusCode == 401 || http.statusCode == 403 {
+            failure.publishAccessFailure(origin: origin)
+            throw failure
         }
         guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode), text == "OK" || text.hasPrefix("OK") else {
             if RemoteLink.isPrivateNetworkHost(origin.host() ?? "") {
@@ -119,17 +117,32 @@ struct HostHTTP: Sendable {
         return URL(string: base + suffix) ?? origin.appending(path: path)
     }
 
+    /// Parse access errors before decoding a success payload. In particular, a
+    /// scope denial is not a rejected pairing credential.
+    nonisolated static func responseError(statusCode: Int, data: Data) -> HostError? {
+        guard !(200 ..< 300).contains(statusCode) else { return nil }
+        let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        if statusCode == 401, body?["code"] as? String == "DEVICE_REVOKED" {
+            return .deviceRevoked
+        }
+        if statusCode == 403, body?["code"] as? String == "FORBIDDEN" {
+            return .forbidden(body?["capability"] as? String ?? "unknown")
+        }
+        if statusCode == 401 || statusCode == 403 {
+            return .rePairingRequired(String(localized: "The access token was rejected. Scan the desktop QR again."))
+        }
+        return .network("HTTP \(statusCode)")
+    }
+
     private func decode<T: Decodable>(_ request: URLRequest) async throws -> IpcResult<T> {
         do {
             let (data, response) = try await HostURLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else {
                 throw HostError.network(String(localized: "The tunnel returned an unexpected response."))
             }
-            if http.statusCode == 401 || http.statusCode == 403 {
-                throw HostError.network(String(localized: "The access token was rejected. Scan the desktop QR again."))
-            }
-            if !(200 ..< 300).contains(http.statusCode) {
-                throw HostError.network("HTTP \(http.statusCode)")
+            if let failure = Self.responseError(statusCode: http.statusCode, data: data) {
+                failure.publishAccessFailure(origin: origin)
+                throw failure
             }
             return try JSONDecoder().decode(IpcResult<T>.self, from: data)
         } catch let error as HostError {
