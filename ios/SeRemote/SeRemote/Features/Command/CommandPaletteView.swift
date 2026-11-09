@@ -7,19 +7,19 @@ enum PaletteItemKind: String, CaseIterable, Sendable {
     case file
     case command
 
-    var title: LocalizedStringKey {
+    var title: String {
         switch self {
-        case .session: "Sessions"
-        case .file: "Files"
-        case .command: "Commands"
+        case .session: "会话"
+        case .file: "文件"
+        case .command: "命令"
         }
     }
 
-    var systemImage: String {
+    var icon: SeIcon {
         switch self {
-        case .session: "bubble.left.and.text.bubble.right"
-        case .file: "doc"
-        case .command: "apple.terminal"
+        case .session: .clock
+        case .file: .file
+        case .command: .play
         }
     }
 }
@@ -34,32 +34,35 @@ struct PaletteItem: Identifiable, Equatable, Sendable {
 
 // MARK: - Screen
 
-/// One search field for sessions, files and quick commands. This replaces the
-/// separate search and quick-command screens from the previous IA.
+/// One search field for sessions, files and quick commands. It covers the
+/// workbench instead of pushing a destination.
 struct CommandPaletteView: View {
     @Environment(\.sePalette) private var palette
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.seThemeMode) private var mode
 
     var items: [PaletteItem]
     var onSelect: (PaletteItem) -> Void = { _ in }
+    var onClose: (() -> Void)?
 
     @State private var localQuery = ""
     private var externalQuery: Binding<String>?
     private var filtersItemsLocally = true
     @FocusState private var isSearchFocused: Bool
 
-    init(items: [PaletteItem], onSelect: @escaping (PaletteItem) -> Void = { _ in }) {
+    init(items: [PaletteItem], onSelect: @escaping (PaletteItem) -> Void = { _ in }, onClose: (() -> Void)? = nil) {
         self.items = items
         self.onSelect = onSelect
+        self.onClose = onClose
     }
 
     /// Connected callers own filtering so content-search hits are not filtered
     /// again by their file name (the matching text may be inside the file).
-    init(items: [PaletteItem], query: Binding<String>, onSelect: @escaping (PaletteItem) -> Void) {
+    init(items: [PaletteItem], query: Binding<String>, onSelect: @escaping (PaletteItem) -> Void, onClose: (() -> Void)? = nil) {
         self.items = items
         self.externalQuery = query
         self.filtersItemsLocally = false
         self.onSelect = onSelect
+        self.onClose = onClose
     }
 
     private var queryBinding: Binding<String> { externalQuery ?? $localQuery }
@@ -75,92 +78,78 @@ struct CommandPaletteView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            searchField
-                .padding(.horizontal, SeSpace.md)
-                .padding(.top, 64)
+        ZStack(alignment: .top) {
+            Color(hex: mode.isNight ? 0x07080B : 0xEBF0F7)
+                .opacity(mode.isNight ? 0.82 : 0.86)
+                .background(.ultraThinMaterial)
+                .ignoresSafeArea()
+                .onTapGesture { onClose?() }
 
-            ScrollView {
+            ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 0) {
+                    searchField
                     ForEach(PaletteItemKind.allCases, id: \.rawValue) { kind in
                         let rows = filtered.filter { $0.kind == kind }
                         if !rows.isEmpty {
                             Text(kind.title)
-                                .font(SeNocturneType.monoSmall)
+                                .font(SeNocturneType.font(8.5, mono: true))
                                 .foregroundStyle(palette.inkTertiary)
-                                .padding(.top, 18)
+                                .padding(.top, 16)
                                 .padding(.bottom, 6)
+                                .padding(.horizontal, 4)
                             ForEach(rows) { item in
                                 row(item)
                             }
                         }
                     }
-
-                    if filtered.isEmpty {
-                        Text("No match. Try a session title, a file name, or a command.")
-                            .font(SeNocturneType.secondary)
-                            .foregroundStyle(palette.inkTertiary)
-                            .padding(.top, 24)
-                    }
+                    Text("命令面板替代了独立的搜索与速启入口：输一次，三种结果。")
+                        .font(SeNocturneType.font(9.5))
+                        .foregroundStyle(palette.inkTertiary)
+                        .padding(.top, 18)
+                        .padding(.horizontal, 4)
                 }
-                .padding(.horizontal, SeSpace.md)
-                .padding(.bottom, SeSpace.xxl)
+                .padding(.horizontal, 16)
+                .padding(.top, 74)
+                .padding(.bottom, 96)
             }
-            .scrollIndicators(.hidden)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .background(.ultraThinMaterial)
-        .background(palette.canvas.opacity(0.82))
         .onAppear { isSearchFocused = true }
-        .overlay(alignment: .topTrailing) {
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(palette.inkSecondary)
-                    .frame(width: 44, height: 44)
-                    .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: SeNocturneRadius.control)
-                            .strokeBorder(palette.stroke, lineWidth: 1)
-                    }
-            }
-            .buttonStyle(.plain)
-            .padding(.top, 24)
-            .padding(.trailing, SeSpace.md)
-            .accessibilityLabel(String(localized: "Close"))
-        }
     }
 
     private var searchField: some View {
         HStack(spacing: 9) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 14, weight: .regular))
-                .foregroundStyle(palette.inkTertiary)
-            TextField("Search sessions, files or commands", text: queryBinding)
-                .font(SeNocturneType.font(SeNocturneType.sectionTitleSize))
+            SeIconView(icon: .search, size: 15, stroke: 1.6, color: palette.inkTertiary)
+            TextField("搜索会话、文件或命令", text: queryBinding)
+                .font(SeNocturneType.font(13))
                 .foregroundStyle(palette.ink)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .focused($isSearchFocused)
-                .submitLabel(.go)
-                .onSubmit {
-                    if let first = filtered.first { onSelect(first) }
-                }
-            Text("esc")
-                .font(SeNocturneType.monoSmall)
-                .foregroundStyle(palette.inkTertiary)
-                .padding(.horizontal, 5)
-                .frame(height: 18)
-                .background(palette.cardAlt, in: RoundedRectangle(cornerRadius: 4))
+                .submitLabel(.search)
+            Button {
+                onClose?()
+            } label: {
+                Text("esc")
+                    .font(SeNocturneType.font(8, mono: true))
+                    .foregroundStyle(palette.inkTertiary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 4)
+                            .strokeBorder(mode.insetStroke, lineWidth: 1)
+                    }
+                    .frame(minWidth: 32, minHeight: 32)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("关闭命令面板")
         }
         .padding(.horizontal, 12)
         .frame(height: 46)
-        .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.strip))
+        .background(mode.insetFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: SeNocturneRadius.strip)
-                .strokeBorder(palette.strokeStrong, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(mode.insetStroke, lineWidth: 1)
         }
     }
 
@@ -169,55 +158,45 @@ struct CommandPaletteView: View {
             onSelect(item)
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: item.kind.systemImage)
-                    .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(palette.inkTertiary)
-                    .frame(width: 18)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(verbatim: item.title)
-                        .font(SeNocturneType.font(SeNocturneType.secondarySize + 0.5))
-                        .foregroundStyle(palette.ink)
-                        .lineLimit(1)
-                    Text(verbatim: item.detail)
-                        .font(SeNocturneType.monoSmall)
-                        .foregroundStyle(palette.inkTertiary)
-                        .lineLimit(1)
+                if item.kind == .session {
+                    SeNeedDot(kind: statusDot(item.shortcut), size: 6)
+                } else {
+                    SeIconView(icon: item.kind.icon, size: 14, stroke: 1.6, color: palette.inkTertiary)
                 }
+                Text(item.title)
+                    .font(SeNocturneType.font(12))
+                    .foregroundStyle(palette.ink)
+                    .lineLimit(1)
                 Spacer(minLength: 8)
-                Text(verbatim: item.shortcut)
-                    .font(SeNocturneType.monoSmall)
+                Text(item.shortcut)
+                    .font(SeNocturneType.font(8.5, mono: true))
                     .foregroundStyle(palette.inkTertiary)
+                    .lineLimit(1)
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 10)
-            .background(palette.card.opacity(0.6), in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
-            .overlay {
-                RoundedRectangle(cornerRadius: SeNocturneRadius.control)
-                    .strokeBorder(palette.stroke, lineWidth: 1)
-            }
+            .frame(minHeight: 44)
+            .background(Color.clear, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         }
-        .buttonStyle(.plain)
-        .padding(.bottom, 5)
+        .buttonStyle(SePressable())
+    }
+
+    private func statusDot(_ shortcut: String) -> SeNeedDot.Kind {
+        switch shortcut {
+        case "等待你": .wait
+        case "运行中": .live
+        default: .idle
+        }
     }
 }
 
-// MARK: - Previews
-
-#Preview("Palette · Night") {
+#if DEBUG
+#Preview("Palette") {
     CommandPaletteView(items: [
-        PaletteItem(id: "s1", kind: .session, title: "优化远程连接恢复", detail: "Claude Code · MacBook Pro", shortcut: "waiting"),
-        PaletteItem(id: "s2", kind: .session, title: "检查 ACP 消息流", detail: "Terminal · MacBook Pro", shortcut: "running"),
-        PaletteItem(id: "f1", kind: .file, title: "TerminalSocket.swift", detail: "src/net · 2 matches", shortcut: "open"),
-        PaletteItem(id: "f2", kind: .file, title: "ReconnectPolicy.swift", detail: "src/net · 1 match", shortcut: "open"),
-        PaletteItem(id: "c1", kind: .command, title: "swift test --filter Reconnect", detail: "Quick command", shortcut: "run"),
-        PaletteItem(id: "c2", kind: .command, title: "npm run dev:web", detail: "Quick command", shortcut: "run")
+        PaletteItem(id: "s1", kind: .session, title: "优化远程连接恢复", detail: "Claude Code · MacBook Pro", shortcut: "等待你"),
+        PaletteItem(id: "f1", kind: .file, title: "TerminalSocket.swift", detail: "src/net · 2 处命中", shortcut: "2 处命中"),
+        PaletteItem(id: "c1", kind: .command, title: "swift test --filter Reconnect", detail: "速启", shortcut: "速启")
     ])
     .seThemeMode(.night)
 }
-
-#Preview("Palette · Day") {
-    CommandPaletteView(items: [
-        PaletteItem(id: "s1", kind: .session, title: "优化远程连接恢复", detail: "Claude Code · MacBook Pro", shortcut: "waiting")
-    ])
-    .seThemeMode(.day)
-}
+#endif

@@ -11,11 +11,18 @@ enum NeedsItemKind: String, CaseIterable, Sendable {
 
     var title: String {
         switch self {
-        case .permission: String(localized: "Permission")
-        case .question: String(localized: "Question")
-        case .failure: String(localized: "Failure")
-        case .done: String(localized: "Done")
-        case .running: String(localized: "Running")
+        case .permission: "许可"
+        case .question: "问题"
+        case .failure: "失败"
+        case .done: "完成"
+        case .running: "运行"
+        }
+    }
+
+    var actionTitle: String {
+        switch self {
+        case .permission, .question: "处理"
+        case .failure, .done, .running: "查看"
         }
     }
 }
@@ -30,167 +37,116 @@ struct NeedsItem: Identifiable, Equatable, Sendable {
 
 // MARK: - Screen
 
-/// Contextual queue opened from the live strip. It is deliberately not a
+/// The contextual queue opened from the live strip. It is deliberately not a
 /// destination: it appears over the live screen, and a handled row disappears.
 struct NeedsSheetView: View {
-    @Environment(\.sePalette) private var palette
-    @Environment(\.dismiss) private var dismiss
-
     var items: [NeedsItem]
     var onOpen: (NeedsItem) -> Void = { _ in }
 
-    private var permissions: Int { items.filter { $0.kind == .permission }.count }
-    private var failures: Int { items.filter { $0.kind == .failure }.count }
-    private var questions: Int { items.filter { $0.kind == .question }.count }
+    @Environment(\.sePalette) private var palette
+    @Environment(\.seThemeMode) private var mode
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            grabber
-                .padding(.top, 10)
-            header
-                .padding(.horizontal, SeSpace.md)
-                .padding(.top, 14)
-            Text(summary)
-                .font(SeNocturneType.secondary)
-                .foregroundStyle(palette.inkTertiary)
-                .padding(.horizontal, SeSpace.md)
-                .padding(.top, 4)
-            list
-                .padding(.horizontal, SeSpace.md)
-                .padding(.top, 12)
-            Text("Handled items disappear. When nothing needs you, the strip hides itself.")
-                .font(.system(size: 9.5))
-                .foregroundStyle(palette.inkTertiary)
-                .padding(.horizontal, SeSpace.md)
-                .padding(.top, 12)
-                .padding(.bottom, SeSpace.lg)
-        }
-        .background(palette.surface)
-        .presentationDragIndicator(.hidden)
-        .presentationCornerRadius(SeNocturneRadius.sheet)
-    }
+            SeSheetHeader(
+                title: "待你处理",
+                subtitle: subtitle,
+                onClose: { dismiss() }
+            )
+            .padding(.horizontal, 18)
+            .padding(.top, 10)
 
-    private var grabber: some View {
-        Capsule()
-            .fill(palette.strokeStrong)
-            .frame(width: 36, height: 4)
-            .frame(maxWidth: .infinity)
-    }
-
-    private var header: some View {
-        HStack(spacing: 10) {
-            Text("Needs you")
-                .font(SeNocturneType.sheetTitle)
-                .foregroundStyle(palette.ink)
-            Spacer()
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(palette.inkSecondary)
-                    .frame(width: 44, height: 44)
-                    .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: SeNocturneRadius.control)
-                            .strokeBorder(palette.stroke, lineWidth: 1)
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 6) {
+                    ForEach(items) { item in
+                        row(item)
                     }
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(String(localized: "Close"))
-        }
-    }
-
-    private var summary: String {
-        var parts: [String] = []
-        if permissions > 0 { parts.append("\(permissions) permission") }
-        if failures > 0 { parts.append("\(failures) failure") }
-        if questions > 0 { parts.append("\(questions) question") }
-        if parts.isEmpty { return String(localized: "Nothing needs you") }
-        return parts.joined(separator: " · ")
-    }
-
-    private var list: some View {
-        VStack(spacing: 6) {
-            ForEach(items) { item in
-                Button {
-                    onOpen(item)
-                } label: {
-                    row(item)
                 }
-                .buttonStyle(.plain)
+                .padding(.top, 12)
+
+                Text("处理后这一行会消失。没有待办时，这条带子直接隐藏。")
+                    .font(SeNocturneType.font(9.5))
+                    .foregroundStyle(palette.inkTertiary)
+                    .padding(.top, 12)
             }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 24)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(mode.sheetSurface)
+        .foregroundStyle(palette.ink)
+    }
+
+    private var subtitle: String {
+        let permissions = items.filter { $0.kind == .permission || $0.kind == .question }.count
+        let failures = items.filter { $0.kind == .failure }.count
+        let done = items.filter { $0.kind == .done }.count
+        var parts: [String] = []
+        if permissions > 0 { parts.append("\(permissions) 个许可") }
+        if failures > 0 { parts.append("\(failures) 个失败") }
+        if done > 0 { parts.append("\(done) 个完成") }
+        return parts.isEmpty ? "没有待办" : parts.joined(separator: " · ")
     }
 
     private func row(_ item: NeedsItem) -> some View {
-        HStack(spacing: 10) {
-            Text(item.kind.title)
-                .font(SeNocturneType.font(8.5, weight: .medium, mono: true))
-                .foregroundStyle(badgeColor(item.kind))
-                .padding(.horizontal, 6)
-                .frame(height: 20)
-                .background(badgeBackground(item.kind), in: RoundedRectangle(cornerRadius: 5))
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(verbatim: item.title)
-                    .font(SeNocturneType.rowTitle)
-                    .foregroundStyle(palette.ink)
-                    .lineLimit(1)
-                Text(verbatim: item.meta)
-                    .font(SeNocturneType.monoSmall)
-                    .foregroundStyle(palette.inkTertiary)
-                    .lineLimit(1)
+        Button {
+            onOpen(item)
+        } label: {
+            HStack(spacing: 10) {
+                badge(item.kind)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.title)
+                        .font(SeNocturneType.font(11.5, weight: .semibold))
+                        .foregroundStyle(palette.ink)
+                        .lineLimit(1)
+                    Text(item.meta)
+                        .font(SeNocturneType.font(8.5, mono: true))
+                        .foregroundStyle(palette.inkTertiary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 6)
+                Text(item.kind.actionTitle)
+                    .font(SeNocturneType.font(9, mono: true))
+                    .foregroundStyle(palette.accent)
             }
-
-            Spacer(minLength: 8)
-
-            Text(verbatim: item.actionTitle)
-                .font(SeNocturneType.monoSmall)
-                .foregroundStyle(palette.accent)
+            .padding(10)
+            .background(palette.card, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .strokeBorder(mode.hairline, lineWidth: 1)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
         }
-        .padding(10)
-        .background(palette.card, in: RoundedRectangle(cornerRadius: 11))
-        .overlay {
-            RoundedRectangle(cornerRadius: 11)
-                .strokeBorder(palette.stroke, lineWidth: 1)
-        }
+        .buttonStyle(SePressable())
     }
 
-    private func badgeColor(_ kind: NeedsItemKind) -> Color {
+    private func badge(_ kind: NeedsItemKind) -> some View {
+        Text(kind.title)
+            .font(SeNocturneType.font(8, mono: true))
+            .foregroundStyle(foreground(kind))
+            .padding(.horizontal, 6)
+            .frame(height: 18)
+            .background(background(kind), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+    }
+
+    private func foreground(_ kind: NeedsItemKind) -> Color {
         switch kind {
-        case .permission, .question: palette.warning
+        case .permission: palette.warning
+        case .question: palette.accent
         case .failure: palette.danger
         case .done: palette.live
         case .running: palette.accent
         }
     }
 
-    private func badgeBackground(_ kind: NeedsItemKind) -> Color {
+    private func background(_ kind: NeedsItemKind) -> Color {
         switch kind {
-        case .permission, .question: palette.warningSubtle
+        case .permission: palette.warningSubtle
+        case .question: palette.accentSubtle
         case .failure: palette.dangerSubtle
         case .done: palette.liveSubtle
         case .running: palette.accentSubtle
         }
     }
-}
-
-// MARK: - Previews
-
-#Preview("Needs · Night") {
-    NeedsSheetView(items: [
-        NeedsItem(id: "n1", kind: .permission, title: "修改 TerminalSocket.swift", meta: "Claude Code · MacBook Pro · 2 分钟前", actionTitle: "Review"),
-        NeedsItem(id: "n2", kind: .failure, title: "夜间冒烟测试失败", meta: "Schedule · Mac mini · 09:30", actionTitle: "Open"),
-        NeedsItem(id: "n3", kind: .done, title: "恢复连接巡检通过", meta: "Schedule · MacBook Pro · 09:00", actionTitle: "Open"),
-        NeedsItem(id: "n4", kind: .running, title: "检查 ACP 消息流", meta: "Terminal · MacBook Pro · 15 分钟前", actionTitle: "Open")
-    ])
-    .seThemeMode(.night)
-}
-
-#Preview("Needs · Day") {
-    NeedsSheetView(items: [
-        NeedsItem(id: "n1", kind: .permission, title: "修改 TerminalSocket.swift", meta: "Claude Code · MacBook Pro · 2 分钟前", actionTitle: "Review")
-    ])
-    .seThemeMode(.day)
 }

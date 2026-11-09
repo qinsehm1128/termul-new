@@ -49,6 +49,26 @@ enum LivePresentation {
                          questions: items.filter { $0.kind == .question }.count)
     }
 
+    /// The single line under a session title: agent · state · host.
+    static func rowMeta(for item: LiveSession) -> String {
+        var parts: [String] = []
+        parts.append(item.agent.isEmpty ? "Terminal" : item.agent)
+        parts.append(statusText(for: item))
+        if !item.host.isEmpty { parts.append(item.host) }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Host lifecycle labels are preserved; no approval state is invented.
+    static func statusText(for item: LiveSession) -> String {
+        switch item.status {
+        case .needsYou: "等待你处理"
+        case .running: "运行中"
+        case .ready: item.detailStatus ?? "空闲"
+        case .unknown: item.detailStatus ?? "未知"
+        case .idle: "空闲"
+        }
+    }
+
     static func destination(id: String) -> LiveDestination? {
         if id.hasPrefix("conversation:") { return .conversation(String(id.dropFirst("conversation:".count))) }
         if id.hasPrefix("project:") { return .project(String(id.dropFirst("project:".count))) }

@@ -5,6 +5,7 @@ import SwiftUI
 struct ConnectedCommandPalette: View {
     let session: WorkspaceSession
     let onOpenSession: () -> Void
+    var onClose: () -> Void = {}
 
     @State private var query = ""
     @State private var presentedRoute: PresentedRoute?
@@ -13,9 +14,10 @@ struct ConnectedCommandPalette: View {
     @State private var openTask: Task<Void, Never>?
     @Environment(\.sePalette) private var palette
 
-    init(session: WorkspaceSession, onOpenSession: @escaping () -> Void) {
+    init(session: WorkspaceSession, onOpenSession: @escaping () -> Void, onClose: @escaping () -> Void = {}) {
         self.session = session
         self.onOpenSession = onOpenSession
+        self.onClose = onClose
     }
 
     private enum PresentedRoute: Identifiable {
@@ -38,15 +40,15 @@ struct ConnectedCommandPalette: View {
     }
 
     var body: some View {
-        CommandPaletteView(items: entries.map(\.item), query: $query) { item in
+        CommandPaletteView(items: entries.map(\.item), query: $query, onSelect: { item in
             guard let entry = entries.first(where: { $0.id == item.id }) else { return }
             select(entry.target)
-        }
+        }, onClose: onClose)
         .disabled(openingResult)
         .overlay(alignment: .bottom) {
             VStack(spacing: SeSpace.xs) {
-                if openingResult { ProgressView("Opening file…") }
-                if session.search.isLoading { ProgressView("Searching files…") }
+                if openingResult { ProgressView("正在打开文件…") }
+                if session.search.isLoading { ProgressView("正在搜索文件…") }
                 if let fileError { Text(fileError).foregroundStyle(palette.inkSecondary) }
                 if let error = session.search.errorMessage { Text(error).foregroundStyle(palette.inkSecondary) }
             }
@@ -82,7 +84,7 @@ struct ConnectedCommandPalette: View {
                 }
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { presentedRoute = nil }
+                        Button("完成") { presentedRoute = nil }
                             .frame(minHeight: SeSpace.hitTarget)
                     }
                 }
