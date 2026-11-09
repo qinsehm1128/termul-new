@@ -897,12 +897,9 @@ async fn handle(
                 .get("projectId")
                 .and_then(Value::as_str)
                 .filter(|value| !value.is_empty());
-            if conversation_filter.is_none() && project_filter.is_none() {
-                return Err((
-                    "VALIDATION_ERROR",
-                    "list requires conversationId or projectId".to_string(),
-                ));
-            }
+            // No filter lists every active terminal: the remote terminal hub
+            // groups project terminals and still needs the scope-less ones.
+            // A filter narrows that set; conversation wins when both are given.
             let terminals: Vec<Value> = if let Some(client) = core_terminal(state) {
                 client
                     .list()
@@ -1772,6 +1769,41 @@ async fn bind_companion_output_stream(
     terminal_id: String,
     last_seq: u64,
 ) -> Result<Value, (&'static str, String)> {
+    // Terminal Core owns the shells in the desktop composition, so the local
+    // compatibility manager has no instance to watch. Core `watch` is
+    // claim-free — it never rotates the desktop claim — which is exactly what
+    // a remote viewer of an already-running project terminal needs.
+    if let Some(client) = core_terminal(state) {
+        let session = client.watch(&terminal_id, last_seq).await.map_err(|error| {
+            match error {
+                crate::core::CoreError::InvalidRequest(detail) if detail.contains("not found") => {
+                    ("TERMINAL_NOT_FOUND", "terminal not found".to_string())
+                }
+                other => ("NETWORK_ERROR", core_error_detail(other)),
+            }
+        })?;
+        let generation = session
+            .claim_generation
+            .ok_or_else(|| unauthorized_error(&terminal_id))?;
+        let attach_result = session.result.clone();
+        ctx.authorize_unscoped(&terminal_id, generation);
+        install_core_stream_forwarder(
+            &terminal_id,
+            session,
+            generation,
+            state,
+            PassiveForwardAuth {
+                authority,
+                principal_generation: principal.generation(),
+            },
+            tx,
+            ctx,
+        )
+        .await?;
+        return serde_json::to_value(attach_result)
+            .map_err(|error| ("NETWORK_ERROR", error.to_string()));
+    }
+
     let generation = state
         .pty
         .claim_generation(&terminal_id)
@@ -1916,10 +1948,11 @@ fn companion_list_matches(
     conversation_filter: Option<ConversationId>,
     project_filter: Option<&str>,
 ) -> bool {
-    if let Some(conversation_id) = conversation_filter {
-        return instance.conversation_matches(conversation_id);
+    match (conversation_filter, project_filter) {
+        (Some(conversation_id), _) => instance.conversation_matches(conversation_id),
+        (None, Some(project_id)) => instance.project_matches(project_id),
+        (None, None) => true,
     }
-    project_filter.is_some_and(|project_id| instance.project_matches(project_id))
 }
 
 fn live_terminal_summary(
@@ -1949,10 +1982,13 @@ fn companion_status_matches(
     conversation_filter: Option<ConversationId>,
     project_filter: Option<&str>,
 ) -> bool {
-    if let Some(conversation_id) = conversation_filter {
-        return ConversationId::parse(&status.conversation_id).ok() == Some(conversation_id);
+    match (conversation_filter, project_filter) {
+        (Some(conversation_id), _) => {
+            ConversationId::parse(&status.conversation_id).ok() == Some(conversation_id)
+        }
+        (None, Some(project_id)) => status.project_id.as_deref() == Some(project_id),
+        (None, None) => true,
     }
-    project_filter.is_some_and(|project_id| status.project_id.as_deref() == Some(project_id))
 }
 
 fn live_terminal_summary_from_status(
@@ -2816,6 +2852,14 @@ mod tests {
             None,
             Some("proj-2")
         ));
+        // No filter matches every active terminal (remote terminal hub).
+        assert!(companion_list_matches_ids(
+            conversation,
+            Some("proj-1"),
+            None,
+            None
+        ));
+        assert!(companion_list_matches_ids(conversation, None, None, None));
     }
 
     fn companion_list_matches_ids(
@@ -2824,10 +2868,204 @@ mod tests {
         conversation_filter: Option<ConversationId>,
         project_filter: Option<&str>,
     ) -> bool {
-        if let Some(conversation_id) = conversation_filter {
-            return instance_conversation == conversation_id;
+        match (conversation_filter, project_filter) {
+            (Some(conversation_id), _) => instance_conversation == conversation_id,
+            (None, Some(project_id)) => Some(project_id) == instance_project,
+            (None, None) => true,
         }
-        project_filter == instance_project
+    }
+
+    #[tokio::test]
+    async fn list_without_filters_returns_every_active_terminal_with_attribution() {
+        let state = terminal_test_state();
+        let temp = tempfile::tempdir().unwrap();
+        let cwd = temp.path().to_string_lossy().into_owned();
+        let project = state
+            .pty
+            .spawn(
+                SpawnOptions {
+                    conversation_id: Some(crate::conversation::ConversationId::new_v4()),
+                    project_id: Some("proj-1".into()),
+                    cwd: Some(cwd.clone()),
+                    shell: Some("/bin/sh".into()),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        let conversation = state
+            .pty
+            .spawn(
+                SpawnOptions {
+                    conversation_id: Some(conversation_id()),
+                    cwd: Some(cwd),
+                    shell: Some("/bin/sh".into()),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+
+        let authority = terminal_authority();
+        let principal = RemotePrincipal::for_tests(1);
+        let (tx, _rx) = mpsc::channel(8);
+        let mut ctx = ConnectionContext::new(Arc::new(RwLock::new(HashMap::new())), false);
+        let request = |payload: Value| Request {
+            id: "list".into(),
+            type_: "list".into(),
+            payload,
+        };
+
+        let reply = handle(request(json!({})), &state, &authority, &principal, &tx, &mut ctx)
+            .await
+            .expect("unfiltered list");
+        let terminals = reply["terminals"].as_array().expect("terminals array");
+        assert_eq!(terminals.len(), 2);
+        for terminal in terminals {
+            assert!(
+                terminal.get("projectId").is_some(),
+                "every summary carries project attribution"
+            );
+            assert!(
+                terminal.get("conversationId").is_some(),
+                "every summary carries conversation attribution"
+            );
+        }
+        let ids = terminals
+            .iter()
+            .filter_map(|terminal| terminal["id"].as_str())
+            .collect::<Vec<_>>();
+        assert!(ids.contains(&project.info.id.as_str()));
+        assert!(ids.contains(&conversation.info.id.as_str()));
+
+        // A project filter still narrows instead of returning everything.
+        let filtered = handle(
+            request(json!({ "projectId": "proj-1" })),
+            &state,
+            &authority,
+            &principal,
+            &tx,
+            &mut ctx,
+        )
+        .await
+        .expect("filtered list");
+        let filtered = filtered["terminals"].as_array().expect("terminals array");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0]["id"], project.info.id);
+        assert_eq!(filtered[0]["projectId"], "proj-1");
+
+        let missing = handle(
+            request(json!({ "projectId": "proj-2" })),
+            &state,
+            &authority,
+            &principal,
+            &tx,
+            &mut ctx,
+        )
+        .await
+        .expect("unrelated project list");
+        assert!(missing["terminals"]
+            .as_array()
+            .expect("terminals array")
+            .is_empty());
+
+        state.pty.terminate(&project.info.id).await.unwrap();
+        state.pty.terminate(&conversation.info.id).await.unwrap();
+    }
+
+    /// Terminal Core owns project shells in the desktop composition. The WS
+    /// `watch` op must reach those PTYs without a claim, because a remote
+    /// viewer never received the spawn credential. This is the minimal host
+    /// support the phone terminal hub attaches with.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn watch_reaches_terminal_core_project_terminals_without_a_claim() {
+        use crate::core::{CoreEndpoint, CoreRole, TerminalServiceHandle};
+
+        let profile = tempfile::tempdir().unwrap();
+        let server_profile = profile.path().to_path_buf();
+        let server = tokio::spawn(async move {
+            crate::core::run_terminal_core(server_profile, crate::terminal_program()).await
+        });
+        let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::TerminalCore);
+        let client = {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                match crate::core::TerminalCoreClient::connect(&endpoint).await {
+                    Ok(client) => break client,
+                    Err(_) if tokio::time::Instant::now() < deadline => {
+                        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                    }
+                    Err(error) => panic!("terminal core did not become ready: {error}"),
+                }
+            }
+        };
+        let cwd = profile.path().to_string_lossy().into_owned();
+        let spawned = client
+            .spawn(SpawnOptions {
+                conversation_id: Some(crate::conversation::ConversationId::new_v4()),
+                project_id: Some("proj-core".into()),
+                cwd: Some(cwd),
+                shell: Some("/bin/sh".into()),
+                ..Default::default()
+            })
+            .await
+            .expect("core project spawn");
+
+        let mut state = terminal_test_state();
+        state.terminal = TerminalServiceHandle::from_core_client(client.clone());
+        let authority = terminal_authority();
+        let principal = RemotePrincipal::for_tests(1);
+        let (tx, _rx) = mpsc::channel(8);
+        let mut ctx = ConnectionContext::new(Arc::new(RwLock::new(HashMap::new())), false);
+
+        let reply = handle(
+            Request {
+                id: "watch".into(),
+                type_: "watch".into(),
+                payload: json!({ "terminalId": spawned.info.id, "lastSeq": 0 }),
+            },
+            &state,
+            &authority,
+            &principal,
+            &tx,
+            &mut ctx,
+        )
+        .await
+        .expect("core watch");
+        assert_eq!(reply["id"], spawned.info.id);
+        assert_eq!(reply["cols"], 80);
+        assert_eq!(reply["rows"], 24);
+        assert_eq!(
+            authorized_terminal_scope(&state, &ctx, &spawned.info.id),
+            Ok(()),
+            "watching authorizes the connection for writes and resizes"
+        );
+
+        // The authorization watch minted is what the phone input path uses.
+        handle(
+            Request {
+                id: "write".into(),
+                type_: "write".into(),
+                payload: json!({ "terminalId": spawned.info.id, "data": "echo hub\n" }),
+            },
+            &state,
+            &authority,
+            &principal,
+            &tx,
+            &mut ctx,
+        )
+        .await
+        .expect("write through watch authorization");
+
+        client
+            .terminate(&spawned.info.id)
+            .await
+            .expect("terminate project shell");
+        client.shutdown().await.expect("shutdown core");
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
     }
 
     #[test]

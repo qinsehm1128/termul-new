@@ -1,17 +1,54 @@
 import SwiftUI
 
-/// Full-screen live view of one host PTY a quick terminal opened.
+/// Full-screen live view of one host PTY.
 ///
 /// The console attaches through `TerminalStore.attachViewer`, so it shares the
 /// session's single `TerminalSocket` and the workbench's SwiftTerm canvas. It
 /// never spawns: the host PTY already exists, and detaching leaves it running.
+///
+/// Quick terminals pass the claim `open` returned; project terminals pass no
+/// claim and attach through the claim-free `watch` op instead.
 struct QuickTerminalConsoleView: View {
     @Environment(\.sePalette) private var palette
 
     let session: WorkspaceSession
-    let opened: QuickTerminalOpenedWire
+    let terminalId: String
+    let claim: String?
     let title: String
+    let unattachableNotice: String?
     let onClose: () -> Void
+
+    init(
+        session: WorkspaceSession,
+        opened: QuickTerminalOpenedWire,
+        title: String,
+        onClose: @escaping () -> Void
+    ) {
+        self.init(
+            session: session,
+            terminalId: opened.terminalId,
+            claim: QuickTerminalPresentation.attachClaim(opened),
+            title: title,
+            unattachableNotice: QuickTerminalPresentation.consoleUnattachableNotice(opened),
+            onClose: onClose
+        )
+    }
+
+    init(
+        session: WorkspaceSession,
+        terminalId: String,
+        claim: String?,
+        title: String,
+        unattachableNotice: String? = nil,
+        onClose: @escaping () -> Void
+    ) {
+        self.session = session
+        self.terminalId = terminalId
+        self.claim = claim
+        self.title = title
+        self.unattachableNotice = unattachableNotice
+        self.onClose = onClose
+    }
 
     @State private var viewer: TerminalPTYViewer?
     @State private var attachError: String?
@@ -52,7 +89,7 @@ struct QuickTerminalConsoleView: View {
         .background(palette.canvas.ignoresSafeArea())
         .task { await start() }
         .onDisappear { release() }
-        .onChange(of: opened.terminalId) { _, _ in
+        .onChange(of: terminalId) { _, _ in
             controlModifier = TerminalControlModifier()
         }
     }
@@ -183,7 +220,7 @@ struct QuickTerminalConsoleView: View {
                     retryTitle: String(localized: "Try again"),
                     retry: { retry() }
                 )
-                if let notice = QuickTerminalPresentation.consoleUnattachableNotice(opened) {
+                if let notice = unattachableNotice {
                     Text(verbatim: notice)
                         .font(SeNocturneType.font(10, weight: .regular))
                         .foregroundStyle(palette.inkTertiary)
@@ -220,8 +257,8 @@ struct QuickTerminalConsoleView: View {
         attachError = nil
         do {
             let created = try await session.terminals.attachViewer(
-                terminalId: opened.terminalId,
-                claim: QuickTerminalPresentation.attachClaim(opened),
+                terminalId: terminalId,
+                claim: claim,
                 title: title,
                 cols: 80,
                 rows: 24
@@ -234,13 +271,23 @@ struct QuickTerminalConsoleView: View {
             focusToken &+= 1
         } catch {
             guard !Task.isCancelled else { return }
-            attachError = QuickTerminalPresentation.consoleFailureMessage(opened, error: error)
+            attachError = Self.failureMessage(unattachableNotice: unattachableNotice, error: error)
         }
     }
 
     private func retry() {
         attachError = nil
         Task { await start() }
+    }
+
+    /// A refused claim is named only when the host actually answered
+    /// UNAUTHORIZED; a transport failure keeps its own message.
+    private static func failureMessage(unattachableNotice: String?, error: Error) -> String {
+        if case HostError.ipc(_, let code) = error, code == "UNAUTHORIZED",
+           let unattachableNotice {
+            return unattachableNotice
+        }
+        return error.localizedDescription
     }
 
     /// Detach only: the host shell is never killed.
