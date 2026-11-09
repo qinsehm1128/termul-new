@@ -43,7 +43,15 @@ impl AutomationError {
         }
     }
     pub fn denied() -> Self {
-        Self::new("permission_denied", "SSH operation is not authorized")
+        Self::new(
+            "permission_denied",
+            "SSH operation is not granted to MCP for this profile; the Se host owner must enable it in Settings > MCP > Host access",
+        )
+    }
+    /// Same stable code as [`denied`], but tells the caller which host setting is missing.
+    /// Never echoes configured paths or the requested path.
+    pub fn denied_because(message: &str) -> Self {
+        Self::new("permission_denied", message)
     }
     pub fn invalid(message: &str) -> Self {
         Self::new("invalid_arguments", message)
@@ -136,7 +144,7 @@ impl CallContext {
             .ok_or_else(AutomationError::denied)?;
         check_profile_identity(profile, &grant)?;
         if operation == "job_start" && !grant.posix_jobs {
-            return Err(AutomationError::denied());
+            return Err(posix_jobs_disabled());
         }
         let result = snapshot.commands.check(&profile.id, command);
         let operation = if operation == "job_start" {
@@ -446,7 +454,7 @@ impl SshAutomationService {
             if ["list_files", "read_file", "write_file", "upload", "download"].contains(&operation.as_str()) {
                 check_remote_path(required_string(&args,"remotePath",4096)?, &grant.remote_roots)?;
                 if ["upload", "download"].contains(&operation.as_str()) && grant.local_roots.is_empty() {
-                    return Err(AutomationError::denied());
+                    return Err(no_local_roots());
                 }
             }
             if ["execute", "job_start"].contains(&operation.as_str()) {
@@ -521,6 +529,25 @@ fn profile_metadata(profile: &SSHProfile, grant: &ProfileGrant) -> Value {
         "tags": profile.tags, "lastConnected": profile.last_connected,
         "credentialConfigured": profile.auth_method == "agent" || profile.has_stored_password || profile.has_stored_passphrase || profile.private_key_path.is_some(),
         "operations": operations, "posixJobs": grant.posix_jobs,
+        // Grant scope, not credentials: callers need it to choose paths that will pass.
+        "remoteRoots": grant.remote_roots, "localRoots": grant.local_roots,
+    })
+}
+pub(crate) fn posix_jobs_disabled() -> AutomationError {
+    AutomationError::denied_because(
+        "POSIX jobs are disabled for this profile; the Se host owner must enable 'Allow POSIX jobs' in Settings > MCP > Host access",
+    )
+}
+pub(crate) fn no_local_roots() -> AutomationError {
+    AutomationError::denied_because(
+        "No Se host local roots are configured for this profile; upload/download stay denied until the host owner adds one in Settings > MCP > Host access",
+    )
+}
+pub(crate) fn outside_remote_roots(roots: &[String]) -> AutomationError {
+    AutomationError::denied_because(if roots.is_empty() {
+        "No remote roots are configured for this profile; remote file operations stay denied until the host owner adds one in Settings > MCP > Host access"
+    } else {
+        "remotePath is outside the authorized remote roots (see profile_get remoteRoots)"
     })
 }
 
@@ -568,7 +595,9 @@ pub(crate) fn check_remote_path(path: &str, roots: &[String]) -> AutomationResul
             && !path.contains("//")
     }
     if !safe(path) {
-        return Err(AutomationError::denied());
+        return Err(AutomationError::denied_because(
+            "remotePath must be an absolute normalized path without '.', '..' or '//'",
+        ));
     }
     if roots.iter().any(|root| {
         safe(root)
@@ -581,7 +610,7 @@ pub(crate) fn check_remote_path(path: &str, roots: &[String]) -> AutomationResul
     }) {
         Ok(())
     } else {
-        Err(AutomationError::denied())
+        Err(outside_remote_roots(roots))
     }
 }
 

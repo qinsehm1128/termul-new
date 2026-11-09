@@ -39,6 +39,34 @@ const GROUPS = [
   },
   { title: 'riskPermissions' as const, operations: RISK_OPERATIONS, risk: true }
 ]
+/** Operations the backend denies whenever the matching grant setting is empty. */
+const REMOTE_ROOT_OPERATIONS: McpSshOperation[] = [
+  'list_files',
+  'read_file',
+  'write_file',
+  'upload',
+  'download'
+]
+const LOCAL_ROOT_OPERATIONS: McpSshOperation[] = ['upload', 'download']
+
+function filledRoots(roots: string[]): number {
+  return roots.filter((root) => root.trim()).length
+}
+
+/** Settings that would make a granted operation fail at call time, so the owner sees it before saving. */
+export function sshGrantGaps(
+  grant: McpSshGrant
+): Array<'remoteRoots' | 'localRoots' | 'posixJobs'> {
+  const has = (ops: McpSshOperation[]): boolean => ops.some((op) => grant.operations.includes(op))
+  const gaps: Array<'remoteRoots' | 'localRoots' | 'posixJobs'> = []
+  if (has(REMOTE_ROOT_OPERATIONS) && !filledRoots(grant.remoteRoots)) gaps.push('remoteRoots')
+  if (has(LOCAL_ROOT_OPERATIONS) && !filledRoots(grant.localRoots)) gaps.push('localRoots')
+  if (grant.operations.includes('job_start') && !grant.posixJobs) gaps.push('posixJobs')
+  return gaps
+}
+
+const textareaClass =
+  'mt-1.5 block w-full resize-y rounded-md border border-input bg-background px-2.5 py-2 font-mono text-xs text-foreground placeholder:text-muted-foreground/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
 
 export function McpSshAccessCard({
   profile,
@@ -71,6 +99,7 @@ export function McpSshAccessCard({
   const id = useId()
   const [confirmAll, setConfirmAll] = useState(false)
   const stale = !!selected && fingerprint !== profile.fingerprint
+  const gaps = selected ? sshGrantGaps(selected) : []
   return (
     <article
       className="min-w-0 overflow-hidden rounded-lg border border-border bg-background"
@@ -100,16 +129,18 @@ export function McpSshAccessCard({
           </span>
         </button>
         <span
-          className={`rounded px-2 py-1 text-[11px] tabular-nums ${stale ? 'bg-destructive/10 text-destructive' : 'bg-secondary text-muted-foreground'}`}
+          className={`rounded px-2 py-1 text-[11px] tabular-nums ${stale || gaps.length ? 'bg-destructive/10 text-destructive' : 'bg-secondary text-muted-foreground'}`}
         >
           {stale
             ? t('hostAccess.identityChangedShort')
-            : selected
-              ? t('hostAccess.permissionCount', {
-                  count: selected.operations.length,
-                  total: MCP_SSH_OPERATIONS.length
-                })
-              : t('hostAccess.notGranted')}
+            : gaps.length
+              ? t('hostAccess.incompleteShort', { count: gaps.length })
+              : selected
+                ? t('hostAccess.permissionCount', {
+                    count: selected.operations.length,
+                    total: MCP_SSH_OPERATIONS.length
+                  })
+                : t('hostAccess.notGranted')}
         </span>
         <label className="flex min-h-8 shrink-0 items-center gap-2 text-xs">
           <input
@@ -130,19 +161,19 @@ export function McpSshAccessCard({
           {t('hostAccess.grantProfile')}
         </label>
       </div>
-      <div id={id} hidden={!open} className="space-y-3 border-t border-border p-3">
+      <div id={id} hidden={!open} className="space-y-4 border-t border-border p-3">
         {!selected && (
           <p className="text-xs text-muted-foreground">{t('hostAccess.grantToConfigure')}</p>
         )}
-        <McpCommandDenyEditor title={t('commandDeny.global')} rules={globalCommandDeny} inherited />
+        {!selected && (
+          <McpCommandDenyEditor
+            title={t('commandDeny.global')}
+            rules={globalCommandDeny}
+            inherited
+          />
+        )}
         {selected && (
-          <fieldset disabled={disabled} className="min-w-0 space-y-3">
-            <McpCommandDenyEditor
-              title={t('commandDeny.profile')}
-              rules={selected.commandDeny ?? []}
-              disabled={disabled}
-              onChange={(commandDeny) => onGrant({ ...selected, commandDeny })}
-            />
+          <fieldset disabled={disabled} className="min-w-0 space-y-4">
             {stale && (
               <div className="space-y-2 rounded-md border border-destructive/30 bg-destructive/5 p-3">
                 <p className="text-xs leading-relaxed text-destructive">
@@ -259,53 +290,88 @@ export function McpSshAccessCard({
                       />
                       <span>
                         {t(`hostAccess.operations.${operation}`)}
-                        {group.risk ? ` — ${t('hostAccess.highRisk')}` : ''}
+                        {group.risk && (
+                          <>
+                            {' '}
+                            <span className="sr-only">{`— ${t('hostAccess.highRisk')}`}</span>
+                          </>
+                        )}
                       </span>
                     </label>
                   ))}
                 </div>
               </div>
             ))}
-            <div className="grid min-w-0 gap-3 md:grid-cols-2">
-              <label className="min-w-0 text-xs text-muted-foreground">
-                {t('hostAccess.remoteRoots')}
-                <textarea
-                  className="mt-1.5 block w-full rounded-md border border-input bg-background p-2 font-mono text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  name={`remote-roots-${profile.profileId}`}
-                  autoComplete="off"
-                  spellCheck={false}
-                  rows={2}
-                  value={selected.remoteRoots.join('\n')}
-                  onChange={(e) =>
-                    onGrant({ ...selected, remoteRoots: e.target.value.split('\n') })
-                  }
+            <section className="min-w-0 space-y-3 rounded-md border border-border p-3">
+              <h5 className="text-xs font-medium text-muted-foreground">
+                {t('hostAccess.scopeTitle')}
+              </h5>
+              {gaps.length > 0 && (
+                <ul
+                  role="status"
+                  className="space-y-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-700 dark:text-amber-300"
+                >
+                  {gaps.map((gap) => (
+                    <li key={gap}>{t(`hostAccess.gaps.${gap}`)}</li>
+                  ))}
+                </ul>
+              )}
+              <div className="grid min-w-0 gap-3 md:grid-cols-2">
+                <label className="min-w-0 text-xs text-muted-foreground">
+                  {t('hostAccess.remoteRoots')}
+                  <textarea
+                    className={textareaClass}
+                    name={`remote-roots-${profile.profileId}`}
+                    autoComplete="off"
+                    spellCheck={false}
+                    rows={2}
+                    placeholder="/srv/app"
+                    value={selected.remoteRoots.join('\n')}
+                    onChange={(e) =>
+                      onGrant({ ...selected, remoteRoots: e.target.value.split('\n') })
+                    }
+                  />
+                </label>
+                <label className="min-w-0 text-xs text-muted-foreground">
+                  {t('hostAccess.localRoots')}
+                  <textarea
+                    className={textareaClass}
+                    name={`local-roots-${profile.profileId}`}
+                    autoComplete="off"
+                    spellCheck={false}
+                    rows={2}
+                    placeholder="/Users/me/deploy"
+                    value={selected.localRoots.join('\n')}
+                    onChange={(e) =>
+                      onGrant({ ...selected, localRoots: e.target.value.split('\n') })
+                    }
+                  />
+                </label>
+              </div>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                {t('hostAccess.localWarning')}
+              </p>
+              <label className="flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
+                <input
+                  type="checkbox"
+                  className={`${hostCheckboxClass} mt-0.5`}
+                  checked={selected.posixJobs}
+                  onChange={(e) => onGrant({ ...selected, posixJobs: e.target.checked })}
                 />
+                {t('hostAccess.posixJobs')}
               </label>
-              <label className="min-w-0 text-xs text-muted-foreground">
-                {t('hostAccess.localRoots')}
-                <textarea
-                  className="mt-1.5 block w-full rounded-md border border-input bg-background p-2 font-mono text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  name={`local-roots-${profile.profileId}`}
-                  autoComplete="off"
-                  spellCheck={false}
-                  rows={2}
-                  value={selected.localRoots.join('\n')}
-                  onChange={(e) => onGrant({ ...selected, localRoots: e.target.value.split('\n') })}
-                />
-              </label>
-            </div>
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              {t('hostAccess.localWarning')}
-            </p>
-            <label className="flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
-              <input
-                type="checkbox"
-                className={`${hostCheckboxClass} mt-0.5`}
-                checked={selected.posixJobs}
-                onChange={(e) => onGrant({ ...selected, posixJobs: e.target.checked })}
-              />
-              {t('hostAccess.posixJobs')}
-            </label>
+            </section>
+            <McpCommandDenyEditor
+              title={t('commandDeny.global')}
+              rules={globalCommandDeny}
+              inherited
+            />
+            <McpCommandDenyEditor
+              title={t('commandDeny.profile')}
+              rules={selected.commandDeny ?? []}
+              disabled={disabled}
+              onChange={(commandDeny) => onGrant({ ...selected, commandDeny })}
+            />
           </fieldset>
         )}
         <div className="flex flex-wrap gap-2 border-t border-border pt-3">

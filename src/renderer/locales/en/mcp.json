@@ -401,6 +401,13 @@
       "job_status": "Query job status",
       "job_list": "List jobs",
       "job_cancel": "Cancel jobs"
+    },
+    "incompleteShort": "{{count}} setting(s) missing",
+    "scopeTitle": "Access scope (required for file operations and jobs)",
+    "gaps": {
+      "remoteRoots": "File operations (list/read/write/upload/download) are granted but no remote root is set, so every remote path is denied. Add an absolute directory such as /srv/app.",
+      "localRoots": "Upload/download are granted but no Se host local root is set, so transfers are denied. Add a directory on the Se host.",
+      "posixJobs": "Start job is granted but POSIX jobs are off, so job_start is denied. Enable \"Allow POSIX jobs\" below."
     }
   }
 }

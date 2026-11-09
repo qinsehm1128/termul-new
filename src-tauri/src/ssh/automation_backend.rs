@@ -664,12 +664,14 @@ fn remote_path(
         remote_no_links(sftp, root)?;
         let root = sftp.realpath(root).map_err(transport)?;
         if !sftp.stat(&root).map_err(transport)?.is_dir() {
-            return Err(AutomationError::denied());
+            return Err(AutomationError::denied_because(
+                "An authorized remote root is not a directory on the SSH target",
+            ));
         }
         allowed |= canonical.starts_with(root);
     }
     if !allowed {
-        return Err(AutomationError::denied());
+        return Err(super::automation::outside_remote_roots(&grant.remote_roots));
     }
     if create {
         let result = canonical.join(
@@ -719,12 +721,20 @@ fn local_path(value: &str, grant: &ProfileGrant, create: bool) -> AutomationResu
         let root = fs::canonicalize(root)
             .map_err(|_| error("local_io_error", "Local grant root could not be resolved"))?;
         if !root.is_dir() {
-            return Err(AutomationError::denied());
+            return Err(AutomationError::denied_because(
+                "An authorized Se host local root is not a directory",
+            ));
         }
         allowed |= canonical.starts_with(root);
     }
     if !allowed {
-        return Err(AutomationError::denied());
+        return Err(if grant.local_roots.is_empty() {
+            super::automation::no_local_roots()
+        } else {
+            AutomationError::denied_because(
+                "localPath is outside the authorized Se host local roots (see profile_get localRoots)",
+            )
+        });
     }
     if create {
         Ok(canonical.join(

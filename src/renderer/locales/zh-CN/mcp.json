@@ -401,6 +401,13 @@
       "job_status": "查询任务状态",
       "job_list": "列出任务",
       "job_cancel": "取消任务"
+    },
+    "incompleteShort": "缺 {{count}} 项设置",
+    "scopeTitle": "访问范围（文件操作与任务必填）",
+    "gaps": {
+      "remoteRoots": "已授权文件操作（列出/读取/写入/上传/下载），但未填写远端根目录，所有远端路径都会被拒绝。请填写绝对目录，例如 /srv/app。",
+      "localRoots": "已授权上传/下载，但未填写 Se 宿主本地根目录，传输会被拒绝。请填写 Se 宿主上的目录。",
+      "posixJobs": "已授权启动任务，但未开启 POSIX 任务，job_start 会被拒绝。请勾选下方“允许 POSIX 任务”。"
     }
   }
 }

@@ -403,6 +403,24 @@ describe('host access management', () => {
     expect(container.querySelector('input[type=password]')).toBeNull()
     expect(call).not.toHaveBeenCalled()
   })
+  it('warns when granted file operations or jobs would be denied by empty roots or POSIX off', async () => {
+    render(<McpHostAccessPanel />)
+    await ready()
+    fireEvent.click(check(en.hostAccess.grantProfile))
+    expect(screen.getByText(en.hostAccess.gaps.remoteRoots)).toBeInTheDocument()
+    expect(screen.getByText(en.hostAccess.gaps.localRoots)).toBeInTheDocument()
+    expect(screen.getByText(en.hostAccess.gaps.posixJobs)).toBeInTheDocument()
+    fireEvent.change(screen.getByRole('textbox', { name: en.hostAccess.remoteRoots }), {
+      target: { value: '/srv' }
+    })
+    fireEvent.change(screen.getByRole('textbox', { name: en.hostAccess.localRoots }), {
+      target: { value: '/host-data' }
+    })
+    fireEvent.click(check(en.hostAccess.posixJobs))
+    expect(screen.queryByText(en.hostAccess.gaps.remoteRoots)).toBeNull()
+    expect(screen.queryByText(en.hostAccess.gaps.localRoots)).toBeNull()
+    expect(screen.queryByText(en.hostAccess.gaps.posixJobs)).toBeNull()
+  })
   it('saves selected project IDs, individual SSH grants, roots, POSIX acknowledgement and fingerprints', async () => {
     render(<McpHostAccessPanel />)
     await ready()

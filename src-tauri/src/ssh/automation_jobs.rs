@@ -362,9 +362,11 @@ impl JobManager {
                         .as_ref()
                         .ok_or_else(AutomationError::backend)?
                         .authorize_command(&profile, "job_start", &request.command)?;
-                    if !grant.posix_jobs
-                        || grant.profile_fingerprint.as_deref()
-                            != Some(worker_job.profile_fingerprint.as_str())
+                    if !grant.posix_jobs {
+                        return Err(super::automation::posix_jobs_disabled());
+                    }
+                    if grant.profile_fingerprint.as_deref()
+                        != Some(worker_job.profile_fingerprint.as_str())
                         || worker_job.cancel.load(Ordering::Acquire)
                     {
                         return Err(AutomationError::denied());
