@@ -2,6 +2,7 @@
 mod acp;
 mod acp_binary_install;
 mod acp_registry_snapshot;
+pub mod agent_hooks;
 mod agent_registry;
 /// Runtime-neutral AI channel, credential, analysis, and Fx contracts.
 /// No provider I/O and no keyring access live in this skeleton.
@@ -32,6 +33,7 @@ mod keybinding_schemes;
 pub mod legacy_appdata;
 mod logging;
 mod macos_permissions;
+mod screen;
 /// Runtime-neutral contracts for the independent HTTP-first MCP Core.
 pub mod mcp_core;
 /// Cross-agent conversation memory index: normalizes Claude Code / Codex / pi
@@ -3031,6 +3033,14 @@ pub fn run() {
     let app = builder
         .setup(|app| {
             let handle = app.handle().clone();
+            if let Err(_) = agent_hooks::start() {
+                log::error!(target: "se_manager::agent_hooks", "operation=agent_hook_receiver kind=start_failed count=1");
+            }
+            let hook_handle = handle.clone();
+            agent_hooks::subscribe(Arc::new(move |event| {
+                use tauri::Emitter;
+                let _ = hook_handle.emit("agent-hook-event", event);
+            }));
 
             // Startup diagnostic banner (issue #244): version, OS/arch, build
             // channel, session id, and resolved log path on a single line.
@@ -4042,6 +4052,11 @@ pub fn run() {
             scheduled_tasks::commands::scheduled_task_list_audit,
             cli_session::commands::list_cli_sessions_cmd,
             cli_session::commands::resolve_cli_sessions_cmd,
+            agent_hooks::commands::agent_hooks_status,
+            agent_hooks::commands::agent_hooks_preview,
+            agent_hooks::commands::agent_hooks_install,
+            agent_hooks::commands::agent_hooks_uninstall,
+            agent_hooks::commands::agent_hook_events,
             cli_session::commands::detect_live_agent_sessions_cmd,
             memory_index::commands::memory_index_build_cmd,
             memory_index::commands::memory_index_status_cmd,
@@ -4055,6 +4070,15 @@ pub fn run() {
             commands::remote_access_intent_get,
             commands::remote_access_intent_set,
             commands::remote_server_rotate_credential,
+            web::devices_api::remote_devices_list,
+            web::devices_api::remote_pairing_code,
+            web::devices_api::remote_device_rename,
+            web::devices_api::remote_device_set_permissions,
+            web::devices_api::remote_device_grant_all,
+            web::devices_api::remote_device_disconnect,
+            web::devices_api::remote_device_revoke,
+            web::devices_api::remote_devices_disconnect_all,
+            web::devices_api::remote_devices_audit,
             remote::tunnel::commands::tunnel_config_get,
             remote::tunnel::commands::tunnel_config_set,
             remote::tunnel::commands::tunnel_ssh_config_hosts,
