@@ -245,7 +245,6 @@ struct WorkspaceHubView: View {
         switch tool.id {
         case ToolDestination.git.rawValue: String(localized: "Changes")
         case ToolDestination.scheduledTasks.rawValue: String(localized: "Scheduled")
-        case ToolDestination.quickTerminals.rawValue: String(localized: "Quick")
         case ToolDestination.search.rawValue: String(localized: "Search")
         case ToolDestination.screenText.rawValue: String(localized: "Screen")
         default: tool.title
@@ -324,7 +323,7 @@ struct WorkspaceHubView: View {
 
 // MARK: - Previews
 
-#Preview("Workspace · Night") {
+#Preview("工具 · Night") {
     WorkspaceHubView(
         host: "MacBook Pro",
         latency: "",
@@ -333,7 +332,6 @@ struct WorkspaceHubView: View {
         tools: [
             WorkspaceTool(id: "git", title: "Git", detail: "2 changed files", note: "Read only", systemImage: "point.3.connected.trianglepath.dotted", metricIsLoaded: true),
             WorkspaceTool(id: "scheduledTasks", title: "Scheduled tasks", detail: "4 tasks", note: "Host schedules", systemImage: "clock", metricIsLoaded: true),
-            WorkspaceTool(id: "quickTerminals", title: "Quick terminals", detail: "2 terminals", note: "Persistent host terminals", systemImage: "terminal", metricIsLoaded: true),
             WorkspaceTool(id: "search", title: "Search", detail: "Sessions & files", note: "Read only", systemImage: "magnifyingglass"),
             WorkspaceTool(id: "screenText", title: "Host screen text", detail: "Terminal snapshot", note: "Matching snapshot required", systemImage: "text.viewfinder")
         ],
@@ -345,7 +343,7 @@ struct WorkspaceHubView: View {
     .seThemeMode(.night)
 }
 
-#Preview("Workspace · Day") {
+#Preview("工具 · Day") {
     WorkspaceHubView(
         host: "MacBook Pro",
         latency: "",
