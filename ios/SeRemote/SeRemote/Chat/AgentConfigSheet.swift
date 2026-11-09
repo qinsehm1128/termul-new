@@ -76,11 +76,17 @@ struct AgentConfigSheet: View {
                 }
                 if !hasComposerControls {
                     Section {
-                        Text("Mode, model, and thinking come from the host agent after the session is live. If they stay empty, keep this chat open on the Mac once so the agent can advertise them, then pull to refresh.")
-                            .font(SeFont.support)
-                            .foregroundStyle(SeTheme.secondaryInk)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .listRowBackground(SeTheme.surface)
+                        HStack(spacing: 4) {
+                            Text("Options come from the host agent.")
+                                .font(SeFont.support)
+                                .foregroundStyle(SeTheme.secondaryInk)
+                            SeInfoTip(
+                                text: String(localized: "If they stay empty, keep this chat open on the Mac once so the agent can advertise them, then pull to refresh."),
+                                size: 24
+                            )
+                            Spacer(minLength: 0)
+                        }
+                        .listRowBackground(SeTheme.surface)
                     }
                 }
             }

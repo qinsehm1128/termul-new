@@ -135,7 +135,7 @@ struct ChatView: View {
                         SeEmptyState(
                             title: String(localized: "Continue the conversation"),
                             systemImage: "bubble.left.and.bubble.right",
-                            message: String(localized: "Pull to refresh desktop history. Your phone continues the same host session.")
+                            message: String(localized: "Pull to refresh desktop history.")
                         )
                         .frame(maxWidth: .infinity, minHeight: 180)
                     }
@@ -398,10 +398,13 @@ struct ChatView: View {
         VStack(alignment: .leading, spacing: 8) {
             quickRow
             composerBox
-            Text("Only text is sent. Running commands still needs your permission.")
-                .font(.system(size: 10))
-                .foregroundStyle(palette.inkTertiary)
-                .frame(maxWidth: .infinity)
+            HStack(spacing: 0) {
+                Spacer(minLength: 0)
+                SeInfoTip(
+                    text: String(localized: "Only text is sent. Running commands still needs your permission."),
+                    size: 22
+                )
+            }
         }
         .padding(.horizontal, 14)
         .padding(.top, 14)

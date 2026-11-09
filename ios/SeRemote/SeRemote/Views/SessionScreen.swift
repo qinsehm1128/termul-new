@@ -116,9 +116,9 @@ struct SessionScreen: View {
         return layout {
             Group {
                 if session.workspace == .project {
-                    SeEmptyState(title: String(localized: "Chat"),
+                    SeEmptyState(title: String(localized: "Terminals only"),
                                  systemImage: "bubble.left.and.bubble.right",
-                                 message: String(localized: "Project view is terminals only. Open a session to talk."))
+                                 message: String(localized: "Open an agent session to chat."))
                 } else {
                     SessionChatView(session: session)
                 }

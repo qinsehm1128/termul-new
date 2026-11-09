@@ -93,11 +93,11 @@ enum LivePresentation {
 
     private static func statusText(status: LiveSessionStatus, detail: String?) -> String {
         switch status {
-        case .needsYou: "等待你处理"
-        case .running: "运行中"
-        case .ready: detail ?? "空闲"
-        case .unknown: detail ?? "未知"
-        case .idle: "空闲"
+        case .needsYou: String(localized: "Waiting for you")
+        case .running: String(localized: "Running")
+        case .ready: detail ?? String(localized: "Idle")
+        case .unknown: detail ?? String(localized: "Unknown")
+        case .idle: String(localized: "Idle")
         }
     }
 
@@ -158,7 +158,7 @@ enum LivePresentation {
     /// The single line under a session title: agent · state · host.
     static func rowMeta(for item: LiveSession) -> String {
         var parts: [String] = []
-        parts.append(item.agent.isEmpty ? "Terminal" : item.agent)
+        parts.append(item.agent.isEmpty ? String(localized: "Terminal") : item.agent)
         parts.append(statusText(for: item))
         if !item.host.isEmpty { parts.append(item.host) }
         return parts.joined(separator: " · ")
@@ -167,11 +167,11 @@ enum LivePresentation {
     /// Host lifecycle labels are preserved; no approval state is invented.
     static func statusText(for item: LiveSession) -> String {
         switch item.status {
-        case .needsYou: "等待你处理"
-        case .running: "运行中"
-        case .ready: item.detailStatus ?? "空闲"
-        case .unknown: item.detailStatus ?? "未知"
-        case .idle: "空闲"
+        case .needsYou: String(localized: "Waiting for you")
+        case .running: String(localized: "Running")
+        case .ready: item.detailStatus ?? String(localized: "Idle")
+        case .unknown: item.detailStatus ?? String(localized: "Unknown")
+        case .idle: String(localized: "Idle")
         }
     }
 
@@ -182,7 +182,12 @@ enum LivePresentation {
             // `agent:<projectId>:<terminalId>:<sessionId>` — only the project
             // attribution is meaningful to the current workbench.
             let rest = id.dropFirst("agent:".count)
-            guard let projectId = rest.split(separator: ":", maxSplits: 1).first,
+            // Keep the empty component: `agent::<terminal>:<session>` has no
+            // project attribution, and dropping the empty field would promote
+            // the terminal id to a project.
+            guard let projectId = rest.split(
+                separator: ":", maxSplits: 1, omittingEmptySubsequences: false
+            ).first,
                   !projectId.isEmpty else { return nil }
             return .project(String(projectId))
         }

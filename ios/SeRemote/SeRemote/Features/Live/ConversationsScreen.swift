@@ -30,8 +30,6 @@ struct ConversationsScreen: View {
     @State private var showsNewConversation = false
     @State private var errorText: String?
 
-    private var hasNeeds: Bool { summary.total > 0 }
-
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
@@ -52,7 +50,7 @@ struct ConversationsScreen: View {
 
                 SeNeedStrip(permissions: summary.permissions, failures: summary.failures, onTap: onOpenNeeds)
 
-                SeGroupLabel(title: "会话", count: String(format: "%02d", conversations.count))
+                SeGroupLabel(title: String(localized: "Conversations"), count: String(format: "%02d", conversations.count))
                 if conversations.isEmpty {
                     emptyState
                 } else {
@@ -70,40 +68,36 @@ struct ConversationsScreen: View {
                         .padding(.top, 10)
                 }
 
-                Text("会话来自主机的 ACP 代理。终端和项目在「终端」与「工具」里。")
-                    .font(SeNocturneType.font(10))
-                    .foregroundStyle(palette.inkTertiary)
-                    .padding(.horizontal, 18)
-                    .padding(.top, 14)
-                    .padding(.bottom, 28)
+                Color.clear
+                    .frame(height: 28)
             }
         }
         .background(palette.canvas)
         .foregroundStyle(palette.ink)
-        .alert("重命名会话", isPresented: Binding(
+        .alert("Rename session", isPresented: Binding(
             get: { renaming != nil },
             set: { if !$0 { renaming = nil } }
         ), presenting: renaming) { conversation in
-            TextField("标题", text: $renameTitle)
-            Button("取消", role: .cancel) { renaming = nil }
-            Button("保存") {
+            TextField("Title", text: $renameTitle)
+            Button("Cancel", role: .cancel) { renaming = nil }
+            Button("Save") {
                 let title = renameTitle
                 renaming = nil
                 Task { await rename(conversation, title: title) }
             }
             .disabled(renameTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
-        .confirmationDialog("删除这个会话？", isPresented: Binding(
+        .confirmationDialog("Delete this session?", isPresented: Binding(
             get: { deleting != nil },
             set: { if !$0 { deleting = nil } }
         ), titleVisibility: .visible, presenting: deleting) { conversation in
-            Button("删除", role: .destructive) {
+            Button("Delete", role: .destructive) {
                 deleting = nil
                 Task { await delete(conversation) }
             }
-            Button("取消", role: .cancel) { deleting = nil }
+            Button("Cancel", role: .cancel) { deleting = nil }
         } message: { _ in
-            Text("主机保留仍被终端或代理引用的会话。")
+            Text("The host keeps sessions still referenced by a terminal or agent.")
         }
         .sheet(isPresented: $showsNewConversation) {
             NewConversationSheet(session: session) {
@@ -120,14 +114,14 @@ struct ConversationsScreen: View {
         VStack(alignment: .leading, spacing: 6) {
             SeEyebrow(text: "AGENT CHAT")
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                SeDisplayText(text: "会话")
+                SeDisplayText(text: String(localized: "Conversations"))
                 Spacer(minLength: 0)
                 Button {
                     showsNewConversation = true
                 } label: {
                     HStack(spacing: 5) {
                         SeIconView(icon: .plus, size: 11, stroke: 1.8, color: palette.accent)
-                        Text("新会话")
+                        Text("New session")
                             .font(SeNocturneType.font(10.5, mono: true))
                             .foregroundStyle(palette.accent)
                     }
@@ -141,17 +135,9 @@ struct ConversationsScreen: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(SePressable())
-                .accessibilityLabel("新会话")
+                .accessibilityLabel(String(localized: "New session"))
             }
-            Text(lede)
-                .font(SeNocturneType.font(11))
-                .foregroundStyle(palette.inkSecondary)
         }
-    }
-
-    private var lede: String {
-        let base = conversations.isEmpty ? "还没有会话" : "\(conversations.count) 个会话"
-        return hasNeeds ? "\(base) · \(summary.total) 个需要你" : base
     }
 
     private func row(_ entry: ConversationEntry) -> some View {
@@ -165,10 +151,12 @@ struct ConversationsScreen: View {
             onTap: { onOpenConversation(entry.conversation) }
         )
         .contextMenu {
-            Button("重命名", systemImage: "pencil") { beginRename(entry.conversation) }
-            Button("删除", systemImage: "trash", role: .destructive) { deleting = entry.conversation }
+            Button("Rename", systemImage: "pencil") { beginRename(entry.conversation) }
+            Button("Delete", systemImage: "trash", role: .destructive) { deleting = entry.conversation }
         }
-        .accessibilityHint(entry.agent.isEmpty ? entry.project : "\(entry.agent)，\(entry.project)")
+        .accessibilityHint(entry.agent.isEmpty
+            ? entry.project
+            : String(localized: "\(entry.agent), \(entry.project)"))
         .animation(reduceMotion ? nil : SeNocturneMotion.quick, value: entry.needsAttention)
     }
 
@@ -182,12 +170,9 @@ struct ConversationsScreen: View {
 
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("这台主机还没有代理会话。")
+            Text("This host has no agent sessions yet.")
                 .font(SeNocturneType.font(12, weight: .semibold))
                 .foregroundStyle(palette.ink)
-            Text("点「新会话」选一个项目开始，或到「终端」里启动代理。")
-                .font(SeNocturneType.font(10.5))
-                .foregroundStyle(palette.inkSecondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
@@ -233,13 +218,8 @@ private struct NewConversationSheet: View {
         NavigationStack {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("选一个项目目录开始新的代理会话。")
-                        .font(SeNocturneType.font(11))
-                        .foregroundStyle(palette.inkSecondary)
-                        .padding(.top, 6)
-
                     if projects.isEmpty {
-                        Text("主机还没有项目。先在「工具」里添加或打开一个项目。")
+                        Text("Add a project in Tools first.")
                             .font(SeNocturneType.font(11))
                             .foregroundStyle(palette.inkSecondary)
                             .padding(.vertical, 18)
@@ -250,7 +230,7 @@ private struct NewConversationSheet: View {
                             } label: {
                                 SeSessionRow(
                                     title: project.name,
-                                    meta: project.path ?? "项目",
+                                    meta: project.path ?? String(localized: "Project"),
                                     status: project.isRunning ? .live : .idle
                                 ) {
                                     start(in: project)
@@ -266,16 +246,16 @@ private struct NewConversationSheet: View {
                 .padding(.bottom, 24)
             }
             .background(palette.canvas)
-            .navigationTitle("新会话")
+            .navigationTitle(String(localized: "New session"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { onCancel() }
+                    Button("Cancel") { onCancel() }
                         .frame(minHeight: SeSpace.hitTarget)
                 }
             }
             .overlay {
-                if starting { ProgressView("正在开启代理会话…").padding(18) }
+                if starting { ProgressView("Starting agent session…").padding(18) }
             }
         }
     }

@@ -11,18 +11,18 @@ enum NeedsItemKind: String, CaseIterable, Sendable {
 
     var title: String {
         switch self {
-        case .permission: "许可"
-        case .question: "问题"
-        case .failure: "失败"
-        case .done: "完成"
-        case .running: "运行"
+        case .permission: String(localized: "Permission")
+        case .question: String(localized: "Question")
+        case .failure: String(localized: "Failure")
+        case .done: String(localized: "Done")
+        case .running: String(localized: "Running")
         }
     }
 
     var actionTitle: String {
         switch self {
-        case .permission, .question: "处理"
-        case .failure, .done, .running: "查看"
+        case .permission, .question: String(localized: "Handle")
+        case .failure, .done, .running: String(localized: "View")
         }
     }
 }
@@ -50,7 +50,7 @@ struct NeedsSheetView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SeSheetHeader(
-                title: "待你处理",
+                title: String(localized: "Needs you"),
                 subtitle: subtitle,
                 onClose: { dismiss() }
             )
@@ -65,10 +65,8 @@ struct NeedsSheetView: View {
                 }
                 .padding(.top, 12)
 
-                Text("处理后这一行会消失。没有待办时，这条带子直接隐藏。")
-                    .font(SeNocturneType.font(9.5))
-                    .foregroundStyle(palette.inkTertiary)
-                    .padding(.top, 12)
+                Color.clear
+                    .frame(height: 12)
             }
             .padding(.horizontal, 18)
             .padding(.bottom, 24)
@@ -83,10 +81,10 @@ struct NeedsSheetView: View {
         let failures = items.filter { $0.kind == .failure }.count
         let done = items.filter { $0.kind == .done }.count
         var parts: [String] = []
-        if permissions > 0 { parts.append("\(permissions) 个许可") }
-        if failures > 0 { parts.append("\(failures) 个失败") }
-        if done > 0 { parts.append("\(done) 个完成") }
-        return parts.isEmpty ? "没有待办" : parts.joined(separator: " · ")
+        if permissions > 0 { parts.append(String(localized: "\(permissions) permissions")) }
+        if failures > 0 { parts.append(String(localized: "\(failures) failures")) }
+        if done > 0 { parts.append(String(localized: "\(done) done")) }
+        return parts.isEmpty ? String(localized: "Nothing waiting") : parts.joined(separator: " · ")
     }
 
     private func row(_ item: NeedsItem) -> some View {

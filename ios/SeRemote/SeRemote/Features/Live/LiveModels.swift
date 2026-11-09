@@ -37,9 +37,9 @@ enum LiveFilter: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .all: "全部"
-        case .running: "运行中"
-        case .needsYou: "需要你"
+        case .all: String(localized: "All")
+        case .running: String(localized: "Running")
+        case .needsYou: String(localized: "Need you")
         }
     }
 }
