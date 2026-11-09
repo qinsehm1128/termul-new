@@ -1,19 +1,98 @@
 import SwiftUI
 
-/// Connected entry point for the Workspace destination (tools grid and
-/// projects). The shell (lane A) presents this; lane C owns its contents and
-/// binds `WorkspaceHubView` to the real stores.
-///
-/// Contract for the shell:
-/// - `onOpenSession` is called after a project was selected on `session`, so
-///   the shell can present the session workbench.
-/// - `onOpenCommand` opens the command palette.
+/// Real workspace adapter. The surrounding shell owns the two top-level destinations.
 struct WorkspaceHubScreen: View {
-    @Bindable var session: WorkspaceSession
-    var onOpenSession: () -> Void = {}
-    var onOpenCommand: () -> Void = {}
+    let session: WorkspaceSession
+    let onOpenSession: () -> Void
+    let onOpenCommand: () -> Void
+    var onToggleTheme: () -> Void = {}
+    var onOpenDrawer: () -> Void = {}
+    var onSelectHost: () -> Void = {}
+    var showsBottomBar = false
+
+    @Environment(ConnectionStore.self) private var connections
+    @Environment(\.sePalette) private var palette
+    @State private var path: [ToolDestination] = []
+    @State private var selectionTask: Task<Void, Never>?
+    @State private var selectingProject = false
+
+    private var snapshot: NocturneWorkspaceSnapshot {
+        let git = session.git
+        let gitReady = git.state == .loaded || git.state == .empty
+        let tasks = session.scheduledTasks
+        let tasksReady = (tasks.state == .loaded || tasks.state == .empty) && tasks.projectId == nil
+        let quick = session.quickTerminals
+        let quickReady = quick.state == .loaded || quick.state == .empty
+        return NocturneWorkspaceSnapshot(
+            gitCwd: gitReady ? git.cwd : nil,
+            gitBranch: gitReady ? git.context?.branch : nil,
+            gitChangedFileCount: gitReady ? Set(git.status.map(\.path)).count : nil,
+            scheduledTaskCount: tasksReady ? tasks.tasks.count : nil,
+            quickTerminalCount: quickReady ? quick.records.count : nil)
+    }
+
+    private var hostName: String {
+        if let link = connections.activeLink, link.originURL == session.origin { return link.title }
+        return session.origin.host() ?? String(localized: "Host")
+    }
 
     var body: some View {
-        ToolsView(session: session)
+        NavigationStack(path: $path) {
+            WorkspaceHubView(
+                host: hostName,
+                latency: "", // The host protocol does not report latency.
+                project: session.projects.active?.name ?? String(localized: "Workspace"),
+                branch: session.projects.active.map { NocturneWorkspacePresentation.project($0, snapshot: snapshot).branch } ?? "",
+                tools: ToolDestination.allCases.map { NocturneWorkspacePresentation.tool($0, snapshot: snapshot) },
+                projects: session.projects.projects.map { NocturneWorkspacePresentation.project($0, snapshot: snapshot) },
+                onOpenTool: { tool in
+                    if let destination = ToolDestination(rawValue: tool.id) { path.append(destination) }
+                },
+                onOpenProject: openProject,
+                onSelectHost: onSelectHost,
+                onOpenLive: onOpenSession,
+                onOpenCommand: onOpenCommand,
+                onOpenDrawer: onOpenDrawer,
+                onToggleTheme: onToggleTheme,
+                showsBottomBar: showsBottomBar
+            )
+            .disabled(selectingProject)
+            .overlay { if selectingProject { ProgressView().accessibilityLabel("Opening project") } }
+            .navigationDestination(for: ToolDestination.self) { destination in
+                WorkspaceToolDestinationView(session: session, destination: destination, onOpenFile: {
+                    path.removeAll()
+                    onOpenSession()
+                })
+            }
+            .toolbar(.hidden, for: .navigationBar)
+            .task {
+                // These stores retain their own results and cancel stale requests.
+                await session.projects.refresh()
+                guard !Task.isCancelled else { return }
+                if let cwd = session.workspaceRoot { await session.git.refresh(cwd: cwd) }
+                guard !Task.isCancelled else { return }
+                await session.scheduledTasks.refresh()
+                guard !Task.isCancelled else { return }
+                await session.quickTerminals.refresh()
+            }
+            .onDisappear {
+                selectionTask?.cancel()
+                selectionTask = nil
+                selectingProject = false
+            }
+        }
+        .tint(palette.ink)
+    }
+
+    private func openProject(_ row: WorkspaceProject) {
+        guard !selectingProject,
+              let project = session.projects.projects.first(where: { $0.id == row.id }) else { return }
+        selectingProject = true
+        selectionTask = Task { @MainActor in
+            defer { selectingProject = false; selectionTask = nil }
+            await session.selectProject(project)
+            guard !Task.isCancelled else { return }
+            onOpenSession()
+        }
     }
 }

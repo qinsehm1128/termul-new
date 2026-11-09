@@ -2,6 +2,7 @@ import SwiftUI
 
 /// Read/manage existing host tasks. Creation and editing stay on the host.
 struct ScheduledTasksFeatureView: View {
+    @Environment(\.sePalette) private var p
     let session: WorkspaceSession
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.dynamicTypeSize) private var dynamicType
@@ -23,19 +24,22 @@ struct ScheduledTasksFeatureView: View {
                         ScheduledTaskDetailScreen(session: session, taskId: selectedId)
                             .id(selectedId)
                     } else {
-                        SeEmptyState(title: String(localized: "Select a task"), systemImage: "clock",
+                        ToolNocturneEmptyState(title: String(localized: "Select a task"), systemImage: "clock",
                             message: String(localized: "Inspect its prompt, policy and run history."))
                             .frame(maxWidth: .infinity)
                     }
                 }
             }
         }
-        .background(SeTheme.canvas)
+        .background(p.canvas)
+        .tint(p.accent)
+        .toolNocturneFont(.body)
+        .foregroundStyle(p.ink)
         .navigationTitle("Scheduled tasks")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button { Task { await refresh() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
-                    .frame(minHeight: SeSpace.hitTarget)
+                    .frame(minHeight: 44)
                     .disabled(store.state == .loading || store.actionState == .loading)
             }
         }
@@ -44,16 +48,16 @@ struct ScheduledTasksFeatureView: View {
 
     private func taskList(wide: Bool) -> some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: SeSpace.md) {
-                SeSectionHeader(title: String(localized: "Scheduled tasks"), detail: "\(store.tasks.count)")
+            LazyVStack(alignment: .leading, spacing: 16) {
+                ToolNocturneSectionHeader(title: String(localized: "Scheduled tasks"), detail: "\(store.tasks.count)")
                 switch store.state {
                 case .idle, .loading:
-                    ProgressView("Loading tasks…").frame(maxWidth: .infinity, minHeight: SeSpace.hitTarget)
+                    ToolNocturneProgress(String(localized: "Loading tasks…")).frame(maxWidth: .infinity, minHeight: 44)
                 case .empty:
-                    SeEmptyState(title: String(localized: "No scheduled tasks"), systemImage: "clock",
+                    ToolNocturneEmptyState(title: String(localized: "No scheduled tasks"), systemImage: "clock",
                         message: String(localized: "Tasks created on the host will appear here."))
                 case .failed(let message):
-                    SeErrorBanner(message: message) { Task { await refresh() } }
+                    ToolNocturneErrorBanner(message: message) { Task { await refresh() } }
                 case .loaded: EmptyView()
                 }
                 ForEach(store.tasks) { task in
@@ -68,7 +72,7 @@ struct ScheduledTasksFeatureView: View {
                             .buttonStyle(.plain)
                     }
                 }
-            }.padding(SeSpace.screenInset)
+            }.padding(20)
         }
         .refreshable { await refresh() }
     }
@@ -77,19 +81,20 @@ struct ScheduledTasksFeatureView: View {
 }
 
 private struct ScheduledTaskRow: View {
+    @Environment(\.sePalette) private var p
     let task: ScheduledTaskWire
 
     var body: some View {
-        SeCard {
-            VStack(alignment: .leading, spacing: SeSpace.sm) {
-                Text(task.name).font(SeFont.rowTitle).foregroundStyle(SeTheme.ink)
+        ToolNocturneCard {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(task.name).toolNocturneFont(.rowTitle).foregroundStyle(p.ink)
                 ScheduledTaskStatusLabel(taskStatus: task.status)
                 Text(ScheduledTaskScheduleFormatter.summary(task.schedule))
-                    .font(SeFont.support).foregroundStyle(SeTheme.secondaryInk)
+                    .toolNocturneFont(.support).foregroundStyle(p.inkSecondary)
                 Text("Next run: \(ScheduledTaskScheduleFormatter.timestamp(task.nextRunAt))")
-                    .font(SeFont.timing).foregroundStyle(SeTheme.secondaryInk)
+                    .toolNocturneFont(.timing).foregroundStyle(p.inkSecondary)
             }
-            .frame(maxWidth: .infinity, minHeight: SeSpace.hitTarget, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
         }
         .accessibilityElement(children: .combine)
     }
@@ -97,6 +102,7 @@ private struct ScheduledTaskRow: View {
 
 /// Keeps exact wire status text (including future values) instead of calling an active task “Online”.
 struct ScheduledTaskStatusLabel: View {
+    @Environment(\.sePalette) private var p
     let title: String
     let status: SeStatus
 
@@ -122,10 +128,6 @@ struct ScheduledTaskStatusLabel: View {
     }
 
     var body: some View {
-        Label(title, systemImage: status.symbol)
-            .font(SeFont.label).foregroundStyle(status.foreground)
-            .padding(.horizontal, SeSpace.sm).padding(.vertical, SeSpace.xs)
-            .background(status.background, in: Capsule())
-            .accessibilityLabel(title)
+        ToolNocturneStatusBadge(status: status, title: title)
     }
 }

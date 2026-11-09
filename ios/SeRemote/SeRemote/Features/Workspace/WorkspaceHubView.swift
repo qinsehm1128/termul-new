@@ -16,6 +16,7 @@ struct WorkspaceProject: Identifiable, Equatable, Sendable {
     let branch: String
     let detail: String
     let hasChanges: Bool
+    var path: String = ""
 }
 
 enum WorkspaceSection: String, CaseIterable, Identifiable {
@@ -55,7 +56,9 @@ struct WorkspaceHubView: View {
     var onOpenCommand: () -> Void = {}
     var onOpenDrawer: () -> Void = {}
     var onToggleTheme: () -> Void = {}
+    var showsBottomBar = true
 
+    @Environment(\.dynamicTypeSize) private var dynamicType
     @State private var section: WorkspaceSection = .tools
 
     var body: some View {
@@ -71,6 +74,8 @@ struct WorkspaceHubView: View {
                 case .tools:
                     toolGrid
                         .padding(.top, SeSpace.lg)
+                    projectList
+                        .padding(.top, SeSpace.lg)
                 case .projects:
                     projectList
                         .padding(.top, SeSpace.md)
@@ -82,7 +87,7 @@ struct WorkspaceHubView: View {
         .scrollIndicators(.hidden)
         .background(palette.canvas.ignoresSafeArea())
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            bottomBar
+            if showsBottomBar { bottomBar }
         }
     }
 
@@ -98,7 +103,7 @@ struct WorkspaceHubView: View {
                         .foregroundStyle(palette.inkTertiary)
                 }
                 .padding(.horizontal, 10)
-                .frame(height: 30)
+                .frame(minHeight: 44)
                 .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
                 .overlay {
                     RoundedRectangle(cornerRadius: SeNocturneRadius.control)
@@ -107,9 +112,11 @@ struct WorkspaceHubView: View {
             }
             .buttonStyle(.plain)
 
-            Text(verbatim: latency)
-                .font(SeNocturneType.monoSmall)
-                .foregroundStyle(palette.inkTertiary)
+            if !latency.isEmpty {
+                Text(verbatim: latency)
+                    .font(SeNocturneType.monoSmall)
+                    .foregroundStyle(palette.inkTertiary)
+            }
 
             Spacer(minLength: 8)
 
@@ -131,7 +138,7 @@ struct WorkspaceHubView: View {
             Text("Workspace")
                 .font(SeNocturneType.screenTitle)
                 .foregroundStyle(palette.ink)
-            Text(verbatim: "\(project) · \(branch)")
+            Text(verbatim: NocturneWorkspacePresentation.rowText(branch: project, detail: branch))
                 .font(SeNocturneType.secondary)
                 .foregroundStyle(palette.inkTertiary)
         }
@@ -150,7 +157,7 @@ struct WorkspaceHubView: View {
                         .font(SeNocturneType.font(SeNocturneType.secondarySize, weight: isOn ? .medium : .regular))
                         .foregroundStyle(isOn ? palette.onAccent : palette.inkSecondary)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 30)
+                        .frame(minHeight: 44)
                         .background(
                             isOn ? palette.ink : .clear,
                             in: RoundedRectangle(cornerRadius: SeNocturneRadius.control)
@@ -169,7 +176,7 @@ struct WorkspaceHubView: View {
 
     private var toolGrid: some View {
         LazyVGrid(
-            columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)],
+            columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: dynamicType.isAccessibilitySize ? 1 : 2),
             spacing: 8
         ) {
             ForEach(tools) { tool in
@@ -189,19 +196,20 @@ struct WorkspaceHubView: View {
                         Text(verbatim: tool.detail)
                             .font(SeNocturneType.font(SeNocturneType.sectionTitleSize, weight: .semibold))
                             .foregroundStyle(palette.ink)
-                            .lineLimit(1)
+                            .fixedSize(horizontal: false, vertical: true)
                             .padding(.top, 18)
                         Text(verbatim: tool.note)
                             .font(SeNocturneType.monoSmall)
                             .foregroundStyle(palette.inkTertiary)
-                            .lineLimit(1)
+                            .fixedSize(horizontal: false, vertical: true)
                             .padding(.top, 3)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(minHeight: 44)
                     .padding(12)
-                    .background(palette.card, in: RoundedRectangle(cornerRadius: 14))
+                    .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.card))
                     .overlay {
-                        RoundedRectangle(cornerRadius: 14)
+                        RoundedRectangle(cornerRadius: SeNocturneRadius.card)
                             .strokeBorder(palette.stroke, lineWidth: 1)
                     }
                 }
@@ -211,7 +219,12 @@ struct WorkspaceHubView: View {
     }
 
     private var projectList: some View {
-        VStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Projects").font(SeNocturneType.secondary).foregroundStyle(palette.inkTertiary)
+            if projects.isEmpty {
+                Text("No projects available").font(SeNocturneType.secondary).foregroundStyle(palette.inkSecondary)
+                    .padding(.vertical, SeSpace.md)
+            }
             ForEach(projects) { project in
                 Button {
                     onOpenProject(project)
@@ -224,7 +237,13 @@ struct WorkspaceHubView: View {
                             Text(verbatim: project.name)
                                 .font(SeNocturneType.rowTitle)
                                 .foregroundStyle(palette.ink)
-                            Text(verbatim: "\(project.branch) · \(project.detail)")
+                            if !project.path.isEmpty {
+                                Text(verbatim: project.path)
+                                    .font(SeNocturneType.monoSmall)
+                                    .foregroundStyle(palette.inkSecondary)
+                                    .lineLimit(2)
+                            }
+                            Text(verbatim: NocturneWorkspacePresentation.rowText(branch: project.branch, detail: project.detail))
                                 .font(SeNocturneType.monoSmall)
                                 .foregroundStyle(palette.inkTertiary)
                         }
@@ -233,6 +252,7 @@ struct WorkspaceHubView: View {
                             .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(palette.inkTertiary)
                     }
+                    .frame(minHeight: 44)
                     .padding(12)
                     .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.card))
                     .overlay {
@@ -302,7 +322,7 @@ struct WorkspaceHubView: View {
             Image(systemName: systemImage)
                 .font(.system(size: 14, weight: .regular))
                 .foregroundStyle(palette.inkSecondary)
-                .frame(width: 34, height: 34)
+                .frame(width: 44, height: 44)
                 .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.control))
                 .overlay {
                     RoundedRectangle(cornerRadius: SeNocturneRadius.control)

@@ -3,6 +3,7 @@ import UIKit
 
 /// Host quick terminals have their own PTY scope, independent of this session.
 struct QuickTerminalsFeatureView: View {
+    @Environment(\.sePalette) private var p
     var session: WorkspaceSession
     @State private var busy = false
     @State private var errorMessage: String?
@@ -35,48 +36,48 @@ struct QuickTerminalsFeatureView: View {
         List {
             Section {
                 Label(session.origin.host() ?? String(localized: "Connected host"), systemImage: "server.rack")
-                    .font(SeFont.support).foregroundStyle(SeTheme.secondaryInk)
+                    .toolNocturneFont(.support).foregroundStyle(p.inkSecondary)
                 Text("Quick terminals run on the host. They are separate from this workspace's terminal tabs.")
-                    .font(SeFont.support).foregroundStyle(SeTheme.secondaryInk)
+                    .toolNocturneFont(.support).foregroundStyle(p.inkSecondary)
                 Button("New quick terminal", systemImage: "plus") {
                     draftTitle = ""
                     useProject = false
                     showingCreate = true
                 }
-                .frame(minHeight: SeSpace.hitTarget).disabled(busy)
+                .frame(minHeight: 44).disabled(busy)
             }
-            if busy { ProgressView("Waiting for host…").accessibilityLabel("Waiting for host") }
+            if busy { ToolNocturneProgress(String(localized: "Waiting for host…")).accessibilityLabel("Waiting for host") }
             if let error = displayedError {
                 Section {
                     Label(error, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(SeTheme.danger).font(SeFont.support)
+                        .foregroundStyle(p.danger).toolNocturneFont(.support)
                 }
             }
             if let notice {
                 Section {
-                    Label(notice, systemImage: "checkmark.circle").font(SeFont.support)
+                    Label(notice, systemImage: "checkmark.circle").toolNocturneFont(.support)
                 }
             }
             if let openedTerminalId {
                 Section("Host terminal") {
                     Text("The host returned this terminal ID. It is not attached here: quick terminals use a separate host scope, which this workspace cannot safely retain. Use the host to interact with it, or close it below.")
-                        .font(SeFont.support)
-                    Text(openedTerminalId).font(.system(.subheadline, design: .monospaced))
+                        .toolNocturneFont(.support)
+                    Text(openedTerminalId).toolNocturneFont(.code)
                         .textSelection(.enabled)
                     Button("Copy terminal ID", systemImage: "doc.on.doc") {
                         UIPasteboard.general.string = openedTerminalId
                         self.notice = String(localized: "Terminal ID copied.")
                         successTick += 1
                     }
-                    .frame(minHeight: SeSpace.hitTarget)
+                    .frame(minHeight: 44)
                 }
             }
             Section("Quick terminals") {
                 if session.quickTerminals.records.isEmpty {
                     if case .loading = session.quickTerminals.state {
-                        ProgressView("Loading quick terminals…")
+                        ToolNocturneProgress(String(localized: "Loading quick terminals…"))
                     } else {
-                        SeEmptyState(title: String(localized: "No quick terminals"), systemImage: "terminal",
+                        ToolNocturneEmptyState(title: String(localized: "No quick terminals"), systemImage: "terminal",
                             message: String(localized: "Create a persistent host shortcut in a workspace folder or the active project root."))
                     }
                 } else {
@@ -86,15 +87,17 @@ struct QuickTerminalsFeatureView: View {
                 }
             }
         }
+        .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
-        .background(SeTheme.canvas)
-        .foregroundStyle(SeTheme.ink)
-        .tint(SeTheme.accent)
+        .background(p.canvas)
+        .foregroundStyle(p.ink)
+        .toolNocturneFont(.body)
+        .tint(p.accent)
         .navigationTitle("Quick terminals")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Refresh", systemImage: "arrow.clockwise") { Task { await refresh() } }
-                    .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget).disabled(busy)
+                    .frame(minWidth: 44, minHeight: 44).disabled(busy)
             }
         }
         .refreshable { await refresh() }
@@ -137,23 +140,25 @@ struct QuickTerminalsFeatureView: View {
     }
 
     private func recordRow(_ record: QuickTerminalRecordWire) -> some View {
-        VStack(alignment: .leading, spacing: SeSpace.sm) {
-            Text(QuickTerminalPresentation.title(record)).font(SeFont.rowTitle)
+        VStack(alignment: .leading, spacing: 12) {
+            Text(QuickTerminalPresentation.title(record)).toolNocturneFont(.rowTitle)
             Label(QuickTerminalPresentation.targetLabel(record.target), systemImage: "folder")
-                .font(SeFont.label).foregroundStyle(SeTheme.secondaryInk)
+                .toolNocturneFont(.label).foregroundStyle(p.inkSecondary)
             if let detail = QuickTerminalPresentation.targetDetail(record.target) {
-                Text(detail).font(SeFont.support).foregroundStyle(SeTheme.secondaryInk).textSelection(.enabled)
+                Text(detail).toolNocturneFont(.support).foregroundStyle(p.inkSecondary).textSelection(.enabled)
             }
-            Text(record.cwd).font(.system(.subheadline, design: .monospaced)).textSelection(.enabled)
+            Text(record.cwd).toolNocturneFont(.code).textSelection(.enabled)
             let count = QuickTerminalPresentation.liveTerminalIds(record).count
             Label("\(count) live terminals", systemImage: "terminal")
-                .font(SeFont.label).foregroundStyle(SeTheme.secondaryInk)
+                .toolNocturneFont(.label).foregroundStyle(p.inkSecondary)
             Button("Open on host", systemImage: "play") { Task { await open(record, createNew: false) } }
-                .frame(minHeight: SeSpace.hitTarget)
+                .frame(minHeight: 44)
+                .buttonStyle(ToolNocturneButtonStyle(primary: true))
             Button("Create another terminal", systemImage: "plus.rectangle.on.rectangle") {
                 Task { await open(record, createNew: true) }
             }
-            .frame(minHeight: SeSpace.hitTarget)
+            .frame(minHeight: 44)
+            .buttonStyle(ToolNocturneButtonStyle())
             Menu {
                 Button("Rename", systemImage: "pencil") {
                     renameTitle = record.title ?? ""
@@ -166,39 +171,43 @@ struct QuickTerminalsFeatureView: View {
                     confirming = PendingDestruction(record: record, deleting: true)
                 }
             } label: {
-                Label("Manage quick terminal", systemImage: "ellipsis.circle").frame(minHeight: SeSpace.hitTarget)
+                Label("Manage quick terminal", systemImage: "ellipsis.circle").frame(minHeight: 44)
             }
         }
-        .padding(.vertical, SeSpace.sm)
+        .padding(.vertical, 12)
         .buttonStyle(.borderless)
         .disabled(busy)
-        .listRowBackground(SeTheme.surface)
+        .listRowBackground(p.card)
     }
 
     private var creationSheet: some View {
         NavigationStack {
             Form {
                 Section("Shortcut") {
-                    TextField("Title (optional)", text: $draftTitle).frame(minHeight: SeSpace.hitTarget)
+                    TextField("Title (optional)", text: $draftTitle).frame(minHeight: 44)
                     Picker("Target", selection: $useProject) {
                         Text("Host workspace").tag(false)
                         if creationTargets.count > 1 { Text("Active project root").tag(true) }
-                    }.frame(minHeight: SeSpace.hitTarget)
+                    }.frame(minHeight: 44)
                     if useProject, let project = session.projects.active, session.workspace == .project {
-                        Text(project.name).font(SeFont.rowTitle)
-                        if let path = project.path { Text(path).font(SeFont.support).textSelection(.enabled) }
+                        Text(project.name).toolNocturneFont(.rowTitle)
+                        if let path = project.path { Text(path).toolNocturneFont(.support).textSelection(.enabled) }
                     } else {
                         Text("The host creates a dedicated workspace folder. Creating a shortcut does not start a shell.")
-                            .font(SeFont.support).foregroundStyle(SeTheme.secondaryInk)
+                            .toolNocturneFont(.support).foregroundStyle(p.inkSecondary)
                     }
                     Text("Remote worktree creation is not available.")
-                        .font(SeFont.support).foregroundStyle(SeTheme.secondaryInk)
+                        .toolNocturneFont(.support).foregroundStyle(p.inkSecondary)
                 }
                 if let errorMessage {
-                    Label(errorMessage, systemImage: "exclamationmark.triangle").foregroundStyle(SeTheme.danger)
+                    Label(errorMessage, systemImage: "exclamationmark.triangle").foregroundStyle(p.danger)
                 }
-                if busy { ProgressView("Creating on host…") }
+                if busy { ToolNocturneProgress(String(localized: "Creating on host…")) }
             }
+            .scrollContentBackground(.hidden)
+            .background(p.canvas)
+            .foregroundStyle(p.ink)
+            .toolNocturneFont(.body)
             .navigationTitle("New quick terminal")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -211,7 +220,7 @@ struct QuickTerminalsFeatureView: View {
             .disabled(busy)
             .interactiveDismissDisabled(busy)
         }
-        .tint(SeTheme.accent)
+        .tint(p.accent)
     }
 
     @MainActor private func refresh() async {
