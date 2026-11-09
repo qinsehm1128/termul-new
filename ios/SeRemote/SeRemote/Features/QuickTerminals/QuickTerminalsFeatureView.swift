@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Quick terminals: create, open, rename, close and delete real host shortcuts.
-/// The store never attaches a host PTY here; it returns the claim the terminal
-/// flow can use, and this screen says so instead of pretending it is attached.
+/// Opening one attaches its existing host PTY in a full-screen console; the
+/// claim `open` returns is what the host's `attach` operation authorizes.
 struct QuickTerminalsFeatureView: View {
     @Environment(\.sePalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -20,6 +20,7 @@ struct QuickTerminalsFeatureView: View {
     @State private var errorMessage: String?
     @State private var notice: String?
     @State private var openedTerminalId: String?
+    @State private var console: QuickTerminalConsoleRequest?
 
     private var store: QuickTerminalStore { session.quickTerminals }
 
@@ -33,6 +34,17 @@ struct QuickTerminalsFeatureView: View {
                 .task { await refreshIfNeeded() }
         }
         .sheet(isPresented: $showingCreate) { createSheet }
+        .fullScreenCover(item: $console, onDismiss: {
+            // The shell stays alive after detach; refresh the host's live list.
+            Task { await store.refresh() }
+        }) { request in
+            QuickTerminalConsoleView(
+                session: session,
+                opened: request.opened,
+                title: request.title,
+                onClose: { console = nil }
+            )
+        }
         .alert(String(localized: "Rename quick terminal"), isPresented: renameBinding) {
             TextField(String(localized: "Title"), text: $renameTitle)
             Button(String(localized: "Cancel"), role: .cancel) { renaming = nil }
@@ -401,9 +413,12 @@ struct QuickTerminalsFeatureView: View {
         do {
             let result = try await store.open(id: record.id, cols: 80, rows: 24)
             openedTerminalId = result.terminalId
-            notice = result.spawned
-                ? String(localized: "A terminal was started on the host; it is not attached here.")
-                : String(localized: "An existing host terminal was found; it is not attached here.")
+            // The PTY already exists (spawned here or reused); the console
+            // attaches it and detaches on close without killing it.
+            console = QuickTerminalConsoleRequest(
+                opened: result,
+                title: QuickTerminalPresentation.title(record)
+            )
         } catch {
             errorMessage = error.localizedDescription
         }

@@ -67,6 +67,14 @@ final class TerminalStore {
     private var lastConversationId: String?
     private var lastProjectId: String?
 
+    /// Standalone viewers (quick terminals) keyed by PTY id. Held weakly so a
+    /// dismissed console cannot keep routing bytes into a dead canvas.
+    @ObservationIgnored private var viewers: [String: TerminalViewerBox] = [:]
+    /// Claims this device holds for standalone PTYs. The host mints a claim
+    /// only when it spawns the shell, so a later open that reuses it returns
+    /// none; remembering it keeps reopen working for this app run.
+    @ObservationIgnored private var standaloneClaims: [String: String] = [:]
+
     /// Side channel for a local notification when a watched PTY exits.
     var onTerminalExit: ((String) -> Void)?
 
@@ -108,6 +116,10 @@ final class TerminalStore {
             self.onTerminalExit?(terminalId)
             self.terminals.removeAll { $0.id == terminalId }
             self.pendingOutput.removeValue(forKey: terminalId)
+            self.standaloneClaims.removeValue(forKey: terminalId)
+            if let viewer = self.viewers[terminalId]?.viewer {
+                viewer.markExited()
+            }
             if self.watchedId == terminalId {
                 self.watchedId = nil
             }
@@ -126,6 +138,65 @@ final class TerminalStore {
         }
         if socket.isConnected { return }
         try await socket.connect(origin: origin, credentials: credentials)
+    }
+
+    /// Attach an already-running host PTY (a quick terminal) as a standalone
+    /// viewer. No spawn, no catalog entry, no active tab, and no change to the
+    /// workbench geometry lease: closing the console only detaches.
+    func attachViewer(
+        terminalId: String,
+        claim: String?,
+        title: String,
+        cols: Int,
+        rows: Int
+    ) async throws -> TerminalPTYViewer {
+        try await ensureConnected()
+        guard let socket else {
+            throw HostError.network(String(localized: "Disconnected from the host."))
+        }
+        if let existing = viewers[terminalId]?.viewer, !existing.isClosed {
+            return existing
+        }
+        let viewer = TerminalPTYViewer(
+            terminalId: terminalId,
+            title: title,
+            socket: socket,
+            cols: cols,
+            rows: rows
+        )
+        let box = TerminalViewerBox(viewer: viewer)
+        viewers[terminalId] = box
+        let resolved = claim ?? standaloneClaims[terminalId]
+        do {
+            try await viewer.attach(claim: resolved)
+        } catch {
+            if viewers[terminalId] === box {
+                viewers.removeValue(forKey: terminalId)
+            }
+            throw error
+        }
+        if let resolved {
+            rememberClaim(resolved, for: terminalId)
+        }
+        return viewer
+    }
+
+    /// Drop the viewer's routing and view lease. The host PTY is not killed.
+    func releaseViewer(_ viewer: TerminalPTYViewer) async {
+        let terminalId = viewer.terminalId
+        await viewer.close()
+        if viewers[terminalId]?.viewer === viewer {
+            viewers.removeValue(forKey: terminalId)
+        }
+    }
+
+    /// Claims are one-per-spawn. Keeping the ones this device received lets a
+    /// later open that reuses the same live PTY attach instead of stranding it.
+    private func rememberClaim(_ claim: String, for terminalId: String) {
+        standaloneClaims[terminalId] = claim
+        while standaloneClaims.count > 16, let oldest = standaloneClaims.keys.first {
+            standaloneClaims.removeValue(forKey: oldest)
+        }
     }
 
     func refresh(conversationId: String?, projectId: String?) async {
@@ -429,6 +500,15 @@ final class TerminalStore {
         if let existing = terminals.firstIndex(where: { $0.id == terminalId }) {
             terminals[existing].lastSeq += 1
         }
+        // A standalone viewer (quick terminal) owns this PTY's bytes, so the
+        // workbench's single `onFeed` never has to know it exists.
+        if let box = viewers[terminalId] {
+            if let viewer = box.viewer {
+                viewer.receive(data)
+                return
+            }
+            viewers.removeValue(forKey: terminalId)
+        }
         if let onFeed {
             onFeed(terminalId, data)
         } else {
@@ -452,5 +532,16 @@ final class TerminalStore {
             return String(name)
         }
         return String(localized: "Terminal")
+    }
+}
+
+/// Weak slot for a standalone PTY viewer so a dismissed console cannot keep
+/// receiving host bytes.
+@MainActor
+private final class TerminalViewerBox {
+    weak var viewer: TerminalPTYViewer?
+
+    init(viewer: TerminalPTYViewer) {
+        self.viewer = viewer
     }
 }

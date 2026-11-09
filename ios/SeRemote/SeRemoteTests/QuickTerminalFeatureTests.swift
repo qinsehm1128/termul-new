@@ -103,6 +103,34 @@ struct QuickTerminalFeatureTests {
         }
     }
 
+    @Test("Standalone console presents only a real claim and explains a missing one")
+    func consoleAttachMapping() throws {
+        let spawned = try decode(QuickTerminalOpenedWire.self, """
+        {"record":\(Self.recordJSON),"terminalId":"pty-2","claim":"one-use-claim","spawned":true}
+        """)
+        #expect(QuickTerminalPresentation.attachClaim(spawned) == "one-use-claim")
+        #expect(QuickTerminalPresentation.consoleUnattachableNotice(spawned) == nil)
+        let failure = NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "attach failed"])
+        #expect(QuickTerminalPresentation.consoleFailureMessage(spawned, error: failure) == "attach failed")
+
+        let padded = try decode(QuickTerminalOpenedWire.self, """
+        {"record":\(Self.recordJSON),"terminalId":"pty-2","claim":"  spaced-claim  ","spawned":true}
+        """)
+        #expect(QuickTerminalPresentation.attachClaim(padded) == "spaced-claim")
+        #expect(QuickTerminalPresentation.consoleUnattachableNotice(padded) == nil)
+
+        for extra in [", \"claim\":null", ", \"claim\":\"  \"", ", \"claim\":\"\"", ""] {
+            let reused = try decode(QuickTerminalOpenedWire.self, """
+            {"record":\(Self.recordJSON),"terminalId":"pty-1","spawned":false\(extra)}
+            """)
+            #expect(QuickTerminalPresentation.attachClaim(reused) == nil)
+            let notice = try #require(QuickTerminalPresentation.consoleUnattachableNotice(reused))
+            #expect(!notice.isEmpty)
+            // A missing claim is the real cause, so it wins over transport noise.
+            #expect(QuickTerminalPresentation.consoleFailureMessage(reused, error: failure) == notice)
+        }
+    }
+
     @Test("Create request exact keys with and without title")
     func createRequest() throws {
         let minimal = try assertKeys(CreateQuickTerminalBody(target: .workspace), ["target"])

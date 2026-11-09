@@ -40,4 +40,26 @@ nonisolated enum QuickTerminalPresentation {
         return (record.terminalIds + [record.terminalId].compactMap { $0 })
             .filter { !$0.isEmpty && seen.insert($0).inserted }
     }
+
+    /// The claim the standalone console may present to the host's `attach` op.
+    ///
+    /// `open` mirrors the spawn claim once and never reissues it for a reused
+    /// PTY; whitespace-only is absence, not a claim.
+    static func attachClaim(_ opened: QuickTerminalOpenedWire) -> String? {
+        let claim = opened.claim?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return claim.isEmpty ? nil : claim
+    }
+
+    /// Copy for a shell that exists but cannot be attached from this device
+    /// because the host minted no claim for it. `nil` when attach can proceed.
+    static func consoleUnattachableNotice(_ opened: QuickTerminalOpenedWire) -> String? {
+        guard attachClaim(opened) == nil else { return nil }
+        return String(localized: "This shell is already running on the host, but this device holds no claim for it, so it cannot be attached. The shell keeps running.")
+    }
+
+    /// Failure copy for the console: name the claim limitation when that is
+    /// the real cause, otherwise keep the host's own message.
+    static func consoleFailureMessage(_ opened: QuickTerminalOpenedWire, error: Error) -> String {
+        consoleUnattachableNotice(opened) ?? error.localizedDescription
+    }
 }
