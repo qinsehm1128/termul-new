@@ -1080,6 +1080,128 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    // Fixed, deliberately quoted home: never discover a CLI, mutate HOME, or write here.
+    const LEGACY_FIXTURE_HOME: &str = "/se-hooks-legacy-fixture/home 'with spaces";
+
+    fn assert_legacy_fixture(name: &str, rendered: &[u8]) {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/agent_hooks/tests/fixtures/legacy")
+            .join(name);
+        let expected = fs::read(&path).unwrap_or_else(|err| panic!("{}: {err}", path.display()));
+        // Ownership depends on exact bytes: no newline, whitespace or path normalization.
+        assert_eq!(rendered, expected.as_slice(), "legacy fixture: {name}");
+    }
+
+    #[test]
+    fn legacy_renderers_reproduce_exact_committed_bytes() {
+        for agent in agents() {
+            let adapter = Adapter::new(agent, PathBuf::from(LEGACY_FIXTURE_HOME), false);
+            assert_legacy_fixture(
+                &format!("{}-hook.v1.sh", adapter.name()),
+                adapter.script_source().as_bytes(),
+            );
+        }
+
+        let pi = Adapter::new(AgentKind::Pi, PathBuf::from(LEGACY_FIXTURE_HOME), false);
+        let pi_v1 = pi.pi_v1_source();
+        let pi_v2 = pi.pi_source();
+        assert_legacy_fixture("pi-extension.v1.ts", pi_v1.as_bytes());
+        assert_legacy_fixture("pi-extension.v2.ts", pi_v2.as_bytes());
+        for original in [None, Some(pi_v1.as_bytes()), Some(pi_v2.as_bytes())] {
+            assert_eq!(pi.merge(original, true).unwrap(), pi_v2.as_bytes());
+        }
+        for original in [pi_v1.as_bytes(), pi_v2.as_bytes()] {
+            assert!(pi.merge(Some(original), false).unwrap().is_empty());
+        }
+
+        let qin = Adapter::new(
+            AgentKind::QinCode,
+            PathBuf::from(LEGACY_FIXTURE_HOME),
+            false,
+        );
+        let qin_user = include_bytes!("tests/fixtures/legacy/qin-user-config.input.toml");
+        for (name, original) in [("empty", None), ("user", Some(qin_user.as_slice()))] {
+            let installed = qin.merge(original, true).unwrap();
+            assert_legacy_fixture(&format!("qin-config.{name}.installed.toml"), &installed);
+            assert_eq!(qin.merge(Some(&installed), true).unwrap(), installed);
+            let removed = qin.merge(Some(&installed), false).unwrap();
+            assert_legacy_fixture(&format!("qin-config.{name}.removed.toml"), &removed);
+            assert_eq!(removed, original.unwrap_or_default());
+        }
+        assert_eq!(qin.merge(None, true).unwrap(), qin.qin_block().as_bytes());
+
+        let mut claude = Adapter::new(
+            AgentKind::ClaudeCode,
+            PathBuf::from(LEGACY_FIXTURE_HOME),
+            false,
+        );
+        // Freeze every distinct event-set output and both sides of each gate.
+        // Unknown/unparseable versions share the conservative 1.0.64 event set.
+        for (version, fixture_version) in [
+            (None, "1.0.62"),
+            (Some("99.0.0 (launcher, not Claude)"), "1.0.62"),
+            (Some("launcher 99.0.0\n1.0.23 (Claude Code)"), "1.0.23"),
+            (Some("1.0.23 (Claude Code)"), "1.0.23"),
+            (Some("1.0.30 (Claude Code)"), "1.0.23"),
+            (Some("1.0.31 (Claude Code)"), "1.0.31"),
+            (Some("1.0.40 (Claude Code)"), "1.0.31"),
+            (Some("1.0.41 (Claude Code)"), "1.0.41"),
+            (Some("1.0.52 (Claude Code)"), "1.0.41"),
+            (Some("1.0.53 (Claude Code)"), "1.0.53"),
+            (Some("1.0.61 (Claude Code)"), "1.0.53"),
+            (Some("1.0.62 (Claude Code)"), "1.0.62"),
+            (Some("2.0.42 (Claude Code)"), "1.0.62"),
+            (Some("2.0.43 (Claude Code)"), "2.0.43"),
+            (Some("2.0.44 (Claude Code)"), "2.0.43"),
+            (Some("2.0.45 (Claude Code)"), "2.0.45"),
+            (Some("2.0.55 (Claude Code)"), "2.0.45"),
+            (Some("2.0.56 (Claude Code)"), "2.0.56"),
+            (Some("2.1.260 (Claude Code)"), "2.0.56"),
+            (Some("2.1.261 (Claude Code)"), "2.1.261"),
+        ] {
+            claude.cli.version = version.map(str::to_owned);
+            let installed = claude.merge(None, true).unwrap();
+            assert_legacy_fixture(
+                &format!("claude-settings.empty.{fixture_version}.json"),
+                &installed,
+            );
+            assert_eq!(claude.merge(Some(&installed), true).unwrap(), installed);
+        }
+        claude.cli.version = Some("1.0.22 (Claude Code)".into());
+        assert_eq!(
+            claude.merge(None, true).unwrap_err(),
+            "This Claude version predates supported hooks (requires at least 1.0.23)"
+        );
+
+        let claude_user = include_bytes!("tests/fixtures/legacy/claude-user-settings.input.json");
+        for (label, version) in [
+            ("unknown", None),
+            ("2.1.261", Some("2.1.261 (Claude Code)")),
+        ] {
+            claude.cli.version = version.map(str::to_owned);
+            let installed = claude.merge(Some(claude_user), true).unwrap();
+            assert_legacy_fixture(
+                &format!("claude-settings.user.{label}.installed.json"),
+                &installed,
+            );
+            assert_eq!(claude.merge(Some(&installed), true).unwrap(), installed);
+            assert_legacy_fixture(
+                &format!("claude-settings.user.{label}.removed.json"),
+                &claude.merge(Some(&installed), false).unwrap(),
+            );
+            // No owned commands means removal must retain original whitespace too.
+            assert_eq!(claude.merge(Some(claude_user), false).unwrap(), claude_user);
+        }
+        // A downgrade removes only newly unsupported managed commands.
+        claude.cli.version = Some("2.1.261 (Claude Code)".into());
+        let modern = claude.merge(Some(claude_user), true).unwrap();
+        claude.cli.version = None;
+        assert_legacy_fixture(
+            "claude-settings.user.downgraded.json",
+            &claude.merge(Some(&modern), true).unwrap(),
+        );
+    }
+
     fn fixture(agent: AgentKind) -> (TempDir, Adapter) {
         let temp = tempfile::tempdir().unwrap();
         // Exercise spaces and shell apostrophes in all owned paths.

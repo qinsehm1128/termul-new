@@ -1,0 +1,163 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls)"
+    ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo user se-manager-hook"
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/se-hooks-legacy-fixture/home '\\''with spaces/.se-manager/agent-hooks/claude-code-hook.sh'",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "user",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo user-session-end"
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/se-hooks-legacy-fixture/home '\\''with spaces/.se-manager/agent-hooks/claude-code-hook.sh'",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/se-hooks-legacy-fixture/home '\\''with spaces/.se-manager/agent-hooks/claude-code-hook.sh'",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/se-hooks-legacy-fixture/home '\\''with spaces/.se-manager/agent-hooks/claude-code-hook.sh'",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/se-hooks-legacy-fixture/home '\\''with spaces/.se-manager/agent-hooks/claude-code-hook.sh'",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/se-hooks-legacy-fixture/home '\\''with spaces/.se-manager/agent-hooks/claude-code-hook.sh'",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/se-hooks-legacy-fixture/home '\\''with spaces/.se-manager/agent-hooks/claude-code-hook.sh'",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/se-hooks-legacy-fixture/home '\\''with spaces/.se-manager/agent-hooks/claude-code-hook.sh'",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/se-hooks-legacy-fixture/home '\\''with spaces/.se-manager/agent-hooks/claude-code-hook.sh'",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/se-hooks-legacy-fixture/home '\\''with spaces/.se-manager/agent-hooks/claude-code-hook.sh'",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/se-hooks-legacy-fixture/home '\\''with spaces/.se-manager/agent-hooks/claude-code-hook.sh'",
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  },
+  "theme": "dark",
+  "env": {
+    "USER_SETTING": "preserve-me"
+  }
+}

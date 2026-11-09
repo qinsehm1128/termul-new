@@ -1,0 +1,37 @@
+# user preferences
+model = 'keep-me'
+[hooks]
+level = 'standard' # do not promote
+post_tool = 'echo legacy'
+[[hooks.rules]]
+event = 'pre_tool'
+command = 'security-check --required'
+min_level = 'minimal'
+
+# BEGIN Se managed agent hooks v1
+[[hooks.rules]]
+event = "session_start"
+command = ''''/se-hooks-legacy-fixture/home '\''with spaces/.se-manager/agent-hooks/qin-code-hook.sh''''
+min_level = "minimal"
+
+[[hooks.rules]]
+event = "turn_start"
+command = ''''/se-hooks-legacy-fixture/home '\''with spaces/.se-manager/agent-hooks/qin-code-hook.sh''''
+min_level = "minimal"
+
+[[hooks.rules]]
+event = "turn_end"
+command = ''''/se-hooks-legacy-fixture/home '\''with spaces/.se-manager/agent-hooks/qin-code-hook.sh''''
+min_level = "minimal"
+
+[[hooks.rules]]
+event = "session_end"
+command = ''''/se-hooks-legacy-fixture/home '\''with spaces/.se-manager/agent-hooks/qin-code-hook.sh''''
+min_level = "minimal"
+
+[[hooks.rules]]
+event = "post_tool"
+command = ''''/se-hooks-legacy-fixture/home '\''with spaces/.se-manager/agent-hooks/qin-code-hook.sh''''
+min_level = "standard"
+
+# END Se managed agent hooks v1

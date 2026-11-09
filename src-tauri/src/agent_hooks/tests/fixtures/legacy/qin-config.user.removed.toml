@@ -1,0 +1,9 @@
+# user preferences
+model = 'keep-me'
+[hooks]
+level = 'standard' # do not promote
+post_tool = 'echo legacy'
+[[hooks.rules]]
+event = 'pre_tool'
+command = 'security-check --required'
+min_level = 'minimal'

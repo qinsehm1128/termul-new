@@ -1,0 +1,5 @@
+{ "permissions": {"allow":["Bash(ls)"]},
+  "hooks": {
+    "Stop":[{"matcher":"*","hooks":[{"type":"command","command":"echo user se-manager-hook"}]}],
+    "SessionEnd":[{"matcher":"user","hooks":[{"type":"command","command":"echo user-session-end"}]}]
+  }, "theme":"dark", "env":{"USER_SETTING":"preserve-me"} }

@@ -1,5 +1,6 @@
 //! Explicitly managed CLI integrations. Starting the receiver never installs hooks.
 pub mod commands;
+pub mod contract;
 pub mod install;
 mod server;
 

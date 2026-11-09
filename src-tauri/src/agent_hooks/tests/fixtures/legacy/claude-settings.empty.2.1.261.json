@@ -1,0 +1,136 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/se-hooks-legacy-fixture/home '\\''with spaces/.se-manager/agent-hooks/claude-code-hook.sh'",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/se-hooks-legacy-fixture/home '\\''with spaces/.se-manager/agent-hooks/claude-code-hook.sh'",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/se-hooks-legacy-fixture/home '\\''with spaces/.se-manager/agent-hooks/claude-code-hook.sh'",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/se-hooks-legacy-fixture/home '\\''with spaces/.se-manager/agent-hooks/claude-code-hook.sh'",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/se-hooks-legacy-fixture/home '\\''with spaces/.se-manager/agent-hooks/claude-code-hook.sh'",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/se-hooks-legacy-fixture/home '\\''with spaces/.se-manager/agent-hooks/claude-code-hook.sh'",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/se-hooks-legacy-fixture/home '\\''with spaces/.se-manager/agent-hooks/claude-code-hook.sh'",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/se-hooks-legacy-fixture/home '\\''with spaces/.se-manager/agent-hooks/claude-code-hook.sh'",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/se-hooks-legacy-fixture/home '\\''with spaces/.se-manager/agent-hooks/claude-code-hook.sh'",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/se-hooks-legacy-fixture/home '\\''with spaces/.se-manager/agent-hooks/claude-code-hook.sh'",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/se-hooks-legacy-fixture/home '\\''with spaces/.se-manager/agent-hooks/claude-code-hook.sh'",
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  }
+}

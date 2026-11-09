@@ -1,0 +1,40 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/se-hooks-legacy-fixture/home '\\''with spaces/.se-manager/agent-hooks/claude-code-hook.sh'",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/se-hooks-legacy-fixture/home '\\''with spaces/.se-manager/agent-hooks/claude-code-hook.sh'",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/se-hooks-legacy-fixture/home '\\''with spaces/.se-manager/agent-hooks/claude-code-hook.sh'",
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  }
+}
