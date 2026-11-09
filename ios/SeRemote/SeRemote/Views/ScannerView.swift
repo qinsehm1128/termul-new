@@ -15,7 +15,7 @@ struct ScannerView: View {
             Group {
                 if let cameraError {
                     ContentUnavailableView(
-                        "摄像头不可用",
+                        "Camera unavailable",
                         systemImage: "camera.fill",
                         description: Text(cameraError)
                     )
@@ -27,9 +27,9 @@ struct ScannerView: View {
                     }
                 } else {
                     ContentUnavailableView(
-                        "摄像头不可用",
+                        "Camera unavailable",
                         systemImage: "qrcode.viewfinder",
-                        description: Text("关闭扫码后，可以粘贴桌面的访问链接。摄像头可能不可用，或已在 iOS 设置里关闭。")
+                        description: Text("Camera access may be off in iOS Settings. Close this and paste the access link instead.")
                     )
                     .foregroundStyle(.white)
                 }
@@ -47,15 +47,12 @@ struct ScannerView: View {
                             .frame(width: 44, height: 44)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("关闭扫码")
+                    .accessibilityLabel(String(localized: "Close scanner"))
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("扫码配对")
+                        Text("Scan to pair")
                             .font(SeNocturneType.font(19, weight: .semibold))
                             .tracking(-0.5)
                             .foregroundStyle(Color(hex: 0xF2F0E8))
-                        Text("SE REMOTE · PAIR")
-                            .font(SeNocturneType.font(9, mono: true))
-                            .foregroundStyle(Color(hex: 0xA9AEBB))
                     }
                     Spacer(minLength: 0)
                 }
@@ -251,7 +248,7 @@ private struct DataScannerRepresentable: UIViewControllerRepresentable {
             guard !handled else { return }
             handled = true
             DispatchQueue.main.async { [weak self] in
-                self?.onError(String(localized: "Close the scanner and paste the desktop access URL instead. Camera access may be unavailable or disabled in iOS Settings."))
+                self?.onError(String(localized: "Camera access may be off in iOS Settings. Close this and paste the access link instead."))
             }
         }
 

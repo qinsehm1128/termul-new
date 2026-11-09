@@ -9,7 +9,9 @@ struct PairingSheetView: View {
     private enum Mode: String, CaseIterable, Identifiable {
         case scan, paste
         var id: String { rawValue }
-        var title: String { self == .scan ? "扫码" : "粘贴链接" }
+        var title: String {
+            self == .scan ? String(localized: "Scan QR code") : String(localized: "Paste link")
+        }
     }
 
     @Environment(\.sePalette) private var palette
@@ -26,19 +28,16 @@ struct PairingSheetView: View {
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
-                SeSheetHeader(title: "配对新主机", onClose: { dismiss() })
+                SeSheetHeader(title: String(localized: "Pair a new host"), onClose: { dismiss() })
 
-                Text("在 Mac 上打开 SeRemote → 远程访问，扫描这个码。连接要由你在主机上确认。")
-                    .font(SeNocturneType.font(11))
-                    .foregroundStyle(palette.inkTertiary)
-                    .lineSpacing(3)
-                    .padding(.top, 4)
-
-                SeSegmented(
-                    segments: Mode.allCases.map { SeSegment($0.rawValue, $0.title) },
-                    selection: Binding(get: { method.rawValue }, set: { method = Mode(rawValue: $0) ?? .scan }),
-                    identifier: "pairing.method"
-                )
+                HStack(alignment: .center, spacing: 6) {
+                    SeSegmented(
+                        segments: Mode.allCases.map { SeSegment($0.rawValue, $0.title) },
+                        selection: Binding(get: { method.rawValue }, set: { method = Mode(rawValue: $0) ?? .scan }),
+                        identifier: "pairing.method"
+                    )
+                    SeInfoTip(text: String(localized: "Open SeRemote on the Mac, then Remote Access, and scan the code. You confirm the connection on the host. Credentials stay in this phone's keychain; the first connection is read-only and writes are approved one by one."))
+                }
                 .padding(.top, 14)
 
                 if method == .scan { scanContent } else { pasteContent }
@@ -49,26 +48,12 @@ struct PairingSheetView: View {
                         .accessibilityIdentifier("pairing.error")
                 }
 
-                steps
-                    .padding(.top, 18)
-
-                HStack(spacing: 8) {
-                    SeSolidButton(title: method == .scan ? "开始扫码" : "连接", icon: method == .scan ? .scan : .arrowRight) {
-                        method == .scan ? (showScanner = true) : submit()
-                    }
-                    .disabled(method == .paste && !draft.canSubmit)
-                    .accessibilityIdentifier(method == .scan ? "pairing.scan" : "pairing.connect")
-
-                    SeOutlineButton(title: method == .scan ? "粘贴链接" : "扫码", icon: method == .scan ? .link : .scan, square: true) {
-                        method = method == .scan ? .paste : .scan
-                    }
+                SeSolidButton(title: method == .scan ? String(localized: "Start scanning") : String(localized: "Connect"), icon: method == .scan ? .scan : .arrowRight) {
+                    method == .scan ? (showScanner = true) : submit()
                 }
+                .disabled(method == .paste && !draft.canSubmit)
+                .accessibilityIdentifier(method == .scan ? "pairing.scan" : "pairing.connect")
                 .padding(.top, 18)
-
-                Text("连接只写入这台手机的钥匙串。首次连接默认只读，写操作逐条许可。")
-                    .font(SeNocturneType.font(9.5))
-                    .foregroundStyle(palette.inkTertiary)
-                    .padding(.top, 12)
             }
             .padding(.horizontal, 18)
             .padding(.top, 10)
@@ -89,20 +74,16 @@ struct PairingSheetView: View {
     }
 
     private var scanContent: some View {
-        VStack(spacing: 12) {
-            QRBox()
-                .frame(width: 176, height: 176)
-                .padding(.top, 16)
-            Text("把主机的二维码放进框内")
-                .font(SeNocturneType.font(11))
-                .foregroundStyle(palette.inkSecondary)
-        }
-        .frame(maxWidth: .infinity)
+        QRBox()
+            .frame(width: 176, height: 176)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 20)
+            .accessibilityHidden(true)
     }
 
     private var pasteContent: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("桌面访问链接")
+            Text("Desktop access link")
                 .font(SeNocturneType.font(11))
                 .foregroundStyle(palette.inkSecondary)
             HStack(spacing: 8) {
@@ -118,6 +99,7 @@ struct PairingSheetView: View {
                     .submitLabel(.go)
                     .onSubmit { submit() }
                     .accessibilityIdentifier("pairing.url")
+                    .accessibilityHint(String(localized: "Use the complete http or https link, including its access key."))
             }
             .padding(.horizontal, 12)
             .frame(height: 46)
@@ -126,36 +108,8 @@ struct PairingSheetView: View {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .strokeBorder(mode.insetStroke, lineWidth: 1)
             }
-            Text("使用完整的 http 或 https 链接，包含它的访问密钥。")
-                .font(SeNocturneType.font(9.5))
-                .foregroundStyle(palette.inkTertiary)
         }
         .padding(.top, 14)
-    }
-
-    private var steps: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            step(1, "主机上出现这次请求，确认设备名与地点。")
-            step(2, "凭据写入钥匙串，只对这台主机生效。")
-            step(3, "首次连接默认只读，写操作逐条许可。")
-        }
-    }
-
-    private func step(_ number: Int, _ text: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Text("\(number)")
-                .font(SeNocturneType.font(9, mono: true))
-                .foregroundStyle(palette.inkTertiary)
-                .frame(width: 18, height: 18)
-                .overlay {
-                    Circle().strokeBorder(mode.strongHairline, lineWidth: 1)
-                }
-            Text(text)
-                .font(SeNocturneType.font(10.5))
-                .foregroundStyle(palette.inkSecondary)
-                .lineSpacing(2)
-            Spacer(minLength: 0)
-        }
     }
 
     private func acceptScan() {
@@ -211,6 +165,6 @@ private struct QRBox: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(Color(hex: 0xF2F0E8), lineWidth: 1)
         }
-        .accessibilityLabel("二维码")
+        .accessibilityLabel(String(localized: "QR code"))
     }
 }
