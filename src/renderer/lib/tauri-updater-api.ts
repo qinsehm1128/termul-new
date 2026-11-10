@@ -11,9 +11,9 @@ import {
 import { getVersion } from '@tauri-apps/api/app'
 import { invoke } from '@tauri-apps/api/core'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { relaunch } from '@tauri-apps/plugin-process'
 import { check, type DownloadEvent, type Update } from '@tauri-apps/plugin-updater'
 import { runtimeT } from '@/i18n/runtime'
+import { restartApp } from './app-restart'
 import { logFrontendError } from './log-api'
 import { setAppVersion } from './tauri-backup-api'
 import { keepPreviousVersion, setCurrentVersion } from './tauri-rollback-api'
@@ -774,7 +774,7 @@ export async function installAndRestart(
     // Apply the already-downloaded package, then restart into the new version.
     // Split from download so the app is never force-restarted during download.
     await downloadedUpdate.install()
-    await relaunch()
+    await restartApp()
     return { success: true, data: undefined }
   } catch (error) {
     if (pendingPlanForFailure) {
@@ -886,6 +886,21 @@ export function _resetUpdaterStateForTesting(): void {
   lastCheckedAt = null
   autoUpdateEnabled = true
   isManualUpdateMode = false
+}
+
+/**
+ * True when `version` is the pending signed update and its package is already
+ * downloaded in this session, so a re-check of the same version must keep the
+ * "downloaded" state instead of asking the user to download again.
+ */
+export function isUpdateDownloaded(version: string | null | undefined): boolean {
+  if (!version || isAurUpdateMode() || isManualUpdateMode) return false
+  return (
+    pendingTauriUpdate !== null &&
+    pendingTauriUpdate.version === version &&
+    downloadedVersion === version &&
+    downloadedUpdate !== null
+  )
 }
 
 export function isInManualUpdateMode(): boolean {

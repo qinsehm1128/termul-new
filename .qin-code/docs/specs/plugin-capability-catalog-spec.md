@@ -715,6 +715,7 @@ Legend — class: **R** read, **W** write, **D** destructive, **SEC** secret-bea
 | ui.set_native_language | set_native_ui_language `src-tauri/src/lib.rs:576` | W | global UI chrome + tray | none | OPEN | rust-main | Serialized against concurrent calls (lib.rs:226). |
 | keybindings.load_schemes | keybinding_schemes_load `src-tauri/src/keybinding_schemes.rs:92` | R/W | scheme dir | none | OPEN | rust-main | `ensure_dir` makes the directory; otherwise a disk read. |
 | quit.set_end_core_sessions | set_quit_ends_core_sessions `src-tauri/src/lib.rs:1624` | W | global preference | none | OPEN | rust-main | Stores an atomic; only meaningful on the next quit. |
+| app.restart | restart_app `src-tauri/src/lib.rs:1649` | W | GUI process lifecycle | none | OPEN | rust-main | Runs the graceful exit cleanup, then restarts the GUI; Cores keep running and are adopted. Used by update install and Restart GUI. |
 
 ##### 1.7 Logs and diagnostics
 

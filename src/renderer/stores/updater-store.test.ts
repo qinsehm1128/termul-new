@@ -18,7 +18,8 @@ vi.mock('@/lib/tauri-updater-api', async () => {
     setAutoUpdateEnabled: vi.fn(),
     getAutoUpdateEnabled: vi.fn(),
     registerUpdateEventHandlers: vi.fn(() => () => {}),
-    clearPendingUpdate: vi.fn()
+    clearPendingUpdate: vi.fn(),
+    isUpdateDownloaded: vi.fn(() => false)
   }
 })
 
@@ -74,6 +75,7 @@ beforeEach(() => {
   vi.clearAllMocks()
 
   vi.mocked(tauriUpdaterApi.checkForUpdates).mockResolvedValue(null)
+  vi.mocked(tauriUpdaterApi.isUpdateDownloaded).mockReturnValue(false)
   vi.mocked(tauriUpdaterApi.downloadUpdate).mockResolvedValue({
     success: true,
     data: undefined
@@ -160,6 +162,43 @@ describe('updater-store', () => {
       expect(state.version).toBe('2.0.0')
       expect(state.releaseNotes).toBe('Important fixes')
       expect(state.lastChecked).toBeInstanceOf(Date)
+    })
+
+    it('keeps the downloaded state when a re-check returns the already downloaded version', async () => {
+      useUpdaterStore.setState({
+        updateAvailable: true,
+        downloaded: true,
+        version: '2.0.0',
+        downloadProgress: 100
+      })
+      vi.mocked(tauriUpdaterApi.isUpdateDownloaded).mockReturnValue(true)
+      vi.mocked(tauriUpdaterApi.checkForUpdates).mockResolvedValue({
+        version: '2.0.0',
+        releaseDate: '2026-01-01T00:00:00.000Z',
+        isSecurityUpdate: false
+      })
+
+      await useUpdaterStore.getState().checkForUpdates()
+
+      const state = useUpdaterStore.getState()
+      expect(tauriUpdaterApi.isUpdateDownloaded).toHaveBeenCalledWith('2.0.0')
+      expect(state.downloaded).toBe(true)
+      expect(state.downloadProgress).toBe(100)
+    })
+
+    it('asks for a new download when a re-check returns a different version', async () => {
+      useUpdaterStore.setState({ updateAvailable: true, downloaded: true, version: '2.0.0' })
+      vi.mocked(tauriUpdaterApi.isUpdateDownloaded).mockReturnValue(false)
+      vi.mocked(tauriUpdaterApi.checkForUpdates).mockResolvedValue({
+        version: '2.1.0',
+        releaseDate: '2026-01-02T00:00:00.000Z',
+        isSecurityUpdate: false
+      })
+
+      await useUpdaterStore.getState().checkForUpdates()
+
+      expect(useUpdaterStore.getState().downloaded).toBe(false)
+      expect(useUpdaterStore.getState().version).toBe('2.1.0')
     })
 
     it('should clear pending update state when no update is available', async () => {

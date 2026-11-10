@@ -262,17 +262,22 @@ export function useUpdateToast(): void {
     }
   }, [downloaded, version])
 
-  // Show download progress
+  // Show download progress. Each progress event updates the same toast in
+  // place (same id); dismissing it here on every re-run made it flash.
   useEffect(() => {
     if (isDownloading && version) {
       showDownloadProgressToast(version, downloadProgress, isPreparingDownload)
-
-      // Clean up progress toast when download completes or effect re-runs
-      return () => {
-        dismissDownloadProgressToast(version)
-      }
     }
   }, [isDownloading, isPreparingDownload, downloadProgress, version])
+
+  // Dismiss the progress toast only when the download ends, the version
+  // changes, or the hook unmounts.
+  useEffect(() => {
+    if (!isDownloading || !version) return
+    return () => {
+      dismissDownloadProgressToast(version)
+    }
+  }, [isDownloading, version])
 
   // Reset flags when update state changes
   useEffect(() => {

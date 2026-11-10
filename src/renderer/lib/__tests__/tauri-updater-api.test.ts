@@ -13,8 +13,8 @@ vi.mock('@tauri-apps/plugin-updater', () => ({
   Update: class {}
 }))
 
-vi.mock('@tauri-apps/plugin-process', () => ({
-  relaunch: vi.fn()
+vi.mock('../app-restart', () => ({
+  restartApp: vi.fn()
 }))
 
 vi.mock('../tauri-backup-api', () => ({
@@ -36,8 +36,8 @@ vi.mock('../tauri-rollback-api', () => ({
 
 import { getVersion } from '@tauri-apps/api/app'
 import { invoke } from '@tauri-apps/api/core'
-import { relaunch } from '@tauri-apps/plugin-process'
 import { check } from '@tauri-apps/plugin-updater'
+import { restartApp as relaunch } from '../app-restart'
 import { createBackup, setAppVersion } from '../tauri-backup-api'
 import { keepPreviousVersion, setCurrentVersion } from '../tauri-rollback-api'
 import {

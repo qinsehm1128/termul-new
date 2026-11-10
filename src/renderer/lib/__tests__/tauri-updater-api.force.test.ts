@@ -9,7 +9,9 @@ const { mockInvoke, mockSavePlan } = vi.hoisted(() => ({
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mockInvoke }))
 vi.mock('@tauri-apps/api/app', () => ({ getVersion: vi.fn(async () => '0.14.8') }))
 vi.mock('@tauri-apps/plugin-updater', () => ({ check: vi.fn(), Update: class {} }))
-vi.mock('@tauri-apps/plugin-process', () => ({ relaunch: vi.fn() }))
+vi.mock('../app-restart', () => ({
+  restartApp: vi.fn()
+}))
 vi.mock('../tauri-backup-api', () => ({
   BackupErrorCodes: {},
   createBackup: vi.fn(async () => ({ success: true, data: { id: 'b' } })),

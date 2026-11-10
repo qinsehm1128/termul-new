@@ -1606,6 +1606,14 @@ static CLEANUP_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBo
 static CLEANUP_IN_PROGRESS: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// Set by `restart_app`: the graceful exit below restarts the app once its
+/// cleanup is done instead of exiting. A plain `relaunch()` cannot run that
+/// cleanup: Tauri ignores `prevent_exit` for its restart code, and the cleanup
+/// task's trailing `exit()` then raced the restart and could end the process
+/// before the new instance was spawned.
+static RESTART_AFTER_CLEANUP: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Set by "Quit and End All Terminals" right before the renderer closes the
 /// window: the graceful exit then shuts both Cores down as well. A plain quit
 /// leaves them running so the next launch adopts every terminal and agent.
@@ -1633,6 +1641,15 @@ fn request_renderer_quit<R: tauri::Runtime>(app: &tauri::AppHandle<R>, end_core_
         TRAY_QUIT_REQUESTED_EVENT,
         QuitRequestedPayload { end_core_sessions },
     );
+}
+
+/// Restart the GUI after the same graceful cleanup a quit runs. Cores keep
+/// running and are adopted by the new instance.
+#[tauri::command]
+fn restart_app(app: tauri::AppHandle) {
+    RESTART_AFTER_CLEANUP.store(true, std::sync::atomic::Ordering::SeqCst);
+    log::info!("[desktop-exit] operation=restart_requested stable_code=GRACEFUL_RESTART");
+    app.exit(0);
 }
 
 #[tauri::command]
@@ -2213,8 +2230,22 @@ fn configure_pending_core_update_policy(app_handle: &tauri::AppHandle) {
     crate::core::launcher::configure_update_policy(policy.as_ref());
 }
 
+/// Blocking form for the synchronous setup path only. Async callers (the Core
+/// supervisor) must await [`finalize_pending_core_update_plan_async`]: calling
+/// `block_on` from a Tokio worker panics and ended the supervisor task.
 #[cfg(any(unix, windows))]
 fn finalize_pending_core_update_plan(app_handle: &tauri::AppHandle, profile_root: &Path) {
+    tauri::async_runtime::block_on(finalize_pending_core_update_plan_async(
+        app_handle,
+        profile_root,
+    ));
+}
+
+#[cfg(any(unix, windows))]
+async fn finalize_pending_core_update_plan_async(
+    app_handle: &tauri::AppHandle,
+    profile_root: &Path,
+) {
     let Some(plan) = pending_update_plan(app_handle) else {
         return;
     };
@@ -2229,7 +2260,7 @@ fn finalize_pending_core_update_plan(app_handle: &tauri::AppHandle, profile_root
         .and_then(serde_json::Value::as_str)
         == Some("legacy");
     let required = required_update_cores(&plan);
-    let complete = tauri::async_runtime::block_on(async {
+    let complete = async {
         let mut assessments = Vec::with_capacity(required.len());
         for (name, role) in required {
             let Some(entry) = components.get(name) else {
@@ -2268,7 +2299,8 @@ fn finalize_pending_core_update_plan(app_handle: &tauri::AppHandle, profile_root
             ));
         }
         crate::core::launcher::required_core_identities_allow_finalization(&assessments)
-    });
+    }
+    .await;
     if complete {
         clear_pending_update_plan(app_handle);
         crate::core::launcher::configure_update_policy(None);
@@ -2725,7 +2757,7 @@ async fn supervise_one_core(
     }
     *ready = false;
     if restart_and_reconnect(app_handle, profile_root, role).await {
-        finalize_pending_core_update_plan(app_handle, profile_root);
+        finalize_pending_core_update_plan_async(app_handle, profile_root).await;
         announce_core_restarted(app_handle, role).await;
         *ready = true;
         *consecutive_misses = 0;
@@ -2893,11 +2925,11 @@ async fn reconcile_pending_core(
             .try_state::<crate::core::PluginServiceHandle>()
             .is_some_and(|handle| handle.is_connected());
     if process.reused && plugin_client_ready {
-        finalize_pending_core_update_plan(app_handle, profile_root);
+        finalize_pending_core_update_plan_async(app_handle, profile_root).await;
         return true;
     }
     if reconnect_supervised_core(app_handle, &process.endpoint, role).await {
-        finalize_pending_core_update_plan(app_handle, profile_root);
+        finalize_pending_core_update_plan_async(app_handle, profile_root).await;
         *ready = true;
         *consecutive_misses = 0;
     } else {
@@ -3876,6 +3908,8 @@ pub fn run() {
             remote::desktop::remote_desktop_emergency_stop,
             // Quit mode for "Quit and End All Terminals"
             set_quit_ends_core_sessions,
+            // Graceful GUI restart (update install, "Restart GUI")
+            restart_app,
             // Shell detection commands
             detect_shells,
             get_default_shell,
@@ -4356,8 +4390,19 @@ pub fn run() {
             });
             return;
         }
-        if let RunEvent::ExitRequested { api, .. } = event {
+        if let RunEvent::ExitRequested { api, code, .. } = event {
             if CLEANUP_DONE.load(std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
+            // Tauri's own restart cannot be prevented: the loop is about to
+            // exit and restart. Do not spawn the graceful cleanup here, its
+            // trailing exit() would race the restart and could end the process
+            // before the new instance starts. The Exit arm does the bounded reap.
+            if code == Some(tauri::RESTART_EXIT_CODE) {
+                CLEANUP_IN_PROGRESS.store(true, std::sync::atomic::Ordering::SeqCst);
+                log::warn!(
+                    "[desktop-exit] operation=restart stable_code=UNGRACEFUL_RESTART result=LOOP_EXIT_REAP"
+                );
                 return;
             }
             api.prevent_exit();
@@ -4550,7 +4595,14 @@ pub fn run() {
                     if clean_exit { "PASS" } else { "FAILED" },
                     exit_code
                 );
-                app_handle_clone.exit(exit_code);
+                if RESTART_AFTER_CLEANUP.load(std::sync::atomic::Ordering::SeqCst) {
+                    log::info!(
+                        "[desktop-exit] operation=restart stable_code=RESTARTING result=PASS"
+                    );
+                    app_handle_clone.request_restart();
+                } else {
+                    app_handle_clone.exit(exit_code);
+                }
             });
         }
     });
@@ -4652,6 +4704,61 @@ mod tests {
         assert!(exit.contains("service.disconnect()"));
         assert!(exit.contains("detach_owned_cores()"));
         assert!(!exit.contains("plugin.shutdown"));
+    }
+
+    #[test]
+    fn graceful_restart_runs_cleanup_before_restarting() {
+        let source = include_str!("lib.rs");
+        let requested = source
+            .split("if let RunEvent::ExitRequested { api, code, .. } = event {")
+            .nth(1)
+            .expect("ExitRequested arm");
+        let restart_guard = requested
+            .find("code == Some(tauri::RESTART_EXIT_CODE)")
+            .expect("unpreventable restart must be recognised");
+        let spawn = requested
+            .find("tauri::async_runtime::spawn(async move {")
+            .expect("graceful cleanup task");
+        assert!(
+            restart_guard < spawn,
+            "an unpreventable restart must not spawn a cleanup whose exit() races the restart"
+        );
+        let cleanup = &requested[spawn..];
+        let done = cleanup.find("CLEANUP_DONE.store(true").expect("cleanup done");
+        let restart = cleanup
+            .find("app_handle_clone.request_restart()")
+            .expect("restart after cleanup");
+        assert!(done < restart, "the restart must follow the cleanup");
+        assert!(cleanup.contains("RESTART_AFTER_CLEANUP.load"));
+        let command = source
+            .split("fn restart_app(app: tauri::AppHandle) {")
+            .nth(1)
+            .expect("restart_app command")
+            .split("\n}\n")
+            .next()
+            .unwrap();
+        assert!(command.contains("RESTART_AFTER_CLEANUP.store(true"));
+        assert!(command.contains("app.exit(0)"));
+        assert!(!command.contains("request_restart"));
+        assert!(source.contains("            restart_app,\n"));
+    }
+
+    #[test]
+    fn async_core_supervision_never_blocks_on_the_update_plan() {
+        let source = include_str!("lib.rs");
+        for name in ["async fn supervise_one_core(", "async fn reconcile_pending_core("] {
+            let body = source
+                .split(name)
+                .nth(1)
+                .expect("supervisor fn")
+                .split("\n}\n")
+                .next()
+                .unwrap();
+            assert!(
+                !body.contains("finalize_pending_core_update_plan("),
+                "{name} runs on a Tokio worker; block_on there panics"
+            );
+        }
     }
 
     #[test]

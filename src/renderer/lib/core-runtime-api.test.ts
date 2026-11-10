@@ -7,7 +7,7 @@ const { mockInvoke, mockRelaunch } = vi.hoisted(() => ({
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mockInvoke }))
-vi.mock('@tauri-apps/plugin-process', () => ({ relaunch: mockRelaunch }))
+vi.mock('./app-restart', () => ({ restartApp: mockRelaunch }))
 
 function runtimeStatus(): CoreRuntimeStatus {
   const core = {

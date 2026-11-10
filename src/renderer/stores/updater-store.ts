@@ -15,6 +15,7 @@ import {
 import {
   clearPendingUpdate,
   DEFAULT_UPDATE_CHANNEL,
+  isUpdateDownloaded,
   registerUpdateEventHandlers,
   type TauriUpdaterEventHandlers,
   checkForUpdates as tauriCheckForUpdates,
@@ -217,13 +218,16 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
         set({ skippedVersion: null })
       }
 
+      // A re-check that returns the version already downloaded in this session
+      // keeps it ready to install instead of asking for a second download.
+      const alreadyDownloaded = isUpdateDownloaded(updateInfo.version)
       set({
         updateAvailable: true,
-        downloaded: false,
+        downloaded: alreadyDownloaded,
         version: updateInfo.version,
         releaseNotes: updateInfo.releaseNotes ?? null,
         componentPolicy: updateInfo.componentPolicy ?? null,
-        downloadProgress: 0,
+        downloadProgress: alreadyDownloaded ? 100 : 0,
         error: null,
         lastChecked: checkedAt,
         isManualUpdateMode: false
@@ -598,11 +602,12 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
    * Internal action: Called when update becomes available (IPC event)
    */
   _setUpdateAvailable: (info: UpdateInfo): void => {
+    const alreadyDownloaded = isUpdateDownloaded(info.version)
     set({
       updateAvailable: true,
       version: info.version,
-      downloaded: false,
-      downloadProgress: 0,
+      downloaded: alreadyDownloaded,
+      downloadProgress: alreadyDownloaded ? 100 : 0,
       releaseNotes: info.releaseNotes ?? null,
       componentPolicy: info.componentPolicy ?? null,
       error: null

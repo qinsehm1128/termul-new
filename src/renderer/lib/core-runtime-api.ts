@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import { relaunch } from '@tauri-apps/plugin-process'
+import { restartApp } from './app-restart'
 
 /** The Cores the user can restart on their own; the GUI restarts via `relaunch`. */
 export type RestartableCore = 'acpCore' | 'terminalCore' | 'pluginCore'
@@ -53,5 +53,5 @@ export const coreRuntimeApi = {
   /** Ends everything the Core runs; resolves once the new Core is connected. */
   restartCore: (role: RestartableCore): Promise<void> => invoke<void>('restart_core', { role }),
   /** Terminals and agents keep running in their Cores and are adopted again. */
-  restartGui: (): Promise<void> => relaunch()
+  restartGui: (): Promise<void> => restartApp()
 }
