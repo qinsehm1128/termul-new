@@ -112,18 +112,16 @@ struct SandboxedHTMLView: UIViewRepresentable {
 
         func webView(
             _ webView: WKWebView,
-            decidePolicyFor navigationAction: WKNavigationAction,
-            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
-        ) {
-            decisionHandler(HTMLSandboxPolicy.allows(navigationAction.request.url) ? .allow : .cancel)
+            decidePolicyFor navigationAction: WKNavigationAction
+        ) async -> WKNavigationActionPolicy {
+            HTMLSandboxPolicy.allows(navigationAction.request.url) ? .allow : .cancel
         }
 
         func webView(
             _ webView: WKWebView,
-            decidePolicyFor navigationResponse: WKNavigationResponse,
-            decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
-        ) {
-            decisionHandler(HTMLSandboxPolicy.allows(navigationResponse.response.url) ? .allow : .cancel)
+            decidePolicyFor navigationResponse: WKNavigationResponse
+        ) async -> WKNavigationResponsePolicy {
+            HTMLSandboxPolicy.allows(navigationResponse.response.url) ? .allow : .cancel
         }
 
         func webView(

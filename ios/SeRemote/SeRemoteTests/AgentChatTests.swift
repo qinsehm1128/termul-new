@@ -35,7 +35,7 @@ struct AgentChatTests {
         AgentChatStore(terminalID: "pty-1", client: AgentChatClient(
             snapshot: { terminal, cursor, before in try await fake.snapshot(terminal, cursor, before) },
             send: { terminal, text, options in try await fake.send(terminal, text, options) },
-            control: { terminal, action in try await fake.control(terminal, action) }
+            control: { terminal, action in await fake.control(terminal, action) }
         ), canView: canView, canInput: canInput)
     }
 
@@ -187,7 +187,11 @@ struct AgentChatTests {
             AgentChatMountedTerminal(counter: counter)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        let scene = try #require(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        )
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
         window.rootViewController = UIHostingController(rootView: container)
         window.isHidden = false
         defer { window.isHidden = true; window.rootViewController = nil }

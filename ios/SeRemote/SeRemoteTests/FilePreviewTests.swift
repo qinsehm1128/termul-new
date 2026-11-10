@@ -132,8 +132,8 @@ struct HTMLSandboxPolicyTests {
         let document = HTMLSandboxPolicy.sanitizedDocument(
             "<!DOCTYPE html><html><head><title>t</title></head><body><p>hi</p></body></html>"
         )
-        let csp = try? #require(document.range(of: "Content-Security-Policy"))
-        let title = try? #require(document.range(of: "<title>"))
+        let csp = document.range(of: "Content-Security-Policy")
+        let title = document.range(of: "<title>")
         #expect(csp != nil)
         #expect(title != nil)
         if let csp, let title {

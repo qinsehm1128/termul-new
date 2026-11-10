@@ -146,7 +146,7 @@ struct TerminalScreen: UIViewRepresentable {
 final class PhoneTerminalView: TerminalView {
     var allowsInput = true {
         didSet {
-            if !allowsInput, isFirstResponder { resignFirstResponder() }
+            if !allowsInput, isFirstResponder { _ = resignFirstResponder() }
         }
     }
 
