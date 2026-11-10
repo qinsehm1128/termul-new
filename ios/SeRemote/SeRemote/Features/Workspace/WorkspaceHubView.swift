@@ -6,8 +6,10 @@ struct WorkspaceTool: Identifiable, Equatable, Sendable {
     let id: String
     let title: String
     let detail: String
+    /// A host-derived state line. Empty means there is nothing truthful to
+    /// report, and the tile shows no note instead of inventing one.
     let note: String
-    let systemImage: String
+    let icon: SeIcon
     /// True only when the host actually reported the number in `detail`.
     var metricIsLoaded = false
 }
@@ -102,9 +104,7 @@ struct WorkspaceHubView: View {
                         .font(SeNocturneType.font(11, weight: .medium))
                         .foregroundStyle(palette.ink)
                         .lineLimit(1)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(palette.inkTertiary)
+                    SeIconView(icon: .chevron, size: 9, stroke: 1.6, color: palette.inkTertiary)
                 }
                 .padding(.horizontal, 10)
                 .frame(height: 30)
@@ -143,7 +143,8 @@ struct WorkspaceHubView: View {
             NocturneIconButton(
                 systemImage: "sidebar.left",
                 label: String(localized: "All destinations"),
-                action: onOpenDrawer
+                action: onOpenDrawer,
+                icon: .sidebar
             )
         }
     }
@@ -208,9 +209,7 @@ struct WorkspaceHubView: View {
         } label: {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 6) {
-                    Image(systemName: tool.systemImage)
-                        .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(palette.inkTertiary)
+                    SeIconView(icon: tool.icon, size: 13, stroke: 1.6, color: palette.inkTertiary)
                     Text(verbatim: shortTitle(tool))
                         .font(SeNocturneType.font(8.5, weight: .regular, mono: true))
                         .foregroundStyle(palette.inkTertiary)
@@ -222,11 +221,13 @@ struct WorkspaceHubView: View {
                     .foregroundStyle(palette.ink)
                     .lineLimit(2)
                     .padding(.top, 16)
-                Text(verbatim: tool.note)
-                    .font(SeNocturneType.font(8.5, weight: .regular, mono: true))
-                    .foregroundStyle(palette.inkTertiary)
-                    .lineLimit(2)
-                    .padding(.top, 3)
+                if !tool.note.isEmpty {
+                    Text(verbatim: tool.note)
+                        .font(SeNocturneType.font(8.5, weight: .regular, mono: true))
+                        .foregroundStyle(palette.inkTertiary)
+                        .lineLimit(2)
+                        .padding(.top, 3)
+                }
             }
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .padding(12)
@@ -288,16 +289,12 @@ struct WorkspaceHubView: View {
             NocturneGroupLabel(title: String(localized: "Settings"), detail: "")
             Button(action: onOpenSettings) {
                 HStack(spacing: 10) {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 14, weight: .regular))
-                        .foregroundStyle(palette.inkTertiary)
+                    SeIconView(icon: .gear, size: 14, stroke: 1.6, color: palette.inkTertiary)
                     Text("Settings")
                         .font(SeNocturneType.font(12, weight: .semibold))
                         .foregroundStyle(palette.ink)
                     Spacer(minLength: 0)
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(palette.inkTertiary)
+                    SeIconView(icon: .arrowRight, size: 11, stroke: 1.6, color: palette.inkTertiary)
                 }
                 .padding(.horizontal, 12)
                 .frame(minHeight: 52)
@@ -329,10 +326,10 @@ struct WorkspaceHubView: View {
         project: "Termul",
         branch: "main",
         tools: [
-            WorkspaceTool(id: "git", title: "Git", detail: "2 changed files", note: "Read only", systemImage: "point.3.connected.trianglepath.dotted", metricIsLoaded: true),
-            WorkspaceTool(id: "scheduledTasks", title: "Scheduled tasks", detail: "4 tasks", note: "Host schedules", systemImage: "clock", metricIsLoaded: true),
-            WorkspaceTool(id: "search", title: "Search", detail: "Sessions & files", note: "Read only", systemImage: "magnifyingglass"),
-            WorkspaceTool(id: "screenText", title: "Host screen text", detail: "Terminal snapshot", note: "Matching snapshot required", systemImage: "text.viewfinder")
+            WorkspaceTool(id: "git", title: "Git", detail: "2 changed files", note: "Read only", icon: .git, metricIsLoaded: true),
+            WorkspaceTool(id: "scheduledTasks", title: "Scheduled tasks", detail: "4 tasks", note: "Host schedules", icon: .clock, metricIsLoaded: true),
+            WorkspaceTool(id: "search", title: "Search", detail: "Sessions & files", note: "Read only", icon: .search),
+            WorkspaceTool(id: "screenText", title: "Host screen text", detail: "Terminal snapshot", note: "", icon: .textview)
         ],
         projects: [
             WorkspaceProject(id: "p1", name: "Termul", branch: "main", detail: "2 changed files", hasChanges: true),
@@ -349,7 +346,7 @@ struct WorkspaceHubView: View {
         project: "Termul",
         branch: "main",
         tools: [
-            WorkspaceTool(id: "git", title: "Git", detail: "2 changed files", note: "Read only", systemImage: "point.3.connected.trianglepath.dotted", metricIsLoaded: true)
+            WorkspaceTool(id: "git", title: "Git", detail: "2 changed files", note: "Read only", icon: .git, metricIsLoaded: true)
         ],
         projects: []
     )

@@ -17,13 +17,29 @@ struct IAShellNavigationTests {
         #expect(!SidebarDestination.primary.contains(.settings))
     }
 
-    @Test func toolHubExcludesQuickTerminals() {
+    @Test func toolHubKeepsThePrototypeFourTiles() {
         let hub = ToolDestination.hubCases
+        // 更改 / 定时任务 / 搜索 / 屏幕, in that order.
+        #expect(hub.map(\.rawValue) == ["git", "scheduledTasks", "search", "screenText"])
+        #expect(hub.count == 4)
+        // Quick terminals live in 终端, and the desktop now lives under 屏幕.
         #expect(!hub.contains(.quickTerminals))
-        #expect(hub.map(\.rawValue) == ["git", "scheduledTasks", "search", "screenText", "desktop"])
-        // Quick terminals stay addressable (palette route), they just leave 工具.
-        #expect(ToolDestination.allCases.contains(.quickTerminals))
+        #expect(!hub.contains(.desktop))
         #expect(hub.map(\.title).allSatisfy { !$0.isEmpty })
+        // Both remain addressable for the palette and for the screen segments.
+        #expect(ToolDestination.allCases.contains(.quickTerminals))
+        #expect(ToolDestination.allCases.contains(.desktop))
+    }
+
+    @Test func toolHubUsesNocturneGlyphs() {
+        #expect(ToolDestination.hubCases.map(\.icon) == [.git, .clock, .search, .textview])
+        #expect(ToolDestination.desktop.icon == .desktop)
+        #expect(ToolDestination.quickTerminals.icon == .terminal)
+    }
+
+    @Test func screenPageSegmentsAreSnapshotThenDesktop() {
+        #expect(ScreenSegment.allCases.map(\.rawValue) == ["snapshot", "desktop"])
+        #expect(ScreenSegment.allCases.map(\.title) == [L("Snapshot"), L("Desktop")])
     }
 
     @Test func conversationListIsACPOnly() {

@@ -11,7 +11,18 @@ struct NocturneWorkspacePresentationTests {
             #expect(tile.id == destination.rawValue)
             #expect(tile.title == destination.title)
             #expect(tile.detail == destination.detail)
-            #expect(!tile.note.isEmpty)
+            #expect(tile.icon == destination.icon)
+            // Only screens the host cannot describe may leave the note blank.
+            #expect(tile.note.isEmpty == (destination == .screenText || destination == .desktop))
+        }
+    }
+
+    @Test func noToolInventsAViewOnlyState() {
+        let snapshot = NocturneWorkspaceSnapshot()
+        let viewOnly = String(localized: "View only")
+        for destination in ToolDestination.allCases {
+            let tile = NocturneWorkspacePresentation.tool(destination, snapshot: snapshot)
+            #expect(tile.note != viewOnly)
         }
     }
 

@@ -39,6 +39,9 @@ struct NocturneCommandShellTests {
         #expect(entries.count == ToolDestination.allCases.count)
         #expect(Set(entries.map(\.id)).count == entries.count)
         #expect(entries.map(\.target) == ToolDestination.allCases.map { .tool($0) })
+        // 桌面 left the 工具 grid but must stay reachable from the palette.
+        #expect(entries.contains { $0.target == .tool(.desktop) })
+        #expect(entries.contains { $0.target == .tool(.quickTerminals) })
     }
 
     @Test func archivedDeletedAndNonmatchingEntriesAreExcluded() throws {

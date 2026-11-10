@@ -15,6 +15,28 @@ enum NocturneToolMetrics {
 
 // MARK: - Screen scaffold
 
+/// Renders a catalog SF Symbol name with the Nocturne glyph set. Falls back to
+/// the SF Symbol only where no glyph exists yet (selection controls,
+/// `lock.slash`, `exclamationmark.triangle`), never to a wrong metaphor.
+struct NocturneGlyph: View {
+    @Environment(\.sePalette) private var palette
+
+    let systemImage: String
+    var size: CGFloat = 15
+    var stroke: CGFloat = 1.6
+    var color: Color?
+
+    var body: some View {
+        if let icon = SeIcon(systemName: systemImage) {
+            SeIconView(icon: icon, size: size, stroke: stroke, color: color ?? palette.inkSecondary)
+        } else {
+            Image(systemName: systemImage)
+                .font(.system(size: size, weight: .regular))
+                .foregroundStyle(color ?? palette.inkSecondary)
+        }
+    }
+}
+
 /// One scrolling screen in the prototype's visual language: a custom left
 /// aligned nav bar (back / title / mono subtitle) followed by screen content.
 struct NocturneToolScreen<Content: View>: View {
@@ -69,9 +91,7 @@ struct NocturneNavBar: View {
     var body: some View {
         HStack(spacing: 10) {
             Button(action: onBack) {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(palette.inkSecondary)
+                NocturneGlyph(systemImage: "chevron.left", size: 15, stroke: 1.7, color: palette.inkSecondary)
                     .frame(width: 32, height: 32)
                     .background(palette.card, in: RoundedRectangle(cornerRadius: NocturneToolMetrics.controlRadius))
                     .overlay {
@@ -115,20 +135,32 @@ struct NocturneIconButton: View {
     let systemImage: String
     let label: String
     let action: () -> Void
+    /// Use a glyph the SF Symbol table cannot express (`sidebar.left`).
+    var icon: SeIcon? = nil
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 15, weight: .regular))
-                .foregroundStyle(palette.inkSecondary)
-                .frame(width: 34, height: 34)
-                .background(palette.card, in: RoundedRectangle(cornerRadius: NocturneToolMetrics.controlRadius))
-                .overlay {
-                    RoundedRectangle(cornerRadius: NocturneToolMetrics.controlRadius)
-                        .strokeBorder(palette.stroke, lineWidth: 1)
-                }
-                .frame(width: NocturneToolMetrics.minimumTarget, height: NocturneToolMetrics.minimumTarget)
-                .contentShape(Rectangle())
+            if let icon {
+                SeIconView(icon: icon, size: 15, stroke: 1.7, color: palette.inkSecondary)
+                    .frame(width: 34, height: 34)
+                    .background(palette.card, in: RoundedRectangle(cornerRadius: NocturneToolMetrics.controlRadius))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: NocturneToolMetrics.controlRadius)
+                            .strokeBorder(palette.stroke, lineWidth: 1)
+                    }
+                    .frame(width: NocturneToolMetrics.minimumTarget, height: NocturneToolMetrics.minimumTarget)
+                    .contentShape(Rectangle())
+            } else {
+                NocturneGlyph(systemImage: systemImage, size: 15, stroke: 1.7, color: palette.inkSecondary)
+                    .frame(width: 34, height: 34)
+                    .background(palette.card, in: RoundedRectangle(cornerRadius: NocturneToolMetrics.controlRadius))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: NocturneToolMetrics.controlRadius)
+                            .strokeBorder(palette.stroke, lineWidth: 1)
+                    }
+                    .frame(width: NocturneToolMetrics.minimumTarget, height: NocturneToolMetrics.minimumTarget)
+                    .contentShape(Rectangle())
+            }
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
@@ -350,9 +382,7 @@ struct NocturneSessionCard: View {
                     .foregroundStyle(trailingTint ?? palette.inkTertiary)
             }
             if let trailingSystemImage {
-                Image(systemName: trailingSystemImage)
-                    .font(.system(size: 12, weight: .regular))
-                    .foregroundStyle(palette.inkTertiary)
+                NocturneGlyph(systemImage: trailingSystemImage, size: 12, color: palette.inkTertiary)
             }
         }
         .padding(.horizontal, 12)
@@ -461,7 +491,8 @@ struct NocturneRunButton: View {
         Button(role: role, action: action) {
             HStack(spacing: 5) {
                 if let systemImage {
-                    Image(systemName: systemImage).font(.system(size: 10, weight: .semibold))
+                    NocturneGlyph(systemImage: systemImage, size: 10, stroke: 1.7,
+                                  color: role == .destructive ? palette.danger : palette.inkSecondary)
                 }
                 Text(title)
                     .font(SeNocturneType.font(10, weight: .medium))
@@ -505,13 +536,18 @@ struct NocturneEmptyState: View {
     let systemImage: String
     let title: String
     var message: String? = nil
+    /// Use a glyph the SF Symbol table cannot express (for example the
+    /// screen-text `textview` mark behind `text.viewfinder`).
+    var icon: SeIcon? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 15, weight: .regular))
-                    .foregroundStyle(palette.inkTertiary)
+                if let icon {
+                    SeIconView(icon: icon, size: 15, color: palette.inkTertiary)
+                } else {
+                    NocturneGlyph(systemImage: systemImage, size: 15, color: palette.inkTertiary)
+                }
                 Text(title)
                     .font(SeNocturneType.font(13, weight: .semibold))
                     .foregroundStyle(palette.ink)
@@ -541,9 +577,8 @@ struct NocturneNotice: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 9) {
-            Image(systemName: isError ? "exclamationmark.triangle" : "info.circle")
-                .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(isError ? palette.danger : palette.inkTertiary)
+            NocturneGlyph(systemImage: isError ? "exclamationmark.triangle" : "info.circle",
+                          size: 13, color: isError ? palette.danger : palette.inkTertiary)
                 .padding(.top, 1)
             Text(message)
                 .font(SeNocturneType.font(10.5, weight: .regular))

@@ -35,13 +35,17 @@ enum NocturneWorkspacePresentation {
             note = String(localized: "Read only")
         case .screenText:
             detail = destination.detail
-            note = String(localized: "Matching terminal snapshot required")
+            // The hub snapshot carries no screen or desktop state. An empty note
+            // hides the line entirely instead of claiming "view only".
+            note = ""
         case .desktop:
             detail = destination.detail
-            note = String(localized: "View only")
+            // Control permission is decided by the host once the sheet connects;
+            // nothing here can truthfully summarize it.
+            note = ""
         }
         return WorkspaceTool(id: destination.rawValue, title: destination.title,
-                             detail: detail, note: note, systemImage: destination.symbol,
+                             detail: detail, note: note, icon: destination.icon,
                              metricIsLoaded: metricIsLoaded)
     }
 

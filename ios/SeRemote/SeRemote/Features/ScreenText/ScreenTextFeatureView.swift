@@ -1,16 +1,20 @@
 import SwiftUI
 import UIKit
 
-/// Manual, read-only host observation. It never watches, claims or mutates a
-/// PTY. Text is gated on a correlated `appliedSeq`; when the host cannot prove
-/// the snapshot matches a ready observer, the text stays hidden.
+/// 快照 segment of the 屏幕 page: a manual, read-only host observation. It never
+/// watches, claims or mutates a PTY. Text is gated on a correlated `appliedSeq`;
+/// when the host cannot prove the snapshot matches a ready observer, the text
+/// stays hidden.
+///
+/// Page chrome (nav bar, 快照 / 桌面 switch) belongs to `ScreenFeatureView`; this
+/// view only owns the scrolling snapshot content and the terminal selection.
 struct ScreenTextFeatureView: View {
     @Environment(\.sePalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let session: WorkspaceSession
+    @Binding var selectedId: String?
 
-    @State private var selectedId: String?
     @State private var reply: HostScreenReadReply?
     @State private var capturedAt: Date?
     @State private var loading = false
@@ -18,36 +22,32 @@ struct ScreenTextFeatureView: View {
     @State private var copied = 0
 
     var body: some View {
-        NocturneToolScreen(
-            title: String(localized: "Host screen text"),
-            subtitle: navSubtitle,
-            onRefresh: { await capture() }
-        ) {
-            content
-                .task {
-                    selectedId = session.terminals.activeId ?? session.terminals.terminals.first?.id
-                    if selectedId != nil { await capture() }
-                }
-                .onChange(of: selectedId) { _, _ in
-                    reply = nil
-                    capturedAt = nil
-                    errorMessage = nil
-                }
-                .seHaptic(.selection, trigger: copied)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                content
+            }
+            .padding(.bottom, 30)
         }
+        .scrollIndicators(.hidden)
+        .refreshable { await capture() }
+        .task {
+            if selectedId == nil {
+                selectedId = session.terminals.activeId ?? session.terminals.terminals.first?.id
+            }
+            if selectedId != nil { await capture() }
+        }
+        .onChange(of: selectedId) { _, _ in
+            reply = nil
+            capturedAt = nil
+            errorMessage = nil
+        }
+        .seHaptic(.selection, trigger: copied)
     }
 
     // MARK: Data
 
     private var terminal: LiveTerminal? {
         session.terminals.terminals.first(where: { $0.id == selectedId })
-    }
-
-    private var navSubtitle: String {
-        let host = session.origin.host() ?? String(localized: "Host")
-        guard let terminal else { return host }
-        let title = terminal.title.isEmpty ? terminal.id : terminal.title
-        return "\(host) · \(title)"
     }
 
     /// The single gate: a non-nil appliedSeq and a ready observation. `text` is
@@ -99,7 +99,8 @@ struct ScreenTextFeatureView: View {
             } else if !loading && errorMessage == nil {
                 NocturneEmptyState(
                     systemImage: "text.viewfinder",
-                    title: String(localized: "Ready to capture")
+                    title: String(localized: "Ready to capture"),
+                    icon: .textview
                 )
                 .padding(.horizontal, NocturneToolMetrics.gutter)
                 .padding(.top, 18)
@@ -110,9 +111,7 @@ struct ScreenTextFeatureView: View {
     private var intro: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                Image(systemName: "server.rack")
-                    .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(palette.inkTertiary)
+                SeIconView(icon: .server, size: 13, stroke: 1.6, color: palette.inkTertiary)
                 Text(verbatim: session.origin.host() ?? String(localized: "Connected host"))
                     .font(SeNocturneType.font(11, weight: .medium))
                     .foregroundStyle(palette.inkSecondary)
@@ -135,18 +134,14 @@ struct ScreenTextFeatureView: View {
             }
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: "terminal")
-                    .font(.system(size: 14, weight: .regular))
-                    .foregroundStyle(palette.inkTertiary)
+                SeIconView(icon: .terminal, size: 14, stroke: 1.6, color: palette.inkTertiary)
                 Text(verbatim: terminal.map { $0.title.isEmpty ? $0.id : $0.title }
                      ?? String(localized: "Choose a terminal"))
                     .font(SeNocturneType.font(12, weight: .medium))
                     .foregroundStyle(palette.ink)
                     .lineLimit(1)
                 Spacer(minLength: 8)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(palette.inkTertiary)
+                SeIconView(icon: .chevronUpDown, size: 11, stroke: 1.7, color: palette.inkTertiary)
             }
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity, minHeight: NocturneToolMetrics.minimumTarget, alignment: .leading)
@@ -244,7 +239,8 @@ struct ScreenTextFeatureView: View {
             NocturneEmptyState(
                 systemImage: "text.viewfinder",
                 title: String(localized: "Screen text is not available"),
-                message: String(localized: "Refresh after the terminal settles.")
+                message: String(localized: "Refresh after the terminal settles."),
+                icon: .textview
             )
             .padding(.horizontal, NocturneToolMetrics.gutter)
         }

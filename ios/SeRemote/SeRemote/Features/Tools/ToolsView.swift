@@ -25,14 +25,14 @@ struct ToolsView: View {
                             ForEach(ToolDestination.hubCases) { tool in
                                 NavigationLink(value: tool) {
                                     HStack(alignment: .top, spacing: SeSpace.sm) {
-                                        Image(systemName: tool.symbol).foregroundStyle(palette.ink)
+                                        SeIconView(icon: tool.icon, size: 16, stroke: 1.6, color: palette.ink)
                                             .frame(width: 28)
                                         VStack(alignment: .leading, spacing: SeSpace.xs) {
                                             Text(tool.title).font(SeNocturneType.rowTitle)
                                             Text(tool.detail).font(SeNocturneType.secondary).foregroundStyle(palette.inkSecondary)
                                         }
                                         Spacer(minLength: 0)
-                                        Image(systemName: "chevron.right").foregroundStyle(palette.inkTertiary)
+                                        SeIconView(icon: .chevron, size: 11, stroke: 1.6, color: palette.inkTertiary)
                                     }
                                     .frame(maxWidth: .infinity, minHeight: SeSpace.hitTarget, alignment: .leading)
                                     .padding(SeSpace.md)
@@ -67,7 +67,7 @@ struct WorkspaceToolDestinationView: View {
             case .scheduledTasks: ScheduledTasksFeatureView(session: session)
             case .quickTerminals: QuickTerminalsFeatureView(session: session)
             case .search: SearchFeatureView(session: session, onOpenFile: onOpenFile)
-            case .screenText: ScreenTextFeatureView(session: session)
+            case .screenText: ScreenFeatureView(session: session)
             case .desktop: DesktopFeatureView(session: session)
             }
         }
@@ -79,9 +79,13 @@ enum ToolDestination: String, CaseIterable, Identifiable, Hashable {
     case git, scheduledTasks, quickTerminals, search, screenText, desktop
     var id: String { rawValue }
 
-    /// The 工具 tab lists tools only. Quick terminals live in the 终端 tab, so
-    /// they keep their destination for the palette but leave this grid.
-    static var hubCases: [ToolDestination] { allCases.filter { $0 != .quickTerminals } }
+    /// 工具 lists exactly the prototype's four tiles, in prototype order:
+    /// 更改 / 定时任务 / 搜索 / 屏幕.
+    ///
+    /// Quick terminals live in the 终端 tab, and the desktop is reached from the
+    /// 屏幕 page's 桌面 segment and the ⌘ palette — both keep their destination
+    /// in `allCases`, they just leave this grid.
+    static var hubCases: [ToolDestination] { [.git, .scheduledTasks, .search, .screenText] }
     var title: String {
         switch self {
         case .git: String(localized: "Git")
@@ -92,15 +96,14 @@ enum ToolDestination: String, CaseIterable, Identifiable, Hashable {
         case .desktop: String(localized: "Desktop")
         }
     }
-    var systemImage: String { symbol }
-    var symbol: String {
+    var icon: SeIcon {
         switch self {
-        case .git: "point.3.connected.trianglepath.dotted"
-        case .scheduledTasks: "clock"
-        case .quickTerminals: "terminal"
-        case .search: "magnifyingglass"
-        case .screenText: "text.viewfinder"
-        case .desktop: "desktopcomputer"
+        case .git: .git
+        case .scheduledTasks: .clock
+        case .quickTerminals: .terminal
+        case .search: .search
+        case .screenText: .textview
+        case .desktop: .desktop
         }
     }
     var detail: String {
