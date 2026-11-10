@@ -62,17 +62,14 @@ describe('AgentHookSessionsPanel', () => {
     expect(await screen.findByText('No hook sessions')).toBeInTheDocument()
   })
 
-  it('renders the state, ready/restore flags, shortened ids and relative update time', async () => {
-    mocks.state.mockResolvedValue(
-      snapshot([{ ...hookState(), hook_at: Date.now() } as HookStateDto], 1)
-    )
+  it('renders the state, ready/restore flags and shortened ids', async () => {
+    mocks.state.mockResolvedValue(snapshot([hookState()], 1))
     render(<AgentHookSessionsPanel />)
 
     expect(await screen.findByText('Busy')).toBeInTheDocument()
     expect(screen.getByText('claude-code')).toBeInTheDocument()
     expect(screen.getByText('Yes')).toBeInTheDocument()
     expect(screen.getByText('Confirmed')).toBeInTheDocument()
-    expect(screen.getByText('just now')).toBeInTheDocument()
     expect(screen.getByText('pty-0123…')).toBeInTheDocument()
     expect(screen.getByText('project-…')).toBeInTheDocument()
     // Never render the full transcript path, cwd or complete opaque ids.

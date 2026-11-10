@@ -28,6 +28,8 @@ interface SettingsLayoutProps {
   sidebarFooter?: React.ReactNode
   /** Category to scroll to when the page opens, e.g. from a deep link. */
   initialSectionId?: string
+  /** Changes on every navigation so a repeated ?section= link scrolls again. */
+  sectionRequestKey?: string
 }
 
 /**
@@ -85,7 +87,8 @@ export function SettingsLayout({
   searchIndex,
   children,
   sidebarFooter,
-  initialSectionId
+  initialSectionId,
+  sectionRequestKey
 }: SettingsLayoutProps): React.JSX.Element {
   const { t } = useTranslation('settings')
   const contentRef = useRef<HTMLDivElement | null>(null)
@@ -118,9 +121,10 @@ export function SettingsLayout({
     target.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }, [])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: sectionRequestKey re-triggers the scroll for a repeated link to the same section.
   useEffect(() => {
     if (initialSectionId) scrollToSection(initialSectionId)
-  }, [initialSectionId, scrollToSection])
+  }, [initialSectionId, sectionRequestKey, scrollToSection])
 
   // Scroll-spy: highlight the section nearest the top of the viewport.
   useEffect(() => {

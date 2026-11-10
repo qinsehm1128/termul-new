@@ -59,10 +59,8 @@
       "project": "项目",
       "ready": "就绪",
       "restore": "恢复",
-      "updated": "更新",
       "yes": "是",
       "no": "否",
-      "justNow": "刚刚",
       "states": {
         "busy": "忙",
         "idle": "空闲",

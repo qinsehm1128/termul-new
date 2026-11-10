@@ -3,7 +3,6 @@ import { Info } from 'lucide-react'
 import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { formatRelative } from '@/i18n/format'
 import { agentHooksApi } from '@/lib/agent-hooks-api'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
@@ -21,18 +20,6 @@ const STATE_DOTS: Record<DerivedState, string> = {
 /** Opaque ids can be long; the panel only needs enough to tell sessions apart. */
 function shortId(value: string): string {
   return value.length > 10 ? `${value.slice(0, 8)}…` : value
-}
-
-function formatSince(at: number, justNow: string): string {
-  const seconds = Math.max(0, Math.round((Date.now() - at) / 1000))
-  if (seconds < 10) return justNow
-  const options = { numeric: 'auto', style: 'narrow' } as const
-  if (seconds < 60) return formatRelative(-seconds, 'second', options)
-  const minutes = Math.round(seconds / 60)
-  if (minutes < 60) return formatRelative(-minutes, 'minute', options)
-  const hours = Math.round(minutes / 60)
-  if (hours < 24) return formatRelative(-hours, 'hour', options)
-  return formatRelative(-Math.round(hours / 24), 'day', options)
 }
 
 function sortHookSessions(rows: AgentHookRuntimeState[]): AgentHookRuntimeState[] {
@@ -142,12 +129,6 @@ export function AgentHookSessionsPanel(): React.JSX.Element {
                   <dt>{text('restore', 'Restore')}</dt>
                   <dd>{text(`restoreStates.${row.restore_state}`, row.restore_state)}</dd>
                 </div>
-                {typeof row.hook_at === 'number' && (
-                  <div className="flex gap-1">
-                    <dt>{text('updated', 'Updated')}</dt>
-                    <dd>{formatSince(row.hook_at, text('justNow', 'just now'))}</dd>
-                  </div>
-                )}
               </dl>
             </li>
           ))}

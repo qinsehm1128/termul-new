@@ -124,6 +124,31 @@ describe('SettingsLayout', () => {
     expect(screen.getByRole('button', { name: 'Updates' })).toHaveAttribute('aria-current', 'true')
   })
 
+  it('scrolls again when a new navigation repeats the same section link', () => {
+    const scroll = window.HTMLElement.prototype.scrollIntoView as ReturnType<typeof vi.fn>
+    const tree = (key: string) => (
+      <SettingsLayout
+        categories={categories}
+        searchIndex={searchIndex}
+        initialSectionId="updates"
+        sectionRequestKey={key}
+      >
+        <SettingsSection id="appearance">
+          <h2>Appearance</h2>
+        </SettingsSection>
+        <SettingsSection id="updates">
+          <h2>Updates</h2>
+        </SettingsSection>
+      </SettingsLayout>
+    )
+    const { rerender } = render(tree('nav-1'))
+    const before = scroll.mock.calls.length
+    rerender(tree('nav-1'))
+    expect(scroll.mock.calls.length).toBe(before)
+    rerender(tree('nav-2'))
+    expect(scroll.mock.calls.length).toBe(before + 1)
+  })
+
   it('renders the section content tagged with the category id', () => {
     const { container } = renderLayout()
     expect(container.querySelector('[data-settings-section="appearance"]')).toBeInTheDocument()

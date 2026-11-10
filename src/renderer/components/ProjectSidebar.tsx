@@ -33,7 +33,16 @@ import {
   Webhook,
   X
 } from 'lucide-react'
-import { type KeyboardEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  type KeyboardEvent,
+  memo,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { TerminalScreenEngineSetting } from '@/components/TerminalScreenEngineSetting'
@@ -148,6 +157,7 @@ export function ProjectSidebar({
   const activeHookSessions = useAgentHookStateStore((state) =>
     countActiveHookSessions(state.states)
   )
+  const hooksShortcutHintId = useId()
   const {
     selectProject,
     selectGroup,
@@ -1640,14 +1650,16 @@ export function ProjectSidebar({
               <button
                 type="button"
                 onClick={() => navigate('/preferences?section=agent-hooks')}
-                aria-label={
-                  activeHookSessions > 0
-                    ? `${tSettings('agentHooks.shortcutLabel')} — ${tSettings('agentHooks.shortcutHint')} (${tSettings('agentHooks.activeSessions', { count: activeHookSessions })})`
-                    : `${tSettings('agentHooks.shortcutLabel')} — ${tSettings('agentHooks.shortcutHint')}`
-                }
+                aria-label={tSettings('agentHooks.shortcutLabel')}
+                aria-describedby={hooksShortcutHintId}
                 className="inline-flex h-7 w-full items-center gap-2 rounded px-1.5 text-xs text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 <Webhook size={14} aria-hidden="true" />
+                <span id={hooksShortcutHintId} className="sr-only">
+                  {activeHookSessions > 0
+                    ? `${tSettings('agentHooks.shortcutHint')} (${tSettings('agentHooks.activeSessions', { count: activeHookSessions })})`
+                    : tSettings('agentHooks.shortcutHint')}
+                </span>
                 <span className="truncate">{tSettings('agentHooks.shortcutLabel')}</span>
                 {activeHookSessions > 0 && (
                   <span

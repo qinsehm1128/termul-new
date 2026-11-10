@@ -427,7 +427,8 @@ const TERMINAL_RENDERER_TRANSLATION_KEYS = {
 
 export default function AppPreferences(): React.JSX.Element {
   const navigate = useNavigate()
-  const initialSectionId = new URLSearchParams(useLocation().search).get('section') ?? undefined
+  const location = useLocation()
+  const initialSectionId = new URLSearchParams(location.search).get('section') ?? undefined
   const { t: tSettings } = useTranslation('settings')
   const { t: tShell } = useTranslation('shell')
   const { t: tCommon } = useTranslation('common')
@@ -883,6 +884,7 @@ export default function AppPreferences(): React.JSX.Element {
           categories={categories}
           searchIndex={searchIndex}
           initialSectionId={initialSectionId}
+          sectionRequestKey={location.key}
         >
           {/* Terminal Appearance Section */}
           <SettingsSection id="appearance">

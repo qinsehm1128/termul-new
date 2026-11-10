@@ -1958,7 +1958,7 @@ describe('ProjectSidebar hooks shortcut', () => {
       </MemoryRouter>
     )
 
-    fireEvent.click(screen.getByRole('button', { name: /Open Hooks settings/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Hooks' }))
 
     expect(screen.getByTestId('location-url-probe')).toHaveTextContent(
       '/preferences?section=agent-hooks'
@@ -1976,8 +1976,8 @@ describe('ProjectSidebar hooks shortcut', () => {
 
     renderWithRouter()
 
-    const shortcut = screen.getByRole('button', { name: /Open Hooks settings/ })
+    const shortcut = screen.getByRole('button', { name: 'Hooks' })
     expect(shortcut).toHaveTextContent('1')
-    expect(shortcut).toHaveAccessibleName(/Active hook sessions: 1/)
+    expect(shortcut).toHaveAccessibleDescription(/Active hook sessions: 1/)
   })
 })

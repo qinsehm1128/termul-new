@@ -59,10 +59,8 @@
       "project": "Project",
       "ready": "Ready",
       "restore": "Restore",
-      "updated": "Updated",
       "yes": "Yes",
       "no": "No",
-      "justNow": "just now",
       "states": {
         "busy": "Busy",
         "idle": "Idle",
