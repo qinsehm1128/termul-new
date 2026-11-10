@@ -33,6 +33,9 @@ final class DesktopSocket {
     private(set) var displays: [DesktopDisplay] = []
     private(set) var selectedDisplay: String?
     private(set) var image: CGImage?
+    /// When `image` was decoded, so a capture can tell a live frame from a
+    /// stream that stopped hours ago. `nil` whenever `image` is `nil`.
+    private(set) var imageUpdatedAt: Date?
     /// Codec requested by the latest `start` / confirmed by `meta`.
     private(set) var activeCodec: DesktopCodec = .jpeg
     private(set) var issue: DesktopIssue?
@@ -63,6 +66,15 @@ final class DesktopSocket {
 
     func configure(http: HostHTTP) { self.http = http }
 
+    /// Whether an owner has asked this socket to stream. `close()` clears it,
+    /// and only for this instance: sockets never share lifecycle state.
+    var isOpen: Bool { visible }
+
+    private func publish(image: CGImage?) {
+        self.image = image
+        imageUpdatedAt = image == nil ? nil : Date()
+    }
+
     deinit { frameWorker.finish() }
 
     private func configureFrames(display: String?, newStream: Bool = false) {
@@ -77,7 +89,7 @@ final class DesktopSocket {
                     } else if update.needsKeyframe {
                         self.enqueue(["type": "keyframe"])
                     } else if let image = update.image {
-                        self.image = image
+                        self.publish(image: image)
                         self.state = .streaming
                     }
                 }
@@ -93,7 +105,7 @@ final class DesktopSocket {
             await previous?.value
             let preview = await worker.configure(generation: token, display: display, newStream: newStream)
             guard let self, self.frameGeneration == token, display != nil else { return }
-            self.image = preview
+            self.publish(image: preview)
         }
     }
 
@@ -120,7 +132,7 @@ final class DesktopSocket {
         visible = false
         disconnect()
         state = .revoked
-        image = nil
+        publish(image: nil)
         displays = []
     }
 
@@ -138,7 +150,7 @@ final class DesktopSocket {
         guard displays.contains(where: { $0.id == display }), display != selectedDisplay else { return }
         setControlActive(false)
         selectedDisplay = display
-        image = nil
+        publish(image: nil)
         configureFrames(display: display)
         issue = nil
         if authenticated {

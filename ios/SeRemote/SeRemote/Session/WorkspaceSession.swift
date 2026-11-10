@@ -72,6 +72,9 @@ final class WorkspaceSession {
     /// PTY geometry must stay active instead of parking between tab switches.
     var isWideLayout = false
     private(set) var isBackgrounded = false
+    /// Whether the host serves the remote desktop. `nil` until probed: unknown
+    /// hides nothing, `false` hides every desktop entry.
+    private(set) var desktopSupported: Bool?
     private var isStarting = false
     private var reconnectTask: Task<Void, Never>?
     /// Host-backed running state (live terminals + live agent processes) is
@@ -189,6 +192,7 @@ final class WorkspaceSession {
             guard startEpoch == epoch else { return }
             phase = .connected
             startRunningRefresh()
+            await refreshDesktopSupport()
             HostLog.session.info("Host connect succeeded")
         } catch is CancellationError {
             HostLog.session.info("Host connect cancelled")
@@ -203,6 +207,7 @@ final class WorkspaceSession {
                 // other scopes and the mounted workspace remain usable.
                 phase = .connected
                 startRunningRefresh()
+                await refreshDesktopSupport()
                 return
             }
             HostLog.session.error("Host connect failed after restart-safe retries")
@@ -269,6 +274,14 @@ final class WorkspaceSession {
         await liveAgents.refresh()
     }
 
+    /// Re-probe on connect and on foreground so a host upgrade or downgrade is
+    /// picked up without reopening the workspace. Failure keeps the last answer.
+    func refreshDesktopSupport() async {
+        guard phase == .connected else { return }
+        guard let info = try? await http.desktopInfo() else { return }
+        desktopSupported = info.supported
+    }
+
     func handleScene(isBackground: Bool) {
         isBackgrounded = isBackground
         guard phase != .revoked else { return }
@@ -283,6 +296,7 @@ final class WorkspaceSession {
             Task { [weak self] in
                 guard let self, self.phase == .connected else { return }
                 await self.refreshRunningState()
+                await self.refreshDesktopSupport()
             }
         }
     }

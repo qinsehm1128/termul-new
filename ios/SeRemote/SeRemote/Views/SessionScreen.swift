@@ -21,7 +21,6 @@ struct SessionScreen: View {
     @State private var filesVisibility: NavigationSplitViewVisibility = .detailOnly
     @State private var showTools = false
     @State private var showDesktopSheet = false
-    @State private var desktopSupported: Bool?
     @State private var tabForward = true
 
     private var columns: SeLayout.Columns {
@@ -59,7 +58,6 @@ struct SessionScreen: View {
         .sheet(isPresented: $showDesktopSheet) {
             DesktopQuickSheet(
                 hostName: deviceLink?.title ?? String(localized: "Desktop"),
-                socket: session.desktopSocket,
                 sender: DesktopShotSender(
                     http: session.http,
                     chat: session.chat,
@@ -72,10 +70,6 @@ struct SessionScreen: View {
                     agentChatTerminalID: nil
                 ) ?? .chat(conversationID: session.conversations.active?.id)
             )
-        }
-        .task {
-            guard desktopSupported == nil else { return }
-            desktopSupported = (try? await session.http.desktopInfo())?.supported
         }
         .task(id: workspaceTaskId) {
             if session.phase == .connected { await session.refreshActiveTerminals() }
@@ -201,7 +195,7 @@ struct SessionScreen: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
 
-            if desktopSupported != false {
+            if session.desktopSupported != false {
                 Button {
                     showDesktopSheet = true
                 } label: {

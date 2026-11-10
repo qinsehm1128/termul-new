@@ -68,6 +68,7 @@ struct QuickTerminalConsoleView: View {
             TerminalAgentChatContainer(
                 terminalID: terminalId, http: session.http,
                 canView: deviceLink?.allows("view") ?? true, canInput: allowsInput,
+                desktopSupported: session.desktopSupported,
                 dismissTerminalKeyboard: { session.dismissTerminalKeyboard() }
             ) {
                 terminalBody

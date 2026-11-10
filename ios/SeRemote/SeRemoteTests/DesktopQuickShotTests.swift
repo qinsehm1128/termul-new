@@ -220,7 +220,8 @@ struct AttachmentStageTests {
         #expect(AttachmentStageError(code: "FORBIDDEN", statusCode: 403) == .scopeMissing)
         #expect(AttachmentStageError(code: nil, statusCode: 403) == .scopeMissing)
         #expect(AttachmentStageError(code: "INTERNAL", statusCode: 500) == .failed("INTERNAL"))
-        #expect(AttachmentStageError.scopeMissing.message.contains("permission"))
+        #expect(AttachmentStageError.scopeMissing.message
+            == String(localized: "This device needs terminal input permission to stage screenshots."))
     }
 }
 
@@ -252,5 +253,126 @@ struct ChatPromptContentTests {
         let blocks = ChatPromptContent.blocks(text: "hi", image: weird)
         #expect(blocks.count == 1)
         #expect(blocks[0]["type"] as? String == "text")
+    }
+}
+
+@Suite("Desktop capture freshness")
+struct DesktopFrameFreshnessTests {
+    private let now = Date(timeIntervalSince1970: 1_000_000)
+
+    @Test func streamFrameIsFreshWithinTwoSeconds() {
+        #expect(DesktopFrameFreshness.isFresh(updatedAt: now, now: now))
+        #expect(DesktopFrameFreshness.isFresh(updatedAt: now.addingTimeInterval(-1.9), now: now))
+        #expect(DesktopFrameFreshness.isFresh(updatedAt: now.addingTimeInterval(0.2), now: now))
+    }
+
+    @Test func olderFrameNeedsAFreshScreenshot() {
+        #expect(!DesktopFrameFreshness.isFresh(updatedAt: now.addingTimeInterval(-2.5), now: now))
+        #expect(!DesktopFrameFreshness.isFresh(updatedAt: .distantPast, now: now))
+        #expect(!DesktopFrameFreshness.isFresh(updatedAt: nil, now: now))
+    }
+
+    @Test func selectionScalesOntoAReplacementImage() {
+        let selection = CGRect(x: 100, y: 50, width: 400, height: 200)
+        let scaled = DesktopShotGeometry.scaledSelection(
+            selection,
+            from: CGSize(width: 1920, height: 1080),
+            to: CGSize(width: 960, height: 540)
+        )
+        #expect(scaled == CGRect(x: 50, y: 25, width: 200, height: 100))
+
+        let upscaled = DesktopShotGeometry.scaledSelection(
+            CGRect(x: 10, y: 10, width: 20, height: 20),
+            from: CGSize(width: 100, height: 100),
+            to: CGSize(width: 200, height: 400)
+        )
+        #expect(upscaled == CGRect(x: 20, y: 40, width: 40, height: 80))
+    }
+
+    @Test func selectionSurvivesAnUnknownDisplayedSize() {
+        let selection = CGRect(x: 1, y: 2, width: 3, height: 4)
+        #expect(DesktopShotGeometry.scaledSelection(selection, from: .zero, to: CGSize(width: 800, height: 600)) == selection)
+        #expect(DesktopShotGeometry.scaledSelection(selection, from: CGSize(width: 800, height: 600), to: .zero) == selection)
+    }
+}
+
+@Suite("Staged path shell escaping")
+struct DesktopShellPathTests {
+    @Test func spaceFreeHostPathIsTypedVerbatim() {
+        #expect(DesktopShellPath.stagedArgument("/var/folders/6t/abc123/T/seremote-shot-1.png")
+            == "/var/folders/6t/abc123/T/seremote-shot-1.png ")
+    }
+
+    @Test func spacesAndMetacharactersAreSingleQuoted() {
+        #expect(DesktopShellPath.stagedArgument("/Users/qs/Library/Application Support/shot.png")
+            == "'/Users/qs/Library/Application Support/shot.png' ")
+        #expect(DesktopShellPath.stagedArgument("/tmp/a&b;c.png") == "'/tmp/a&b;c.png' ")
+        #expect(DesktopShellPath.stagedArgument("/tmp/截图.png") == "'/tmp/截图.png' ")
+    }
+
+    @Test func embeddedSingleQuoteIsClosedAndReopened() {
+        #expect(DesktopShellPath.escaped("/tmp/o'brien.png") == "'/tmp/o'\\''brien.png'")
+        #expect(DesktopShellPath.stagedArgument("/tmp/o'brien.png").hasSuffix(" "))
+    }
+
+    @Test func emptyPathStillProducesTheTrailingSpace() {
+        #expect(DesktopShellPath.stagedArgument("") == " ")
+    }
+}
+
+@Suite("Desktop encoder seeding")
+struct DesktopShotEncoderSeedTests {
+    @Test func largeCropStartsAlreadyDownscaled() throws {
+        let image = try #require(DesktopShotGeometryTests.makeImage(width: 4096, height: 4096))
+        let scales = DesktopShotEncoder.attemptScales(for: image)
+        let first = try #require(scales.first)
+        #expect(first < 0.1)
+        #expect(scales == scales.sorted(by: >))
+        #expect(!scales.contains(1))
+    }
+
+    @Test func smallCropStillStartsAtFullResolution() throws {
+        let image = try #require(DesktopShotGeometryTests.makeImage(width: 320, height: 200))
+        #expect(DesktopShotEncoder.attemptScales(for: image) == DesktopShotEncoder.chatScales)
+    }
+
+    @Test func seededQualitySkipsAttemptsThatCannotFit() {
+        let qualities = DesktopShotEncoder.attemptQualities(pixels: 122_880)
+        #expect(qualities.first == 0.54)
+        #expect(!qualities.contains(0.82))
+        #expect(qualities == DesktopShotEncoder.chatQualities.filter { $0 <= 0.54 })
+    }
+
+    @Test func generousBudgetStartsAtBestQuality() {
+        #expect(DesktopShotEncoder.attemptQualities(pixels: 1_000).first == 0.82)
+        #expect(DesktopShotEncoder.attemptQualities(pixels: 80_000).first == 0.68)
+        #expect(DesktopShotEncoder.attemptQualities(pixels: 120_000).first == 0.54)
+    }
+
+    @Test func noisyCropIsDownscaledBeforeTheBudgetLoop() throws {
+        let image = try #require(DesktopShotGeometryTests.makeImage(width: 1200, height: 800))
+        let shot = try #require(DesktopShotEncoder.encodeForChat(image))
+        #expect(shot.data.count <= DesktopShotEncoder.maxInlineBytes)
+        #expect(shot.pixelSize.width <= 500)
+    }
+
+    @Test func detachedEncodingKeepsTheBudget() async throws {
+        let image = try #require(DesktopShotGeometryTests.makeImage(width: 1200, height: 800))
+        let shot = try #require(await DesktopShotEncoder.encodeForChatDetached(image))
+        #expect(shot.data.count <= DesktopShotEncoder.maxInlineBytes)
+        #expect(shot.mimeType == "image/jpeg")
+        let aspect = shot.pixelSize.width / shot.pixelSize.height
+        #expect(abs(aspect - 1.5) < 0.02)
+    }
+}
+
+@Suite("Chat send failure mapping")
+struct ChatSendFailureTests {
+    @Test func failuresUseExistingLocalizedSentences() {
+        #expect(ChatSendFailure.host.message == ChatSendFailure.notConnected.message)
+        #expect(ChatSendFailure.host.message == String(localized: "The screenshot could not be sent."))
+        #expect(ChatSendFailure.noAgent.message != ChatSendFailure.host.message)
+        #expect(DesktopShotSendError.chat(.host).message == ChatSendFailure.host.message)
+        #expect(DesktopShotSendError.noTerminal.message == ChatSendFailure.host.message)
     }
 }

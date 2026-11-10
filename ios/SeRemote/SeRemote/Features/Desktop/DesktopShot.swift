@@ -158,6 +158,53 @@ nonisolated enum DesktopShotGeometry {
             height: rect.height / frame.height * imageSize.height
         )
     }
+
+    /// Maps a selection drawn on one screenshot onto a replacement image of a
+    /// different pixel size, so a fresh capture keeps the same region.
+    static func scaledSelection(_ rect: CGRect, from displayed: CGSize, to replacement: CGSize) -> CGRect {
+        guard displayed.width > 0, displayed.height > 0,
+              replacement.width > 0, replacement.height > 0 else { return rect }
+        let scaleX = replacement.width / displayed.width
+        let scaleY = replacement.height / displayed.height
+        return CGRect(
+            x: rect.minX * scaleX,
+            y: rect.minY * scaleY,
+            width: rect.width * scaleX,
+            height: rect.height * scaleY
+        )
+    }
+}
+
+/// Decides whether the streamed frame is recent enough to crop at send time.
+/// A stale frame describes a desktop state the user may no longer be looking at.
+nonisolated enum DesktopFrameFreshness {
+    static let maxAge: TimeInterval = 2
+
+    static func isFresh(
+        updatedAt: Date?,
+        now: Date = Date(),
+        maxAge: TimeInterval = maxAge
+    ) -> Bool {
+        guard let updatedAt, maxAge > 0 else { return false }
+        let age = now.timeIntervalSince(updatedAt)
+        return age.isFinite && abs(age) <= maxAge
+    }
+}
+
+/// Quotes a staged host path for the shell so a path with spaces or quotes can
+/// be typed into a PTY or an agent draft verbatim.
+nonisolated enum DesktopShellPath {
+    private static let bare = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._/-")
+
+    static func escaped(_ path: String) -> String {
+        guard !path.unicodeScalars.allSatisfy(bare.contains) else { return path }
+        return "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    /// Escaped path plus the trailing space that commits a prompt.
+    static func stagedArgument(_ path: String) -> String {
+        escaped(path) + " "
+    }
 }
 
 nonisolated enum DesktopShotCropper {
@@ -176,16 +223,23 @@ nonisolated enum DesktopShotCropper {
 nonisolated enum DesktopShotEncoder {
     static let maxInlineBytes = 144 * 1024
 
-    static let chatScales: [CGFloat] = [1, 0.85, 0.7, 0.55, 0.45, 0.35, 0.27, 0.2, 0.14, 0.1, 0.07]
+    /// Rough JPEG density used to pick the first attempt; acceptance is always
+    /// the real encoded size, so this only affects latency, never the guarantee.
+    static let chatBytesPerPixel: CGFloat = 1.2
+
+    static let chatScales: [CGFloat] = [
+        1, 0.85, 0.7, 0.55, 0.45, 0.35, 0.27, 0.2, 0.14, 0.1,
+        0.07, 0.05, 0.035, 0.025, 0.018, 0.012
+    ]
     static let chatQualities: [CGFloat] = [0.82, 0.68, 0.54, 0.42, 0.32, 0.24, 0.18, 0.12]
 
     static func encodeForChat(_ image: CGImage, maxBytes: Int = maxInlineBytes) -> ShotAttachment? {
         guard image.width > 0, image.height > 0, maxBytes > 0 else { return nil }
-        for scale in chatScales {
+        for scale in attemptScales(for: image, maxBytes: maxBytes) {
             let size = scaledSize(of: image, by: scale)
             guard let scaled = resize(image, to: size) else { continue }
             let ui = UIImage(cgImage: scaled)
-            for quality in chatQualities {
+            for quality in attemptQualities(pixels: size.width * size.height, maxBytes: maxBytes) {
                 guard let data = ui.jpegData(compressionQuality: quality), data.count <= maxBytes else { continue }
                 return ShotAttachment(
                     data: data,
@@ -195,6 +249,48 @@ nonisolated enum DesktopShotEncoder {
             }
         }
         return nil
+    }
+
+    /// Carries an immutable `CGImage` into the detached encode task.
+    private struct SendableImage: @unchecked Sendable {
+        let image: CGImage
+
+        init(_ image: CGImage) { self.image = image }
+    }
+
+    /// Same budget loop, run off the main actor so a large crop cannot hitch the
+    /// sheet. `CGImage` is immutable, hence the unchecked box.
+    static func encodeForChatDetached(_ image: CGImage, maxBytes: Int = maxInlineBytes) async -> ShotAttachment? {
+        let box = SendableImage(image)
+        return await Task.detached(priority: .userInitiated) {
+            encodeForChat(box.image, maxBytes: maxBytes)
+        }.value
+    }
+
+    /// First attempt is sized so the byte budget is about 1.2 bytes per pixel;
+    /// the ladder continues below it, so the loop still ends in `nil`.
+    static func attemptScales(for image: CGImage, maxBytes: Int = maxInlineBytes) -> [CGFloat] {
+        let pixels = CGFloat(image.width) * CGFloat(image.height)
+        guard pixels > 0, maxBytes > 0, let floor = chatScales.last else { return chatScales }
+        let seed = sqrt(CGFloat(maxBytes) / chatBytesPerPixel / pixels)
+        guard seed < 1 else { return chatScales }
+        return [max(seed, floor)] + chatScales.filter { $0 < seed }
+    }
+
+    /// Quality ladder for one scale. Starting at 0.82 for a large crop wastes
+    /// full-resolution encodes that cannot possibly fit the budget.
+    static func attemptQualities(pixels: CGFloat, maxBytes: Int = maxInlineBytes) -> [CGFloat] {
+        guard pixels > 0, maxBytes > 0, chatQualities.count > 2 else { return chatQualities }
+        let density = CGFloat(maxBytes) / pixels
+        let start: CGFloat
+        if density >= 2.4 {
+            start = chatQualities[0]
+        } else if density >= 1.6 {
+            start = chatQualities[1]
+        } else {
+            start = chatQualities[2]
+        }
+        return [start] + chatQualities.filter { $0 < start }
     }
 
     static func encodePNG(_ image: CGImage) -> ShotAttachment? {

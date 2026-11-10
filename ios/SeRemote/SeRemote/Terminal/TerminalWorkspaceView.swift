@@ -17,7 +17,6 @@ struct TerminalWorkspaceView: View {
     @State private var controlModifier = TerminalControlModifier()
     @State private var desktopTerminalId: String?
     @State private var showDesktop = false
-    @State private var desktopSupported: Bool?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,6 +28,7 @@ struct TerminalWorkspaceView: View {
                 TerminalAgentChatContainer(
                     terminalID: id, http: session.http,
                     canView: deviceLink?.allows("view") ?? true, canInput: allowsInput,
+                    desktopSupported: session.desktopSupported,
                     dismissTerminalKeyboard: { session.dismissTerminalKeyboard() }
                 ) {
                     terminalCanvas(id: id)
@@ -108,7 +108,7 @@ struct TerminalWorkspaceView: View {
             .accessibilityLabel(Text(session.terminals.displayMode == .phone
                 ? "Switch to desktop fit" : "Fit the phone"))
             .accessibilityValue(Text(session.terminals.displayMode == .phone ? String(localized: "Active") : String(localized: "Idle")))
-            if desktopSupported != false, let terminalId = session.terminals.activeId {
+            if session.desktopSupported != false, let terminalId = session.terminals.activeId {
                 Button {
                     desktopTerminalId = terminalId
                     showDesktop = true
@@ -142,7 +142,6 @@ struct TerminalWorkspaceView: View {
             if let terminalId = desktopTerminalId {
                 DesktopQuickSheet(
                     hostName: String(localized: "Desktop"),
-                    socket: session.desktopSocket,
                     sender: DesktopShotSender(
                         http: session.http,
                         chat: session.chat,
@@ -152,10 +151,6 @@ struct TerminalWorkspaceView: View {
                     target: .terminal(id: terminalId)
                 )
             }
-        }
-        .task {
-            guard desktopSupported == nil else { return }
-            desktopSupported = (try? await session.http.desktopInfo())?.supported
         }
     }
 

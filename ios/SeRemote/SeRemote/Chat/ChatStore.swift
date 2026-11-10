@@ -27,6 +27,23 @@ struct ChatImageAttachment: Hashable, Codable, Sendable {
     }
 }
 
+/// Why an image prompt did not reach the host. Callers map this to a localized
+/// sentence instead of surfacing `errorMessage` (host text) or a generic notice.
+nonisolated enum ChatSendFailure: Error, Equatable, Sendable {
+    case noAgent
+    case notConnected
+    case host
+
+    var message: String {
+        switch self {
+        case .noAgent:
+            String(localized: "No agent is running on the host. Start one on the desktop, then try again.")
+        case .notConnected, .host:
+            String(localized: "The screenshot could not be sent.")
+        }
+    }
+}
+
 /// ACP `ContentBlock` shapes. Kept separate from the socket so the wire JSON is
 /// unit-testable.
 nonisolated enum ChatPromptContent {
@@ -520,15 +537,15 @@ final class ChatStore {
 
     /// Sends a region screenshot as an ACP image block plus an optional caption.
     /// The image must already be encoded to ≤ 144 KiB by `DesktopShotEncoder`.
-    @discardableResult
-    func sendImage(_ shot: ShotAttachment, caption: String = "", in conversation: HostConversation? = nil) async -> Bool {
+    /// Returns `nil` when the host accepted the turn, else the mapped reason.
+    func sendImage(_ shot: ShotAttachment, caption: String = "", in conversation: HostConversation? = nil) async -> ChatSendFailure? {
         await dispatch(text: caption, image: ChatImageAttachment(shot), in: conversation)
     }
 
     @discardableResult
-    private func dispatch(text: String, image: ChatImageAttachment?, in conversation: HostConversation?) async -> Bool {
+    private func dispatch(text: String, image: ChatImageAttachment?, in conversation: HostConversation?) async -> ChatSendFailure? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty || image != nil else { return false }
+        guard !trimmed.isEmpty || image != nil else { return .host }
         if activeSessionId == nil, let conversation {
             await startInConversation(conversation)
         }
@@ -536,8 +553,9 @@ final class ChatStore {
         guard let socket, let sessionId = activeSessionId, let agentId = activeAgentId else {
             if activeAgentId == nil {
                 errorMessage = String(localized: "No agent is running on the host. Start one on the desktop, then try again.")
+                return .noAgent
             }
-            return false
+            return .notConnected
         }
         isSending = true
         let turnId = UUID().uuidString
@@ -570,15 +588,18 @@ final class ChatStore {
             )
             markDelivery(messageId, .accepted)
             isSending = false
-            return true
+            return nil
         } catch {
             if markDelivery(messageId, .failed) {
                 errorMessage = error.localizedDescription
-            } else {
-                HostLog.session.info("Prompt wait ended after the host already accepted it")
+                isSending = false
+                return .host
             }
+            // The host already accepted the turn: the image bubble is delivered
+            // even though waiting for the reply failed.
+            HostLog.session.info("Prompt wait ended after the host already accepted it")
             isSending = false
-            return false
+            return nil
         }
     }
 

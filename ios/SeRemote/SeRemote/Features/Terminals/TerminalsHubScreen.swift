@@ -25,7 +25,6 @@ struct TerminalsHubScreen: View {
     @State private var refreshing = false
     @State private var pendingRefresh = false
     @State private var desktopSheet: HubDesktopRequest?
-    @State private var desktopSupported: Bool?
 
     private struct HubDesktopRequest: Identifiable {
         let terminalId: String
@@ -79,7 +78,6 @@ struct TerminalsHubScreen: View {
         .sheet(item: $desktopSheet) { request in
             DesktopQuickSheet(
                 hostName: hostName,
-                socket: session.desktopSocket,
                 sender: DesktopShotSender(
                     http: session.http,
                     chat: session.chat,
@@ -89,10 +87,6 @@ struct TerminalsHubScreen: View {
                 target: .terminal(id: request.terminalId),
                 startsInViewfinder: request.viewfinder
             )
-        }
-        .task {
-            guard desktopSupported == nil else { return }
-            desktopSupported = (try? await session.http.desktopInfo())?.supported
         }
     }
 
@@ -211,7 +205,7 @@ struct TerminalsHubScreen: View {
     // MARK: - Rows
 
     private func terminalRow(_ terminal: TerminalsHubTerminal) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 12) {
             Button {
                 // The workbench terminal stays mounted (opacity 0) behind the hub.
                 // Presenting a full-screen console while it holds first responder
@@ -253,28 +247,27 @@ struct TerminalsHubScreen: View {
             .accessibilityValue(Text(terminal.hasRunningAgent ? String(localized: "Agent running") : ""))
             .accessibilityHint(Text("Opens the running shell. Detaching leaves it running on the host."))
 
-            if desktopSupported != false {
-                Button {
-                    desktopSheet = HubDesktopRequest(
-                        terminalId: terminal.id,
-                        title: terminal.title,
-                        viewfinder: false
+            // One gesture path, so a press is never both a tap and a long press.
+            // The trailing 12pt gap keeps this 44pt target clear of the row's
+            // open button above.
+            if session.desktopSupported != false {
+                viewfinderCapsule
+                    .gesture(
+                        LongPressGesture(minimumDuration: 0.4)
+                            .exclusively(before: TapGesture())
+                            .onEnded { value in
+                                switch value {
+                                case .first: openDesktop(terminal, viewfinder: true)
+                                case .second: openDesktop(terminal, viewfinder: false)
+                                }
+                            }
                     )
-                } label: {
-                    viewfinderCapsule
-                }
-                .buttonStyle(.plain)
-                .simultaneousGesture(
-                    LongPressGesture(minimumDuration: 0.4).onEnded { _ in
-                        desktopSheet = HubDesktopRequest(
-                            terminalId: terminal.id,
-                            title: terminal.title,
-                            viewfinder: true
-                        )
-                    }
-                )
-                .accessibilityLabel(Text("Viewfinder"))
-                .accessibilityHint(Text("Opens the desktop. Long press opens the viewfinder."))
+                    .accessibilityElement()
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityLabel(Text("Viewfinder"))
+                    .accessibilityHint(Text("Opens the desktop. Long press opens the viewfinder."))
+                    .accessibilityAction { openDesktop(terminal, viewfinder: false) }
+                    .accessibilityAction(named: Text("Viewfinder")) { openDesktop(terminal, viewfinder: true) }
             }
         }
         .padding(12)
@@ -284,6 +277,14 @@ struct TerminalsHubScreen: View {
             RoundedRectangle(cornerRadius: 12)
                 .strokeBorder(palette.stroke, lineWidth: 1)
         }
+    }
+
+    private func openDesktop(_ terminal: TerminalsHubTerminal, viewfinder: Bool) {
+        desktopSheet = HubDesktopRequest(
+            terminalId: terminal.id,
+            title: terminal.title,
+            viewfinder: viewfinder
+        )
     }
 
     private var viewfinderCapsule: some View {

@@ -37,6 +37,32 @@ struct DesktopSocketTests {
         #expect(!stale)
     }
 
+    /// The quick sheet streams on its own socket. Closing it must leave the
+    /// Screen page's live desktop alone (regression guard for one shared socket).
+    @Test func closingOneOwnerLeavesTheOtherSocketOpen() async {
+        let origin = URL(string: "http://localhost:53240")!
+        let credentials = HostCredentials(accessURL: origin, bearer: "fixture")
+        let screen = DesktopSocket()
+        let sheet = DesktopSocket()
+        for socket in [screen, sheet] {
+            socket.configure(http: HostHTTP(origin: origin, credentials: credentials))
+            await socket.open()
+        }
+        #expect(screen.isOpen)
+        #expect(sheet.isOpen)
+
+        sheet.close()
+
+        #expect(!sheet.isOpen)
+        #expect(screen.isOpen)
+        for _ in 0 ..< 100 where screen.state == .idle {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(screen.state != .idle)
+        screen.close()
+        #expect(!screen.isOpen)
+    }
+
     @Test func revokedDesktopNeverReconnectsOrResumes() async {
         let socket = DesktopSocket()
         let origin = URL(string: "http://localhost:53238")!

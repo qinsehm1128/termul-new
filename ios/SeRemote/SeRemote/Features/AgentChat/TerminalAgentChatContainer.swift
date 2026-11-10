@@ -6,13 +6,12 @@ struct TerminalAgentChatContainer<Terminal: View>: View {
     @State private var store: AgentChatStore
     @AppStorage private var showConversation: Bool
     @Environment(\.sePalette) private var palette
-    @State private var desktopSocket = DesktopSocket()
     @State private var showDesktop = false
-    @State private var desktopSupported: Bool?
     private let terminalID: String
     private let http: HostHTTP
     private let canView: Bool
     private let canInput: Bool
+    private let desktopSupported: Bool?
     private let dismissTerminalKeyboard: () -> Void
     private let terminal: Terminal
 
@@ -21,6 +20,7 @@ struct TerminalAgentChatContainer<Terminal: View>: View {
         http: HostHTTP,
         canView: Bool,
         canInput: Bool,
+        desktopSupported: Bool? = nil,
         dismissTerminalKeyboard: @escaping () -> Void,
         @ViewBuilder terminal: () -> Terminal
     ) {
@@ -33,6 +33,7 @@ struct TerminalAgentChatContainer<Terminal: View>: View {
         self.http = http
         self.canView = canView
         self.canInput = canInput
+        self.desktopSupported = desktopSupported
         self.dismissTerminalKeyboard = dismissTerminalKeyboard
         self.terminal = terminal()
     }
@@ -95,7 +96,6 @@ struct TerminalAgentChatContainer<Terminal: View>: View {
         .sheet(isPresented: $showDesktop) {
             DesktopQuickSheet(
                 hostName: String(localized: "Desktop"),
-                socket: desktopSocket,
                 sender: DesktopShotSender(
                     http: http,
                     draftAgentChat: { terminalID, text in
@@ -104,10 +104,6 @@ struct TerminalAgentChatContainer<Terminal: View>: View {
                 ),
                 target: .agentChat(id: terminalID)
             )
-        }
-        .task {
-            guard desktopSupported == nil else { return }
-            desktopSupported = (try? await http.desktopInfo())?.supported
         }
         .onReceive(NotificationCenter.default.publisher(for: .agentChatDraft)) { note in
             guard note.object as? String == terminalID,

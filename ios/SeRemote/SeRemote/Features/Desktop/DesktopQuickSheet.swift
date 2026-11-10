@@ -38,8 +38,16 @@ nonisolated enum DesktopShotTargetResolver {
 }
 
 nonisolated enum DesktopShotSendError: Error, Equatable {
-    case chatUnavailable
+    case chat(ChatSendFailure)
     case noTerminal
+
+    /// Localized sentence for the notice pill. Host text never reaches the UI.
+    var message: String {
+        switch self {
+        case let .chat(failure): failure.message
+        case .noTerminal: String(localized: "The screenshot could not be sent.")
+        }
+    }
 }
 
 /// Delivers captures through the routes each session type already supports.
@@ -56,21 +64,22 @@ struct DesktopShotSender {
     func send(_ shot: ShotAttachment, to target: DesktopShotTarget) async throws {
         switch target {
         case .chat:
-            guard let chat else { throw DesktopShotSendError.chatUnavailable }
-            let delivered = await chat.sendImage(
+            guard let chat else { throw DesktopShotSendError.chat(.notConnected) }
+            if let failure = await chat.sendImage(
                 shot,
                 caption: String(localized: "Screenshot from desktop"),
                 in: conversation
-            )
-            guard delivered else { throw DesktopShotSendError.chatUnavailable }
+            ) {
+                throw DesktopShotSendError.chat(failure)
+            }
         case let .terminal(id):
             guard let terminals else { throw DesktopShotSendError.noTerminal }
             let staged = try await http.stageAttachment(shot)
             await terminals.open(id)
-            await terminals.write(staged.path + " ")
+            await terminals.write(DesktopShellPath.stagedArgument(staged.path))
         case let .agentChat(id):
             let staged = try await http.stageAttachment(shot)
-            draftAgentChat?(id, staged.path + " ")
+            draftAgentChat?(id, DesktopShellPath.stagedArgument(staged.path))
         }
     }
 }
@@ -79,7 +88,6 @@ struct DesktopShotSender {
 /// viewfinder mode that dims the frame and sends the selected region.
 struct DesktopQuickSheet: View {
     let hostName: String
-    let socket: DesktopSocket
     let sender: DesktopShotSender
     let target: DesktopShotTarget
     var startsInViewfinder: Bool = false
@@ -88,6 +96,9 @@ struct DesktopQuickSheet: View {
     @Environment(\.sePalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// The sheet streams on its own socket: closing it must never stop the
+    /// Screen page's live desktop, which keeps `WorkspaceSession.desktopSocket`.
+    @State private var socket = DesktopSocket()
     @State private var viewfinder: Bool
     @State private var selection = CGRect.zero
     @State private var fit = true
@@ -97,13 +108,11 @@ struct DesktopQuickSheet: View {
 
     init(
         hostName: String,
-        socket: DesktopSocket,
         sender: DesktopShotSender,
         target: DesktopShotTarget,
         startsInViewfinder: Bool = false
     ) {
         self.hostName = hostName
-        self.socket = socket
         self.sender = sender
         self.target = target
         self.startsInViewfinder = startsInViewfinder
@@ -262,6 +271,7 @@ struct DesktopQuickSheet: View {
             .frame(width: 148)
             .disabled(sending || imageSize.width == 0)
             .opacity(sending || imageSize.width == 0 ? 0.5 : 1)
+            .accessibilityLabel(Text("Send to agent"))
         }
     }
 
@@ -348,20 +358,18 @@ struct DesktopQuickSheet: View {
         guard !sending else { return }
         sending = true
         defer { sending = false }
-        let image = await captureImage()
-        guard let image else {
+        guard let capture = await captureSelection() else {
             show(Notice(message: String(localized: "The desktop frame is not ready yet."), isError: true))
             return
         }
-        let size = CGSize(width: image.width, height: image.height)
-        let rect = DesktopShotGeometry.prepared(selection, in: size)
-        guard let cropped = DesktopShotCropper.crop(image, to: rect) else {
+        guard let cropped = DesktopShotCropper.crop(capture.image, to: capture.rect) else {
             show(Notice(message: String(localized: "The screenshot could not be prepared."), isError: true))
             return
         }
         let shot: ShotAttachment?
         if target.isChat {
-            shot = DesktopShotEncoder.encodeForChat(cropped) ?? DesktopShotEncoder.encodePNG(cropped)
+            let inline = await DesktopShotEncoder.encodeForChatDetached(cropped)
+            shot = inline ?? DesktopShotEncoder.encodePNG(cropped)
         } else {
             shot = DesktopShotEncoder.encodePNG(cropped)
         }
@@ -372,8 +380,10 @@ struct DesktopQuickSheet: View {
         do {
             try await sender.send(shot, to: target)
             show(Notice(message: String(localized: "Screenshot sent to the agent."), isError: false))
-            try? await Task.sleep(for: .milliseconds(420))
+            try? await Task.sleep(for: .milliseconds(1200))
             dismiss()
+        } catch let error as DesktopShotSendError {
+            show(Notice(message: error.message, isError: true))
         } catch let error as AttachmentStageError {
             show(Notice(message: error.message, isError: true))
         } catch {
@@ -381,12 +391,20 @@ struct DesktopQuickSheet: View {
         }
     }
 
-    private func captureImage() async -> CGImage? {
-        if let image = socket.image { return image }
+    /// The region the user selected, applied to a frame no older than about 2s.
+    /// A stale stream frame is replaced by a fresh screenshot, and the selection
+    /// is scaled onto that image's pixel size so the crop still matches it.
+    private func captureSelection() async -> (image: CGImage, rect: CGRect)? {
+        let displayed = imageSize
+        if DesktopFrameFreshness.isFresh(updatedAt: socket.imageUpdatedAt), let frame = socket.image {
+            return (frame, DesktopShotGeometry.prepared(selection, in: displayed))
+        }
         guard let display = socket.selectedDisplay,
               let data = try? await sender.http.desktopScreenshot(display: display, format: "png", quality: 100),
               let image = UIImage(data: data)?.cgImage else { return nil }
-        return image
+        let size = CGSize(width: image.width, height: image.height)
+        let rect = DesktopShotGeometry.scaledSelection(selection, from: displayed, to: size)
+        return (image, DesktopShotGeometry.prepared(rect, in: size))
     }
 
     private func show(_ notice: Notice) {
@@ -423,6 +441,14 @@ private struct DesktopViewfinderOverlay: View {
 
     var body: some View {
         ZStack {
+            // Swallows drags that miss a handle, so the canvas can never pan the
+            // frame while the selection is being edited.
+            Rectangle()
+                .fill(Color.clear)
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 0))
+                .accessibilityHidden(true)
+
             Path { path in
                 path.addRect(bounds)
                 path.addRect(frameRect)
