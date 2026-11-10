@@ -9,13 +9,23 @@
 //!
 //! An app launched through LaunchServices gets its own coalition. So each Core
 //! is launched as a tiny faceless host app (`LSUIElement`). The host lives
-//! under the profile root, and its executable is a symlink to the real Core
-//! binary inside Se Manager.app. The kernel resolves the symlink, so the Core
-//! still runs the bundled, signed binary and finds its siblings beside it.
-//! `open` passes the caller's environment to the app, so the Core still gets
-//! the GUI's environment, as it did when it was a child.
+//! under the profile root and runs a byte-identical copy of the real Core
+//! binary (see [`HostApp::ensure`] for the payload). `open` passes the
+//! caller's environment to the app, so the Core still gets the GUI's
+//! environment, as it did when it was a child.
+//!
+//! The host must NOT symlink (or hardlink) the executable inside
+//! `Se Manager.app/Contents/MacOS/`. LaunchServices decides whether an app is
+//! running by looking for a live process on that app's `CFBundleExecutable`
+//! vnode, not by bundle id: with such a link, a surviving host process (the
+//! MCP gateway is meant to outlive the GUI) keeps LaunchServices convinced the
+//! GUI is still running, so `open "/Applications/Se Manager.app"` returns 0
+//! and starts nothing until the host exits. A copy is a distinct vnode, keeps
+//! the code signature valid, and leaves `open` working.
 
 use std::ffi::{OsStr, OsString};
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -60,6 +70,19 @@ pub(crate) const MCP_AGGREGATOR: HostedProcess = HostedProcess {
     id_suffix: "mcp-gateway-aggregator",
     label: "MCP Aggregator",
 };
+
+/// What [`HostApp::ensure`] did with the executable payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PayloadState {
+    /// The host already ran a copy of the current Core binary.
+    Reused,
+    /// The payload was (re)written from the current Core binary.
+    Refreshed,
+    /// The copy failed, so the host runs the Core through a link to the app
+    /// binary. The Core still launches, but LaunchServices counts it as the
+    /// GUI while it lives.
+    Unavailable,
+}
 
 /// Identity of the host app for one [`HostedProcess`].
 pub(crate) struct HostApp {
@@ -112,33 +135,89 @@ impl HostApp {
         )
     }
 
-    /// Create or repair the host bundle so it runs `executable`. Files that
-    /// are already right are left alone, so LaunchServices sees the same
-    /// bundle on every launch.
-    pub(crate) fn ensure(&self, executable: &Path) -> std::io::Result<()> {
+    /// Create or repair the host bundle so it runs a copy of `executable`.
+    ///
+    /// The host must not link the app's own executable: LaunchServices treats
+    /// a live process on the app's `CFBundleExecutable` vnode as "the app is
+    /// running", so a host that outlives the GUI (the MCP gateway does by
+    /// design) would make `open Se Manager.app` a silent no-op. The payload is
+    /// copied once per profile and shared by every host of that file name; it
+    /// is refreshed when the app binary changes (length, mtime, or version).
+    /// Running hosts keep their old inode until they exit, so a refresh never
+    /// truncates a live core.
+    pub(crate) fn ensure(&self, executable: &Path) -> io::Result<PayloadState> {
         let executable_name = executable
             .file_name()
-            .ok_or_else(|| std::io::Error::other("core executable has no file name"))?
+            .ok_or_else(|| io::Error::other("core executable has no file name"))?
             .to_string_lossy()
             .into_owned();
         let macos_dir = self.bundle.join("Contents").join("MacOS");
-        std::fs::create_dir_all(&macos_dir)?;
+        fs::create_dir_all(&macos_dir)?;
 
         let plist_path = self.bundle.join("Contents").join("Info.plist");
         let plist = self.info_plist(&executable_name);
-        if std::fs::read_to_string(&plist_path).ok().as_deref() != Some(plist.as_str()) {
-            std::fs::write(&plist_path, plist)?;
+        if fs::read_to_string(&plist_path).ok().as_deref() != Some(plist.as_str()) {
+            fs::write(&plist_path, plist)?;
         }
 
         let link = macos_dir.join(&executable_name);
-        if std::fs::read_link(&link).ok().as_deref() != Some(executable) {
-            match std::fs::remove_file(&link) {
-                Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
-                _ => {}
+        match self.sync_payload(executable, &executable_name) {
+            Ok((payload, state)) => {
+                point_at(&link, &payload)?;
+                Ok(state)
             }
-            std::os::unix::fs::symlink(executable, &link)?;
+            Err(error) => {
+                // Never make the core unlaunchable because the copy failed.
+                // The legacy link keeps it running, at the cost of the
+                // relaunch failure this module is here to prevent.
+                log::warn!(
+                    target: "se_manager::core",
+                    "operation=core_host_payload process={} stable_code=PAYLOAD_UNAVAILABLE kind={:?}",
+                    self.name,
+                    error.kind()
+                );
+                point_at(&link, executable)?;
+                Ok(PayloadState::Unavailable)
+            }
         }
-        Ok(())
+    }
+
+    /// Copy `executable` into the profile's shared payload when the existing
+    /// copy no longer matches it. Returns the payload path and what happened.
+    fn sync_payload(
+        &self,
+        executable: &Path,
+        executable_name: &str,
+    ) -> io::Result<(PathBuf, PayloadState)> {
+        let payload_dir = self
+            .bundle
+            .parent()
+            .ok_or_else(|| io::Error::other("core host bundle has no profile root"))?
+            .join("payload");
+        fs::create_dir_all(&payload_dir)?;
+        let payload = payload_dir.join(executable_name);
+        let stamp = payload_dir.join(format!("{executable_name}.stamp"));
+        let fingerprint = source_fingerprint(executable)?;
+
+        let copied = fs::symlink_metadata(&payload).is_ok_and(|metadata| metadata.is_file());
+        if copied && fs::read_to_string(&stamp).ok().as_deref() == Some(fingerprint.as_str()) {
+            return Ok((payload, PayloadState::Reused));
+        }
+
+        // Copy beside the payload and rename over it: readers see either the
+        // old inode or the complete new one, never a half-written binary.
+        let temp = payload_dir.join(format!(
+            ".{executable_name}.{}.tmp",
+            std::process::id()
+        ));
+        let result = fs::copy(executable, &temp)
+            .and_then(|_| fs::rename(&temp, &payload))
+            .and_then(|_| write_if_changed(&stamp, &fingerprint));
+        if let Err(error) = result {
+            let _ = fs::remove_file(&temp);
+            return Err(error);
+        }
+        Ok((payload, PayloadState::Refreshed))
     }
 
     /// `open` arguments that start a new, hidden instance of the host with
@@ -165,6 +244,45 @@ impl HostApp {
         open.extend(args.iter().map(|arg| arg.to_os_string()));
         open
     }
+}
+
+/// Point `link` at `target`, repairing a legacy link to the app binary.
+fn point_at(link: &Path, target: &Path) -> io::Result<()> {
+    if fs::read_link(link).ok().as_deref() == Some(target) {
+        return Ok(());
+    }
+    match fs::remove_file(link) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+        _ => {}
+    }
+    std::os::unix::fs::symlink(target, link)
+}
+
+/// Identity of the Core binary on disk. A replaced or rebuilt app changes the
+/// length or mtime (or the crate version), which is enough to refresh the
+/// payload without hashing the whole binary on every launch.
+fn source_fingerprint(executable: &Path) -> io::Result<String> {
+    let metadata = fs::metadata(executable)?;
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|elapsed| format!("{}.{:09}", elapsed.as_secs(), elapsed.subsec_nanos()))
+        .unwrap_or_else(|| "unknown".to_string());
+    Ok(format!(
+        "host_payload=1\nversion={}\nlength={}\nmodified={modified}\n",
+        env!("CARGO_PKG_VERSION"),
+        metadata.len()
+    ))
+}
+
+fn write_if_changed(path: &Path, contents: &str) -> io::Result<()> {
+    if fs::read_to_string(path).ok().as_deref() == Some(contents) {
+        return Ok(());
+    }
+    let temp = path.with_extension("stamp.tmp");
+    fs::write(&temp, contents)?;
+    fs::rename(&temp, path)
 }
 
 fn xml_escape(value: &str) -> String {
@@ -199,13 +317,27 @@ pub(crate) fn launch(
         return false;
     };
     let host = HostApp::new(profile_root, app, &app_bundle_id, process);
-    if let Err(error) = host.ensure(executable) {
-        log::warn!(
+    match host.ensure(executable) {
+        Ok(PayloadState::Reused) => {}
+        Ok(PayloadState::Refreshed) => log::info!(
             target: "se_manager::core",
-            "operation=core_host_prepare process={} stable_code=CORE_HOST_UNAVAILABLE error={error}",
+            "operation=core_host_payload process={} stable_code=REFRESHED",
             process.id_suffix
-        );
-        return false;
+        ),
+        Ok(PayloadState::Unavailable) => log::warn!(
+            target: "se_manager::core",
+            "operation=core_host_payload process={} stable_code=UNAVAILABLE",
+            process.id_suffix
+        ),
+        Err(error) => {
+            log::warn!(
+                target: "se_manager::core",
+                "operation=core_host_prepare process={} stable_code=CORE_HOST_UNAVAILABLE kind={:?}",
+                process.id_suffix,
+                error.kind()
+            );
+            return false;
+        }
     }
 
     match Command::new("/usr/bin/open")
@@ -294,32 +426,109 @@ mod tests {
         );
     }
 
+    fn write_binary(path: &Path, bytes: &[u8]) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, bytes).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    fn payload_of(host: &HostApp, executable_name: &str) -> PathBuf {
+        host.bundle
+            .parent()
+            .unwrap()
+            .join("payload")
+            .join(executable_name)
+    }
+
+    /// The regression this module exists for: a host that runs the app's own
+    /// executable keeps LaunchServices convinced the GUI is still running, so
+    /// `open Se Manager.app` starts nothing. The host must run its own copy.
     #[test]
-    fn ensure_links_the_core_binary_and_follows_a_moved_app() {
+    fn ensure_copies_the_binary_instead_of_linking_the_app_executable() {
         let dir = tempfile::tempdir().unwrap();
         let host = HostApp::new(
             dir.path(),
             Path::new("/Applications/Se Manager.app"),
             "com.se-manager.app",
-            TERMINAL_CORE,
+            MCP_GATEWAY,
         );
-        let first = dir.path().join("a/se-terminal-core");
-        let moved = dir.path().join("b/se-terminal-core");
-        let link = host.bundle.join("Contents/MacOS/se-terminal-core");
+        let app_binary = dir.path().join("app/Contents/MacOS/se-manager");
+        write_binary(&app_binary, b"core-binary");
 
-        host.ensure(&first).unwrap();
-        assert_eq!(std::fs::read_link(&link).unwrap(), first);
+        assert_eq!(host.ensure(&app_binary).unwrap(), PayloadState::Refreshed);
+
+        let link = host.bundle.join("Contents/MacOS/se-manager");
+        let payload = payload_of(&host, "se-manager");
+        assert_eq!(std::fs::read_link(&link).unwrap(), payload);
+        assert_eq!(std::fs::read(&payload).unwrap(), b"core-binary");
+        assert!(std::fs::symlink_metadata(&payload).unwrap().is_file());
+        assert_eq!(
+            std::fs::canonicalize(&link).unwrap(),
+            std::fs::canonicalize(&payload).unwrap()
+        );
+        assert_ne!(
+            std::fs::canonicalize(&link).unwrap(),
+            std::fs::canonicalize(&app_binary).unwrap(),
+            "a host must never resolve to the app executable's vnode"
+        );
         let plist = host.bundle.join("Contents/Info.plist");
         assert_eq!(
             std::fs::read_to_string(&plist).unwrap(),
-            host.info_plist("se-terminal-core")
+            host.info_plist("se-manager")
+        );
+    }
+
+    #[test]
+    fn ensure_reuses_an_unchanged_payload_and_refreshes_a_replaced_binary() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().unwrap();
+        let host = HostApp::new(
+            dir.path(),
+            Path::new("/Applications/Se Manager.app"),
+            "com.se-manager.app",
+            MCP_GATEWAY,
+        );
+        let app_binary = dir.path().join("app/Contents/MacOS/se-manager");
+        write_binary(&app_binary, b"first");
+
+        host.ensure(&app_binary).unwrap();
+        let payload = payload_of(&host, "se-manager");
+        let first_inode = std::fs::metadata(&payload).unwrap().ino();
+
+        assert_eq!(host.ensure(&app_binary).unwrap(), PayloadState::Reused);
+        assert_eq!(
+            std::fs::metadata(&payload).unwrap().ino(),
+            first_inode,
+            "an unchanged binary must not be copied again"
         );
 
-        host.ensure(&first).unwrap();
-        assert_eq!(std::fs::read_link(&link).unwrap(), first);
+        write_binary(&app_binary, b"second-build");
+        assert_eq!(host.ensure(&app_binary).unwrap(), PayloadState::Refreshed);
+        assert_eq!(std::fs::read(&payload).unwrap(), b"second-build");
+        assert_ne!(std::fs::metadata(&payload).unwrap().ino(), first_inode);
+    }
 
-        host.ensure(&moved).unwrap();
-        assert_eq!(std::fs::read_link(&link).unwrap(), moved);
+    /// Upgrading from a build that linked the app binary must repair the host
+    /// instead of leaving the relaunch block in place.
+    #[test]
+    fn ensure_replaces_a_legacy_link_to_the_app_executable() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = HostApp::new(
+            dir.path(),
+            Path::new("/Applications/Se Manager.app"),
+            "com.se-manager.app",
+            PLUGIN_CORE,
+        );
+        let app_binary = dir.path().join("app/Contents/MacOS/se-manager");
+        write_binary(&app_binary, b"core-binary");
+        let link = host.bundle.join("Contents/MacOS/se-manager");
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&app_binary, &link).unwrap();
+
+        assert_eq!(host.ensure(&app_binary).unwrap(), PayloadState::Refreshed);
+        assert_eq!(std::fs::read_link(&link).unwrap(), payload_of(&host, "se-manager"));
+        assert_ne!(std::fs::read_link(&link).unwrap(), app_binary);
     }
 
     #[test]
