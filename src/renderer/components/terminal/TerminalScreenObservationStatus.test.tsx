@@ -59,7 +59,38 @@ describe('read-only host screen status surface', () => {
         'Resynced: mouse is now owned by the program (all motion) (before: the terminal (native selection))'
       )
     )
-    expect(mocks.resync).toHaveBeenCalledExactlyOnceWith('pty')
+    expect(mocks.resync).toHaveBeenCalledExactlyOnceWith('pty', { recoverClaim: true })
+  })
+
+  it('keeps the takeover result when the recovery rotates the claim', async () => {
+    mocks.resync.mockImplementation(async () => {
+      // The successful takeover is what installs a fresh claim. That store
+      // change must not clear the very result the user is waiting to see.
+      useTerminalStore.setState({
+        terminals: [{ ...terminal, claim: 'rotated-claim' }]
+      })
+      return {
+        status: 'applied',
+        rendererBefore: 'none',
+        rendererAfter: 'drag',
+        host: {
+          mouseTracking: 1002,
+          mouseEncoding: 1006,
+          bracketedPaste: true,
+          applicationCursor: false,
+          focusEvents: true,
+          applicationKeypad: false,
+          alternateScreen: false
+        }
+      }
+    })
+    render(<TerminalScreenObservationStatus terminalId="tab" />)
+    fireEvent.click(screen.getByText('Resync mouse/keyboard takeover'))
+    await waitFor(() =>
+      expect(screen.getByTestId('input-resync-result')).toHaveTextContent(
+        'Resynced: mouse is now owned by the program (clicks + drag) (before: the terminal (native selection))'
+      )
+    )
   })
 
   it('explains why a resync was not possible', async () => {

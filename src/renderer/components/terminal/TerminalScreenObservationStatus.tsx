@@ -23,7 +23,8 @@ export function TerminalScreenObservationStatus({ terminalId }: { terminalId?: s
   const [resyncBusy, setResyncBusy] = useState(false)
   const [resync, setResync] = useState<InputModeResyncResult | null>(null)
   const request = useRef(0)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: resource generation changes must invalidate in-flight replies, even without a new request.
+  // A different PTY owns a different observation state entirely.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the dependency is the invalidation trigger; the body only resets state.
   useEffect(() => {
     ++request.current
     setBusy(false)
@@ -32,7 +33,16 @@ export function TerminalScreenObservationStatus({ terminalId }: { terminalId?: s
     return () => {
       ++request.current
     }
-  }, [ptyId, terminal?.claim])
+  }, [ptyId])
+  // A claim rotation invalidates in-flight status replies (the credential they
+  // were issued under is gone), but it must NOT erase the takeover result: the
+  // successful takeover is itself what rotated the claim.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the dependency is the invalidation trigger; the body only resets state.
+  useEffect(() => {
+    ++request.current
+    setBusy(false)
+    setFailed(false)
+  }, [terminal?.claim])
   const status = host?.status ?? legacyScreenObservation()
   const state = failed
     ? 'unsupported'
@@ -81,15 +91,22 @@ export function TerminalScreenObservationStatus({ terminalId }: { terminalId?: s
 
   async function resyncInput() {
     if (!ptyId || resyncBusy) return
-    const serial = request.current
+    const recordId = terminal?.id
+    const recordStillMounted = (): boolean =>
+      recordId
+        ? useTerminalStore.getState().terminals.find((item) => item.id === recordId)?.ptyId ===
+          ptyId
+        : true
     setResyncBusy(true)
     try {
-      const result = await resyncRendererInputModes(ptyId)
-      if (serial === request.current) setResync(result)
+      const result = await resyncRendererInputModes(ptyId, { recoverClaim: true })
+      // The claim changes as part of a successful takeover, so identity — not
+      // the claim generation — decides whether this reply still applies.
+      if (recordStillMounted()) setResync(result)
     } catch {
-      if (serial === request.current) setResync({ status: 'unavailable', reason: 'host-denied' })
+      if (recordStillMounted()) setResync({ status: 'unavailable', reason: 'host-denied' })
     } finally {
-      if (serial === request.current) setResyncBusy(false)
+      setResyncBusy(false)
     }
   }
 

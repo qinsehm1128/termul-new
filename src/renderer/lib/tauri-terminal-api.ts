@@ -35,15 +35,7 @@ import { Channel, type InvokeArgs, invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { logFrontendError } from './log-api'
 import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
-
-/**
- * Attach/watch replay cursor that means "live only". Used when the spawn
- * Channel has already been painting this PTY — replaying the output log
- * would dump history a second time into xterm.
- *
- * Safe as JSON + Rust `u64`; PTY seqs never approach 2^53 in a session.
- */
-const LIVE_HANDOFF_LAST_SEQ = Number.MAX_SAFE_INTEGER
+import { LIVE_ONLY_LAST_SEQ } from './terminal-live-cursor'
 
 /**
  * IPC Event names matching Rust commands in src-tauri/src/commands.rs
@@ -434,7 +426,7 @@ export function createTauriTerminalApi(): TerminalApi {
         message: `muted spawn channel terminalId=${terminalId} reason=${reason}`
       })
     }
-    return { lastSeq: LIVE_HANDOFF_LAST_SEQ, handedOff: true }
+    return { lastSeq: LIVE_ONLY_LAST_SEQ, handedOff: true }
   }
 
   /**
@@ -443,7 +435,7 @@ export function createTauriTerminalApi(): TerminalApi {
    * The host answers `gap` for the cursor it was given, but on this transport a
    * successful attach/watch does not imply its bytes ever reached xterm:
    *
-   *  - `handedOff` means we deliberately sent `LIVE_HANDOFF_LAST_SEQ`, so the
+   *  - `handedOff` means we deliberately sent `LIVE_ONLY_LAST_SEQ`, so the
    *    host replayed nothing at all — yet it still answers `gap: false`, because
    *    no retained chunk sits above `u64::MAX`.
    *  - An unmuted spawn gate means `createTerminalDataChannel` drops every chunk

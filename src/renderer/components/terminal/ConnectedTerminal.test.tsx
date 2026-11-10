@@ -418,6 +418,9 @@ const primaryRegistry = vi.hoisted(() => ({
 }))
 
 vi.mock('@/lib/terminal-api', () => ({
+  // This suite exercises rendering, not claim-gated host reads. Report the
+  // capability as absent so the automatic resync never rotates a claim.
+  supportsTerminalInputModes: vi.fn(() => false),
   readTerminalInputModes: vi.fn().mockResolvedValue({ success: true, data: undefined }),
   addRendererRef: vi.fn().mockResolvedValue({ success: true, data: undefined }),
   removeRendererRef: vi.fn().mockResolvedValue({ success: true, data: undefined }),

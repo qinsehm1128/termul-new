@@ -168,6 +168,18 @@ export function setTerminalProtected(
     : webTerminalInternals.setProtected(terminalId, protectedState)
 }
 
+/**
+ * Whether this runtime can answer the claim-gated input-mode read.
+ *
+ * Desktop (Tauri) does; the browser/shared-live and se-server transports do
+ * not expose `inputModes` — their screen reads are authorized by the
+ * connection's Conversation scope instead. Callers must not rotate a claim
+ * for an action this runtime cannot complete.
+ */
+export function supportsTerminalInputModes(): boolean {
+  return typeof terminalApi.inputModes === 'function'
+}
+
 /** Explicit, claim/scope-protected host status read; no background polling. */
 export function readTerminalScreenStatus(
   terminalId: string,

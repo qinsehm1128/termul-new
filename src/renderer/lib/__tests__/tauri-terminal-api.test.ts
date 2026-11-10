@@ -508,7 +508,7 @@ describe('tauri-terminal-api', () => {
     })
 
     it('reports a gap when a live handoff means the host replayed nothing', async () => {
-      // `LIVE_HANDOFF_LAST_SEQ` is `u64::MAX`, so `subscribe_from` finds no
+      // `LIVE_ONLY_LAST_SEQ` is `u64::MAX`, so `subscribe_from` finds no
       // retained chunk above it and answers `gap: false` while replaying
       // nothing at all. Passing that through tells the caller its transcript is
       // redundant, and everything written while detached is lost.

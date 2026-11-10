@@ -356,6 +356,134 @@ describe('terminal-store', () => {
     })
   })
 
+  describe('acquireTerminalClaim', () => {
+    const seed = (overrides: Record<string, unknown> = {}): void => {
+      useTerminalStore.setState({
+        terminals: [
+          {
+            id: 'record-watched',
+            name: 'Restored terminal',
+            projectId: '1',
+            conversationId: '018f7a1c-1b4d-7c8a-9f01-0123456789ab',
+            shell: 'bash',
+            ptyId: 'pty-watched',
+            healthStatus: 'running',
+            resumeCursor: 12,
+            output: [],
+            ...overrides
+          }
+        ],
+        activeTerminalId: 'record-watched',
+        ptyIdIndex: new Map([['pty-watched', 'record-watched']]),
+        cleanupRecoveries: {}
+      })
+    }
+
+    it('reuses an in-memory claim without a host round trip', async () => {
+      seed({ claim: 'spawn-claim' })
+
+      const result = await useTerminalStore.getState().acquireTerminalClaim('pty-watched')
+
+      expect(result).toEqual({ status: 'acquired', claim: 'spawn-claim' })
+      expect(terminalApi.resume).not.toHaveBeenCalled()
+    })
+
+    it('rotates through the live-only resume path and adopts the grant', async () => {
+      seed()
+      vi.mocked(terminalApi.resume).mockResolvedValue({
+        success: true,
+        data: {
+          claim: 'recovered-claim',
+          terminal: {
+            id: 'pty-watched',
+            shell: 'bash',
+            cwd: '/work',
+            pid: 11,
+            cols: 80,
+            rows: 24,
+            latestSeq: 87,
+            gap: false
+          }
+        }
+      })
+
+      const result = await useTerminalStore.getState().acquireTerminalClaim('pty-watched')
+
+      expect(result).toEqual({ status: 'acquired', claim: 'recovered-claim' })
+      expect(terminalApi.resume).toHaveBeenCalledWith({
+        conversationId: '018f7a1c-1b4d-7c8a-9f01-0123456789ab',
+        terminalId: 'pty-watched',
+        lastSeq: Number.MAX_SAFE_INTEGER
+      })
+      expect(useTerminalStore.getState().terminals[0]).toMatchObject({
+        id: 'record-watched',
+        ptyId: 'pty-watched',
+        claim: 'recovered-claim',
+        healthStatus: 'running',
+        resumeCursor: 87
+      })
+      expect(terminalApi.spawn).not.toHaveBeenCalled()
+      expect(terminalApi.terminate).not.toHaveBeenCalled()
+    })
+
+    it('leaves the record untouched when the host denies the claim', async () => {
+      seed()
+      vi.mocked(terminalApi.resume).mockResolvedValue({
+        success: false,
+        error: 'Unauthorized',
+        code: 'UNAUTHORIZED'
+      })
+
+      const result = await useTerminalStore.getState().acquireTerminalClaim('pty-watched')
+
+      expect(result).toEqual({ status: 'denied' })
+      expect(useTerminalStore.getState().terminals[0]).toMatchObject({
+        id: 'record-watched',
+        healthStatus: 'running',
+        resumeCursor: 12
+      })
+      expect(useTerminalStore.getState().terminals[0].claim).toBeUndefined()
+    })
+
+    it('reports unavailable for a scope-less terminal without calling the host', async () => {
+      seed({ conversationId: undefined })
+
+      const result = await useTerminalStore.getState().acquireTerminalClaim('pty-watched')
+
+      expect(result).toEqual({ status: 'unavailable' })
+      expect(terminalApi.resume).not.toHaveBeenCalled()
+    })
+
+    it('rotates once when two claim-gated callers race', async () => {
+      seed()
+      vi.mocked(terminalApi.resume).mockResolvedValue({
+        success: true,
+        data: {
+          claim: 'recovered-claim',
+          terminal: {
+            id: 'pty-watched',
+            shell: 'bash',
+            cwd: '/work',
+            pid: 11,
+            cols: 80,
+            rows: 24,
+            latestSeq: 87,
+            gap: false
+          }
+        }
+      })
+
+      const [first, second] = await Promise.all([
+        useTerminalStore.getState().acquireTerminalClaim('pty-watched'),
+        useTerminalStore.getState().acquireTerminalClaim('pty-watched')
+      ])
+
+      expect(first).toEqual({ status: 'acquired', claim: 'recovered-claim' })
+      expect(second).toEqual({ status: 'acquired', claim: 'recovered-claim' })
+      expect(terminalApi.resume).toHaveBeenCalledTimes(1)
+    })
+  })
+
   describe('restartTerminalResource', () => {
     it('respawns a scope-less project terminal without a Conversation id', async () => {
       vi.mocked(terminalApi.spawn).mockResolvedValue({

@@ -23,6 +23,7 @@ import { formatNumber } from '@/i18n/format'
 import type { AgentTerminalState } from '@/lib/agents/agent-terminal-state'
 import { logFrontendError } from '@/lib/log-api'
 import { terminalApi } from '@/lib/terminal-api'
+import { LIVE_ONLY_LAST_SEQ } from '@/lib/terminal-live-cursor'
 import {
   type GitStatus,
   isProjectScopedTerminal,
@@ -56,6 +57,25 @@ let transcriptCommitTimer: ReturnType<typeof setTimeout> | undefined
 const LINE_BREAK_PATTERN = /\r\n|\r|\n/
 const terminalResumeInFlight = new Map<string, Promise<IpcResult<TerminalReplayCoverage | null>>>()
 const terminalCleanupRetryInFlight = new Map<string, Promise<boolean>>()
+/**
+ * One host rotation per terminal at a time. Two claim-gated actions racing
+ * (the manual resync plus the automatic one after reattach) must not rotate in
+ * parallel: the second rotation would invalidate the first claim while its
+ * caller is still holding it.
+ */
+const terminalClaimAcquisitionInFlight = new Map<string, Promise<TerminalClaimAcquisition>>()
+
+/**
+ * Outcome of trying to get this window a host claim for an already-known PTY.
+ *
+ * `unavailable` means there is nothing to authorize (no record, no
+ * Conversation, or the terminal already holds a claim). `denied` means the
+ * host refused or the call failed; the record is left exactly as it was.
+ */
+export type TerminalClaimAcquisition =
+  | { status: 'acquired'; claim: string }
+  | { status: 'unavailable' }
+  | { status: 'denied' }
 
 export interface TerminalCleanupRecovery extends TerminalCleanupRecoveryInput {
   retrying: boolean
@@ -203,6 +223,17 @@ export interface TerminalState {
     projectId?: string
   ) => void
   resumeTerminalResource: (id: string) => Promise<IpcResult<TerminalReplayCoverage | null>>
+  /**
+   * Ask the host for a claim this window can use on an already-attached PTY.
+   *
+   * Claims are memory-only, so a record reattached by `watch` after a renderer
+   * reload has output but no credential and every claim-gated read fails. This
+   * uses the existing host-authorized resume path with a live-only cursor: the
+   * host validates the Conversation reference, rotates the claim, and replaces
+   * the single output forwarder without replaying bytes this window already
+   * painted. It never spawns, kills, or remounts the PTY.
+   */
+  acquireTerminalClaim: (ptyId: string) => Promise<TerminalClaimAcquisition>
   setTerminalPtyId: (id: string, ptyId: string) => boolean
   setTerminalClaim: (ptyId: string, claim: string | undefined) => void
   findTerminalByPtyId: (ptyId: string) => Terminal | undefined
@@ -775,6 +806,70 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     terminalResumeInFlight.set(id, task)
     const clearInFlight = (): void => {
       if (terminalResumeInFlight.get(id) === task) terminalResumeInFlight.delete(id)
+    }
+    void task.then(clearInFlight, clearInFlight)
+    return task
+  },
+
+  acquireTerminalClaim: (ptyId: string): Promise<TerminalClaimAcquisition> => {
+    const existing = terminalClaimAcquisitionInFlight.get(ptyId)
+    if (existing) return existing
+
+    const task = (async (): Promise<TerminalClaimAcquisition> => {
+      const terminal = get().findTerminalByPtyId(ptyId)
+      if (!terminal) return { status: 'unavailable' }
+      if (terminal.claim) return { status: 'acquired', claim: terminal.claim }
+      // Scope-less project PTYs have no Conversation reference the host can
+      // validate, which is exactly the case the resync already reports as
+      // `no-claim`. Do not invent a broader authorization for a read.
+      if (!terminal.conversationId) return { status: 'unavailable' }
+
+      let result: IpcResult<TerminalResumeGrant>
+      try {
+        result = await terminalApi.resume({
+          conversationId: terminal.conversationId,
+          terminalId: ptyId,
+          // Live-only. This PTY is already painting through the claim-less
+          // watch forwarder; replaying from `resumeCursor` would duplicate
+          // every chunk watch delivered after that snapshot. The host
+          // subscribes before replacing the old forwarder, so later output is
+          // still streamed exactly once.
+          lastSeq: LIVE_ONLY_LAST_SEQ
+        })
+      } catch {
+        return { status: 'denied' }
+      }
+
+      // The record may have been replaced or rebound while the host answered.
+      const current = get().findTerminalByPtyId(ptyId)
+      if (
+        !current ||
+        current.id !== terminal.id ||
+        current.conversationId !== terminal.conversationId
+      ) {
+        return { status: 'denied' }
+      }
+      if (!result.success) {
+        // Denial leaves the record untouched: a refused read must not flip a
+        // healthy, output-receiving terminal to `disconnected`.
+        return { status: 'denied' }
+      }
+      if (result.data.terminal.id !== ptyId || !result.data.claim) {
+        return { status: 'denied' }
+      }
+
+      const claim = result.data.claim
+      get().setTerminalClaim(ptyId, claim)
+      get().setTerminalHealthStatus(current.id, 'running')
+      get().setTerminalResumeCursor(current.id, result.data.terminal.latestSeq)
+      return { status: 'acquired', claim }
+    })()
+
+    terminalClaimAcquisitionInFlight.set(ptyId, task)
+    const clearInFlight = (): void => {
+      if (terminalClaimAcquisitionInFlight.get(ptyId) === task) {
+        terminalClaimAcquisitionInFlight.delete(ptyId)
+      }
     }
     void task.then(clearInFlight, clearInFlight)
     return task
