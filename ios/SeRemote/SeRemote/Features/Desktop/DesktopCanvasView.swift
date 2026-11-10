@@ -6,6 +6,8 @@ struct DesktopCanvasView: UIViewRepresentable {
     let displayID: String?
     let mode: DesktopInteractionMode
     let acceptsInput: Bool
+    var allowsNavigation = true
+    var zoom: CGFloat?
     let onInput: (DesktopInputMessage) -> Void
     let onKeyboard: () -> Void
 
@@ -14,7 +16,14 @@ struct DesktopCanvasView: UIViewRepresentable {
     func updateUIView(_ view: DesktopCanvasUIView, context: Context) {
         view.onInput = onInput
         view.onKeyboard = onKeyboard
-        view.configure(image: image, displayID: displayID, mode: mode, acceptsInput: acceptsInput)
+        view.configure(
+            image: image,
+            displayID: displayID,
+            mode: mode,
+            acceptsInput: acceptsInput,
+            allowsNavigation: allowsNavigation,
+            zoom: zoom
+        )
     }
 
     static func dismantleUIView(_ view: DesktopCanvasUIView, coordinator: ()) { view.cancelInteraction() }
@@ -31,6 +40,8 @@ final class DesktopCanvasUIView: UIView, UIGestureRecognizerDelegate {
     private var imageSize = CGSize.zero
     private var mode: DesktopInteractionMode = .trackpad
     private var acceptsInput = false
+    private var allowsNavigation = true
+    private var appliedZoom: CGFloat?
     private var dragging = false
     private var pinching = false
     var onInput: ((DesktopInputMessage) -> Void)?
@@ -94,13 +105,35 @@ final class DesktopCanvasUIView: UIView, UIGestureRecognizerDelegate {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func configure(image: CGImage?, displayID: String?, mode: DesktopInteractionMode, acceptsInput: Bool) {
+    func configure(
+        image: CGImage?,
+        displayID: String?,
+        mode: DesktopInteractionMode,
+        acceptsInput: Bool,
+        allowsNavigation: Bool = true,
+        zoom: CGFloat? = nil
+    ) {
         if self.displayID != displayID || self.mode != mode || (self.acceptsInput && !acceptsInput) {
             cancelInteraction()
         }
         self.displayID = displayID
         self.mode = mode
         self.acceptsInput = acceptsInput
+        if self.allowsNavigation && !allowsNavigation {
+            var reset = viewport
+            reset.pan = .zero
+            reset.zoom = 1
+            viewport = reset
+            appliedZoom = nil
+        }
+        self.allowsNavigation = allowsNavigation
+        if let zoom, appliedZoom != zoom, displayID != nil {
+            var state = viewport
+            state.zoom = zoom
+            state.constrain(in: bounds, imageSize: image.map { CGSize(width: $0.width, height: $0.height) } ?? imageSize)
+            viewport = state
+            appliedZoom = zoom
+        }
         // The socket retains the last frame on reconnect and supplies only the
         // selected display's preview (or nil) when switching displays.
         CATransaction.begin()
@@ -192,6 +225,7 @@ final class DesktopCanvasUIView: UIView, UIGestureRecognizerDelegate {
     }
 
     private func localPan(_ delta: CGPoint) {
+        guard allowsNavigation else { return }
         var state = viewport
         state.pan.width += delta.x
         state.pan.height += delta.y
@@ -212,6 +246,7 @@ final class DesktopCanvasUIView: UIView, UIGestureRecognizerDelegate {
     }
 
     @objc private func pinch(_ gesture: UIPinchGestureRecognizer) {
+        guard allowsNavigation else { pinching = false; return }
         pinching = gesture.state == .began || gesture.state == .changed
         if pinching {
             var state = viewport
