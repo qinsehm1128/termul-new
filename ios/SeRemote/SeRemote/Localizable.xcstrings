@@ -3206,7 +3206,6 @@
       }
     },
     "Desktop" : {
-      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -11245,6 +11244,286 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "双击适应屏幕"
+          }
+        }
+      }
+    },
+    "Desktop screenshot" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "桌面截图"
+          }
+        }
+      }
+    },
+    "FIT" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "FIT"
+          }
+        }
+      }
+    },
+    "Opens the desktop. Long press opens the viewfinder." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开桌面；长按直接进入取景。"
+          }
+        }
+      }
+    },
+    "Opens the remote desktop." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开远程桌面。"
+          }
+        }
+      }
+    },
+    "Screenshot from desktop" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "桌面截图"
+          }
+        }
+      }
+    },
+    "Screenshot sent to the agent." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "截图已发给 agent。"
+          }
+        }
+      }
+    },
+    "Send to agent" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发给 agent"
+          }
+        }
+      }
+    },
+    "The desktop frame is not ready yet." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "桌面画面尚未就绪。"
+          }
+        }
+      }
+    },
+    "The screenshot could not be prepared." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法准备截图。"
+          }
+        }
+      }
+    },
+    "The screenshot could not be sent." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法发送截图。"
+          }
+        }
+      }
+    },
+    "Viewfinder" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取景"
+          }
+        }
+      }
+    },
+    "Waiting for the desktop…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在等待桌面…"
+          }
+        }
+      }
+    },
+    "Opens the remote desktop for this agent conversation." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "为此 agent 会话打开远程桌面。"
+          }
+        }
+      }
+    },
+    "Opens the remote desktop for this terminal." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "为此终端打开远程桌面。"
+          }
+        }
+      }
+    },
+    "Only PNG and JPEG screenshots can be sent." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只能发送 PNG 和 JPEG 截图。"
+          }
+        }
+      }
+    },
+    "The host could not stage the screenshot." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "主机无法暂存该截图。"
+          }
+        }
+      }
+    },
+    "The screenshot could not be read." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取截图。"
+          }
+        }
+      }
+    },
+    "The screenshot is larger than 4096 px." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "截图尺寸超过 4096 px。"
+          }
+        }
+      }
+    },
+    "The screenshot is too large to send." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "截图过大，无法发送。"
+          }
+        }
+      }
+    },
+    "The screenshot was empty." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "截图为空。"
+          }
+        }
+      }
+    },
+    "This device needs terminal input permission to stage screenshots." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此设备需要终端输入权限才能暂存截图。"
+          }
+        }
+      }
+    },
+    "%lld × %lld" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld × %lld"
+          }
+        }
+      }
+    },
+    "%lld × %lld px" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld × %lld px"
+          }
+        }
+      }
+    },
+    "Conversation unavailable. Retry or use the terminal." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "对话暂不可用，请重试或改用终端。"
+          }
+        }
+      }
+    },
+    "Delivery is uncertain. Check the terminal before sending again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "送达状态不确定，请在再次发送前检查终端。"
+          }
+        }
+      }
+    },
+    "Dismiss keyboard" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收起键盘"
+          }
+        }
+      }
+    },
+    "Older messages unavailable. Retry or use the terminal." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更早的消息暂不可用，请重试或改用终端。"
+          }
+        }
+      }
+    },
+    "Send message" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发送消息"
           }
         }
       }

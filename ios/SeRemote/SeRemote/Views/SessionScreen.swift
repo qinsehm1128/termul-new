@@ -217,7 +217,7 @@ struct SessionScreen: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(Text("Desktop"))
-                .accessibilityHint(Text("Opens the remote desktop. Long press is not needed here."))
+                .accessibilityHint(Text("Opens the remote desktop."))
             }
 
             Menu {
