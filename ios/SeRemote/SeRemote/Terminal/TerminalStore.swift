@@ -17,6 +17,10 @@ struct LiveTerminal: Identifiable, Hashable, Sendable {
     var gitBranch: String?
     /// True only for PTYs this phone spawned.
     var owned: Bool
+    /// Catalog binding carried by the host row. Quick terminals never enter
+    /// this list, so a standalone surface always leaves these nil.
+    var projectId: String? = nil
+    var conversationId: String? = nil
     var terminalScreenEngine: HostTerminalScreenEngine? = nil
     var screenObservation: HostScreenObservation = .legacyHost
 }
@@ -210,22 +214,7 @@ final class TerminalStore {
             let listed = try await socket.list(conversationId: conversationId, projectId: projectId)
             let ownedById = Dictionary(uniqueKeysWithValues: terminals.filter(\.owned).map { ($0.id, $0) })
             let previousActive = activeId
-            terminals = listed.map { item in
-                let owned = ownedById[item.id]
-                return LiveTerminal(
-                    id: item.id,
-                    claim: owned?.claim,
-                    lastSeq: owned?.lastSeq ?? 0,
-                    cols: item.cols ?? owned?.cols ?? 80,
-                    rows: item.rows ?? owned?.rows ?? 24,
-                    title: Self.title(for: item),
-                    cwd: item.cwd,
-                    gitBranch: item.gitBranch,
-                    owned: owned != nil,
-                    terminalScreenEngine: item.terminalScreenEngine,
-                    screenObservation: item.screenObservation ?? .legacyHost
-                )
-            }
+            terminals = Self.liveTerminals(from: listed, ownedById: ownedById)
             if let previousActive, terminals.contains(where: { $0.id == previousActive }) {
                 activeId = previousActive
             } else {
@@ -310,6 +299,8 @@ final class TerminalStore {
                 cwd: spawned.cwd,
                 gitBranch: nil,
                 owned: true,
+                projectId: projectId,
+                conversationId: conversationId,
                 terminalScreenEngine: spawned.terminalScreenEngine
             )
             if !terminals.contains(where: { $0.id == live.id }) {
@@ -519,6 +510,33 @@ final class TerminalStore {
     func consumeOutput(for terminalId: String) -> Data? {
         let data = pendingOutput.removeValue(forKey: terminalId)
         return data?.isEmpty == false ? data : nil
+    }
+
+    /// Pure catalog mapping. Owned flags, claims and replay cursors survive a
+    /// refresh; catalog rows contribute their project/conversation binding.
+    /// Keeping it out of the socket path makes the mapping testable.
+    static func liveTerminals(
+        from items: [LiveTerminalSummary],
+        ownedById: [String: LiveTerminal]
+    ) -> [LiveTerminal] {
+        items.map { item in
+            let owned = ownedById[item.id]
+            return LiveTerminal(
+                id: item.id,
+                claim: owned?.claim,
+                lastSeq: owned?.lastSeq ?? 0,
+                cols: item.cols ?? owned?.cols ?? 80,
+                rows: item.rows ?? owned?.rows ?? 24,
+                title: Self.title(for: item),
+                cwd: item.cwd,
+                gitBranch: item.gitBranch,
+                owned: owned != nil,
+                projectId: item.projectId ?? owned?.projectId,
+                conversationId: item.conversationId ?? owned?.conversationId,
+                terminalScreenEngine: item.terminalScreenEngine,
+                screenObservation: item.screenObservation ?? .legacyHost
+            )
+        }
     }
 
     private static func title(for item: LiveTerminalSummary) -> String {

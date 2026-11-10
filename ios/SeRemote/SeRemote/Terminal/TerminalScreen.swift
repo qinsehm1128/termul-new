@@ -17,6 +17,10 @@ struct TerminalScreen: UIViewRepresentable {
     var onTextScaleChange: (CGFloat, Bool) -> Void
     var focusToken: UInt64 = 0
     var blurToken: UInt64 = 0
+    /// The workbench's keyboard accessory row. `nil` keeps the historical
+    /// behavior (no accessory); the hosting controller is retained by the
+    /// coordinator so the row cannot be deallocated while the keyboard is up.
+    var inputAccessory: AnyView? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(onSend: onSend, onResize: onResize, onTextScaleChange: onTextScaleChange)
@@ -28,6 +32,7 @@ struct TerminalScreen: UIViewRepresentable {
         context.coordinator.allowsInput = allowsInput
         view.terminalDelegate = context.coordinator
         view.inputAccessoryView = nil
+        context.coordinator.installAccessory(inputAccessory, on: view)
         view.hostCols = hostCols
         view.lockToHostCols = lockToHostCols
         view.textScale = textScale
@@ -61,7 +66,10 @@ struct TerminalScreen: UIViewRepresentable {
         uiView.onTextScaleChange = { scale, settled in
             context.coordinator.onTextScaleChange(scale, settled)
         }
-        if uiView.inputAccessoryView != nil {
+        // The workbench supplies an accessory row; every other surface keeps
+        // the historical nil so no keyboard strip appears unexpectedly.
+        context.coordinator.installAccessory(inputAccessory, on: uiView)
+        if inputAccessory == nil, uiView.inputAccessoryView != nil {
             uiView.inputAccessoryView = nil
         }
         if blurToken != context.coordinator.lastBlurToken {
@@ -84,6 +92,9 @@ struct TerminalScreen: UIViewRepresentable {
         var lastBlurToken: UInt64 = 0
         private var lastCols = 0
         private var lastRows = 0
+        /// Strong ownership: UIKit holds the accessory view weakly enough that
+        /// a dropped hosting controller would blank the strip mid-typing.
+        private var accessoryHost: UIHostingController<AnyView>?
 
         init(
             onSend: @escaping (String) -> Void,
@@ -103,6 +114,29 @@ struct TerminalScreen: UIViewRepresentable {
             // that report is the only thing that arms the takeover push.
             lastCols = 0
             lastRows = 0
+        }
+
+        /// Mount or refresh the terminal's keyboard accessory row. A hosting
+        /// controller is created once and retained; updates only swap its
+        /// `rootView`, so the strip survives key taps and focus changes.
+        func installAccessory(_ content: AnyView?, on view: PhoneTerminalView) {
+            guard let content else {
+                if accessoryHost != nil {
+                    accessoryHost = nil
+                    view.inputAccessoryView = nil
+                }
+                return
+            }
+            if let host = accessoryHost {
+                host.rootView = content
+                return
+            }
+            let host = UIHostingController(rootView: content)
+            host.view.backgroundColor = .clear
+            host.view.frame = CGRect(x: 0, y: 0, width: view.bounds.width, height: 50)
+            host.view.autoresizingMask = [.flexibleWidth]
+            accessoryHost = host
+            view.inputAccessoryView = host.view
         }
 
         func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {

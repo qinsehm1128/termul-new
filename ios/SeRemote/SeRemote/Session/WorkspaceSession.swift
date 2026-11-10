@@ -75,6 +75,9 @@ final class WorkspaceSession {
     /// Whether the host serves the remote desktop. `nil` until probed: unknown
     /// hides nothing, `false` hides every desktop entry.
     private(set) var desktopSupported: Bool?
+    /// Pending composer drafts keyed by terminal id. The draft survives a
+    /// panel that is not mounted, replacing the one-shot notification route.
+    @ObservationIgnored private var agentDrafts: [String: String] = [:]
     private var isStarting = false
     private var reconnectTask: Task<Void, Never>?
     /// Host-backed running state (live terminals + live agent processes) is
@@ -465,6 +468,79 @@ final class WorkspaceSession {
         case .home:
             nil
         }
+    }
+
+    // MARK: - Terminal workbench surface (additive)
+
+    /// Release the live viewport lease without ending the PTY or dropping the
+    /// mounted canvas. Order is load-bearing: dismiss the keyboard, stop
+    /// recording fitted grids, hand the host its desktop size, then reset the
+    /// local mode. The tab itself is untouched — the workbench owns presentation.
+    func parkTerminalSurface() async {
+        dismissTerminalKeyboard()
+        terminals.geometryActive = false
+        let terminalId = terminals.activeId
+        await terminals.releaseDisplayMode(for: terminalId)
+        terminals.displayMode = .phone
+    }
+
+    /// Re-assert the phone viewport for the terminal that is already watched.
+    /// A forced refit converges even when the grid is unchanged (reconnect,
+    /// panel return, host-side resize while parked).
+    func resumeTerminalSurface() async {
+        guard workspace != .home, terminals.activeId != nil else { return }
+        terminals.displayMode = .phone
+        terminals.geometryActive = true
+        terminals.scheduleRefit(force: true)
+    }
+
+    /// Project the current terminal belongs to. Quick terminals are standalone
+    /// and never have one; the catalog binding travels with the live row.
+    var currentTerminalProjectID: String? {
+        switch workspace {
+        case .conversation:
+            conversations.active?.projectId
+        case .project:
+            projects.active?.id
+        case .home:
+            nil
+        }
+    }
+
+    var currentTerminalProjectName: String? {
+        switch workspace {
+        case .conversation:
+            guard let id = conversations.active?.projectId else { return nil }
+            return projects.projects.first(where: { $0.id == id })?.name
+        case .project:
+            return projects.active?.name
+        case .home:
+            return nil
+        }
+    }
+
+    /// Directory the active terminal is in, falling back to the workspace root
+    /// before the first catalog reply carries a cwd.
+    var currentTerminalCwd: String? {
+        let terminal = terminals.terminals.first(where: { $0.id == terminals.activeId })
+        return terminal?.cwd ?? workspaceRoot
+    }
+
+    /// Root for Git, search, scheduled tasks and the file panel: the terminal's
+    /// own cwd wins, because that is where the user is actually working.
+    var activeToolRoot: String? {
+        currentTerminalCwd ?? workspaceRoot
+    }
+
+    /// Deliver a staged path to the agent composer. The draft stays queued
+    /// until a panel takes it, so a closed panel cannot lose the text.
+    func offerAgentDraft(_ text: String, terminalID: String) {
+        guard !text.isEmpty else { return }
+        agentDrafts[terminalID] = text
+    }
+
+    func takeAgentDraft(terminalID: String) -> String? {
+        agentDrafts.removeValue(forKey: terminalID)
     }
 
     /// Spawn a conversation/project-scoped PTY on the host and reveal it.
