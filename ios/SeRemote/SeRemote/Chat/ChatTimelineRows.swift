@@ -186,25 +186,40 @@ struct MessageBubbleContent: View, Equatable {
             && lhs.message.text == rhs.message.text
             && lhs.message.streaming == rhs.message.streaming
             && lhs.message.delivery == rhs.message.delivery
+            && lhs.message.image?.data.count == rhs.message.image?.data.count
+            && lhs.message.image?.width == rhs.message.image?.width
+            && lhs.message.image?.height == rhs.message.image?.height
     }
 
     var body: some View {
         if message.role == .user {
-            Text(attributed)
-                .font(.system(size: 13))
-                .lineSpacing(3)
-                .foregroundStyle(palette.surface)
-                .textSelection(.enabled)
-                .padding(.horizontal, 13)
-                .padding(.vertical, 11)
-                .background(palette.ink, in: UnevenRoundedRectangle(
-                    topLeadingRadius: 13,
-                    bottomLeadingRadius: 13,
-                    bottomTrailingRadius: 3,
-                    topTrailingRadius: 13,
-                    style: .continuous
-                ))
-                .frame(maxWidth: .infinity, alignment: .trailing)
+            VStack(alignment: .trailing, spacing: 8) {
+                if let image = message.image, let uiImage = UIImage(data: image.data) {
+                    Image(uiImage: uiImage)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: 240, maxHeight: 240)
+                        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                        .accessibilityLabel(Text("Desktop screenshot"))
+                }
+                if !message.text.isEmpty {
+                    Text(attributed)
+                        .font(.system(size: 13))
+                        .lineSpacing(3)
+                        .foregroundStyle(palette.surface)
+                        .textSelection(.enabled)
+                        .padding(.horizontal, 13)
+                        .padding(.vertical, 11)
+                        .background(palette.ink, in: UnevenRoundedRectangle(
+                            topLeadingRadius: 13,
+                            bottomLeadingRadius: 13,
+                            bottomTrailingRadius: 3,
+                            topTrailingRadius: 13,
+                            style: .continuous
+                        ))
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
         } else {
             Text(attributed)
                 .font(.system(size: 13))

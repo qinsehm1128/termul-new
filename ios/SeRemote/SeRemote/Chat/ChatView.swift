@@ -235,8 +235,7 @@ struct ChatView: View {
                         .font(.caption.weight(.semibold))
                         .monospacedDigit()
                 }
-                Image(systemName: "arrow.down")
-                    .font(.subheadline.weight(.semibold))
+                SeIconView(icon: .down, size: 14, stroke: 1.8, color: palette.ink)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
@@ -469,7 +468,7 @@ struct ChatView: View {
             TextField("Continue this session…", text: $draft, axis: .vertical)
                 .textInputAutocapitalization(.sentences)
                 .lineLimit(1 ... 6)
-                .font(.system(size: 13))
+                .font(SeNocturneType.font(13))
                 .foregroundStyle(palette.ink)
                 .focused($composerFocused)
                 .padding(.horizontal, 12)
@@ -482,9 +481,7 @@ struct ChatView: View {
                     Button {
                         Task { await session.chat.cancel() }
                     } label: {
-                        Image(systemName: "stop.fill")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(palette.onAccent)
+                        SeIconView(icon: .stop, size: 13, stroke: 1.9, color: palette.onAccent)
                             .frame(width: 31, height: 31)
                             .background(palette.danger, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                             .frame(minWidth: 44, minHeight: 44)
@@ -499,9 +496,7 @@ struct ChatView: View {
                         composerFocused = false
                         performSend { await session.chat.send(text, in: session.conversations.active) }
                     } label: {
-                        Image(systemName: "arrow.up")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(palette.onAccent)
+                        SeIconView(icon: .send, size: 14, stroke: 1.9, color: palette.onAccent)
                             .frame(width: 31, height: 31)
                             .background(palette.accent, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                             .frame(minWidth: 44, minHeight: 44)
@@ -536,7 +531,7 @@ struct ChatView: View {
                     .fill(palette.accent)
                     .frame(width: 4, height: 4)
                 Text(title)
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(SeNocturneType.font(10, mono: true))
                     .lineLimit(1)
             }
             .foregroundStyle(palette.inkSecondary)

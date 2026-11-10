@@ -13,6 +13,41 @@ enum MessageDelivery: String, Codable, Sendable {
     case failed
 }
 
+struct ChatImageAttachment: Hashable, Codable, Sendable {
+    var data: Data
+    var mimeType: String
+    var width: Int
+    var height: Int
+
+    init(_ shot: ShotAttachment) {
+        data = shot.data
+        mimeType = shot.mimeType
+        width = Int(shot.pixelSize.width.rounded())
+        height = Int(shot.pixelSize.height.rounded())
+    }
+}
+
+/// ACP `ContentBlock` shapes. Kept separate from the socket so the wire JSON is
+/// unit-testable.
+nonisolated enum ChatPromptContent {
+    static let supportedMimeTypes: Set<String> = ["image/png", "image/jpeg", "image/webp", "image/gif"]
+
+    static func blocks(text: String, image: ChatImageAttachment?) -> [[String: Any]] {
+        var blocks: [[String: Any]] = []
+        if let image, supportedMimeTypes.contains(image.mimeType) {
+            blocks.append([
+                "type": "image",
+                "mimeType": image.mimeType,
+                "data": image.data.base64EncodedString()
+            ])
+        }
+        if !text.isEmpty {
+            blocks.append(["type": "text", "text": text])
+        }
+        return blocks
+    }
+}
+
 struct ChatMessage: Identifiable, Hashable, Codable, Sendable {
     var id: String
     var role: ChatRole
@@ -20,6 +55,8 @@ struct ChatMessage: Identifiable, Hashable, Codable, Sendable {
     var streaming: Bool
     var seq: UInt64?
     var delivery: MessageDelivery? = nil
+    /// Present on a user turn created from a desktop region screenshot.
+    var image: ChatImageAttachment? = nil
 }
 
 struct ToolCard: Identifiable, Hashable, Codable, Sendable {
@@ -478,8 +515,20 @@ final class ChatStore {
     }
 
     func send(_ text: String, in conversation: HostConversation? = nil) async {
+        _ = await dispatch(text: text, image: nil, in: conversation)
+    }
+
+    /// Sends a region screenshot as an ACP image block plus an optional caption.
+    /// The image must already be encoded to ≤ 144 KiB by `DesktopShotEncoder`.
+    @discardableResult
+    func sendImage(_ shot: ShotAttachment, caption: String = "", in conversation: HostConversation? = nil) async -> Bool {
+        await dispatch(text: caption, image: ChatImageAttachment(shot), in: conversation)
+    }
+
+    @discardableResult
+    private func dispatch(text: String, image: ChatImageAttachment?, in conversation: HostConversation?) async -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty || image != nil else { return false }
         if activeSessionId == nil, let conversation {
             await startInConversation(conversation)
         }
@@ -488,7 +537,7 @@ final class ChatStore {
             if activeAgentId == nil {
                 errorMessage = String(localized: "No agent is running on the host. Start one on the desktop, then try again.")
             }
-            return
+            return false
         }
         isSending = true
         let turnId = UUID().uuidString
@@ -501,31 +550,36 @@ final class ChatStore {
                 text: trimmed,
                 streaming: false,
                 seq: seq,
-                delivery: .sending
+                delivery: .sending,
+                image: image
             )
         )
         schedulePersist()
         HostLog.session.info("Sending prompt to the host agent")
         do {
+            let content = ChatPromptContent.blocks(text: trimmed, image: image)
             _ = try await socket.request(
                 "send_prompt",
                 payload: [
                     "agentId": agentId,
                     "sessionId": sessionId,
-                    "text": trimmed,
+                    "content": content,
                     "turnId": turnId
                 ],
                 timeoutSeconds: nil
             )
             markDelivery(messageId, .accepted)
+            isSending = false
+            return true
         } catch {
             if markDelivery(messageId, .failed) {
                 errorMessage = error.localizedDescription
             } else {
                 HostLog.session.info("Prompt wait ended after the host already accepted it")
             }
+            isSending = false
+            return false
         }
-        isSending = false
     }
 
     func cancel() async {
@@ -547,7 +601,7 @@ final class ChatStore {
             schedulePersist()
             HostLog.session.info("Retrying failed prompt")
         }
-        await send(message.text, in: conversation)
+        await dispatch(text: message.text, image: message.image, in: conversation)
     }
 
     /// Regenerate semantics mirror the browser client: ACP has no

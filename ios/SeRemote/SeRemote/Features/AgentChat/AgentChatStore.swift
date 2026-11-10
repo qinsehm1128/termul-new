@@ -1,4 +1,19 @@
 import Foundation
+
+extension Notification.Name {
+    /// A staged screenshot path waiting for the agent-chat composer.
+    static let agentChatDraft = Notification.Name("seremote.agentChatDraft")
+}
+
+enum AgentChatDraftInbox {
+    static func offer(_ text: String, terminalID: String) {
+        NotificationCenter.default.post(
+            name: .agentChatDraft,
+            object: terminalID,
+            userInfo: ["text": text]
+        )
+    }
+}
 import Observation
 import OSLog
 
