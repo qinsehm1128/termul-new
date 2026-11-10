@@ -161,6 +161,7 @@ pub enum RemoteRouteClass {
     RemoteAccess,
     RemoteDesktop,
     RemoteDesktopWebSocket,
+    RemoteAttachment,
     Pair,
     AgentHooksStatus,
     AgentHooksResume,
@@ -196,6 +197,7 @@ impl RemoteRouteClass {
             Self::RemoteAccess => "remote_access",
             Self::RemoteDesktop => "remote_desktop",
             Self::RemoteDesktopWebSocket => "remote_desktop_websocket",
+            Self::RemoteAttachment => "remote_attachment",
             Self::Pair => "pair",
             Self::AgentHooksStatus => "agent_hooks_status",
             Self::AgentHooksResume => "agent_hooks_resume",
@@ -221,6 +223,10 @@ impl RemoteRouteClass {
             }),
             Self::AcpWebSocket | Self::TerminalWebSocket => Some("view"),
             Self::RemoteDesktopWebSocket => Some("screen.view"),
+            // The staged path is meant to be typed into a terminal, so the
+            // caller must already be able to write terminal input. No loopback
+            // bypass applies: a paired phone reaches this over LAN/tunnel.
+            Self::RemoteAttachment => Some("terminal.input"),
             _ if read => Some("view"),
             Self::Git => Some("git.write"),
             Self::Filesystem | Self::Worktree => Some("files.write"),
@@ -282,6 +288,8 @@ impl RemoteRouteClass {
             Some(Self::RemoteDesktopWebSocket)
         } else if path.starts_with("/remote/desktop/") {
             Some(Self::RemoteDesktop)
+        } else if path == "/remote/attachments/stage" {
+            Some(Self::RemoteAttachment)
         } else if path.starts_with("/remote/") {
             Some(Self::RemoteAccess)
         } else if matches!(path, "/health" | "/info") {
@@ -2789,6 +2797,7 @@ mod tests {
             ("/cli-sessions", RemoteRouteClass::CliSession),
             ("/memory-index/search", RemoteRouteClass::MemoryIndex),
             ("/conversation-recovery/resolve", RemoteRouteClass::Recovery),
+            ("/remote/attachments/stage", RemoteRouteClass::RemoteAttachment),
             ("/ws", RemoteRouteClass::AcpWebSocket),
             ("/terminal/ws", RemoteRouteClass::TerminalWebSocket),
             ("/quick-terminals/open", RemoteRouteClass::QuickTerminal),
@@ -2808,6 +2817,11 @@ mod tests {
         let source = include_str!("auth.rs");
         assert!(!source.contains(&["request_type", " = format!"].concat()));
         assert!(!source.contains(&["request_type", ","].concat()));
+        assert_eq!(
+            RemoteRouteClass::RemoteAttachment.required_scope(&axum::http::Method::POST),
+            Some("terminal.input")
+        );
+        assert!(RemoteRouteClass::RemoteAttachment.requires_http_bearer());
     }
 
     #[test]

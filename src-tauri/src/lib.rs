@@ -53,6 +53,9 @@ mod screen;
 pub use se_terminal_core::quick_terminal;
 mod quick_terminal_commands;
 mod quick_terminal_migration;
+/// Shared host-backed staging for remote screenshot attachments typed into a
+/// terminal (remote-only; the desktop paste flow uses the clipboard).
+pub mod remote_attachments;
 use se_foundation::path_validation;
 use se_pty as pty;
 mod remote;

@@ -109,6 +109,17 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
     )
     .merge(super::devices_api::routes())
     .merge(classified_routes(
+        Router::<AppState>::new().route(
+            "/remote/attachments/stage",
+            post(super::remote_attachments_api::stage).layer(
+                axum::extract::DefaultBodyLimit::max(
+                    super::remote_attachments_api::BODY_LIMIT,
+                ),
+            ),
+        ),
+        RemoteRouteClass::RemoteAttachment,
+    ))
+    .merge(classified_routes(
         Router::<AppState>::new()
             .route("/remote/desktop/info", get(super::remote_desktop::info))
             .route(
@@ -1220,6 +1231,141 @@ mod tests {
                 .unwrap();
             assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
         }
+    }
+
+    fn tiny_png() -> Vec<u8> {
+        let image = image::RgbaImage::from_pixel(3, 2, image::Rgba([9, 8, 7, 255]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image)
+            .write_to(&mut out, image::ImageFormat::Png)
+            .expect("encode png");
+        out.into_inner()
+    }
+
+    #[tokio::test]
+    async fn attachment_stage_requires_bearer_and_returns_absolute_path() {
+        const TOKEN: &str = "attachment-stage-token";
+        let authority = Arc::new(RemoteAccessAuthority::for_tests(TOKEN));
+        let app = api_routes(IngressProvenance::LocalOperator)
+            .with_state(route_test_state(std::env::temp_dir().as_path()))
+            .layer(Extension(IngressProvenance::LocalOperator))
+            .layer(Extension(authority));
+        let png = tiny_png();
+
+        let denied = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/remote/attachments/stage")
+                    .header(header::CONTENT_TYPE, "image/png")
+                    .body(Body::from(png.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/remote/attachments/stage")
+                    .header(header::CONTENT_TYPE, "image/png")
+                    .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                    .body(Body::from(png))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(json["success"], serde_json::Value::Bool(true));
+        let staged_path = json["data"]["path"].as_str().expect("absolute path");
+        assert!(staged_path.starts_with('/'), "{staged_path}");
+        assert!(staged_path.ends_with(".png"), "{staged_path}");
+        assert_eq!(json["data"]["width"], 3);
+        assert_eq!(json["data"]["height"], 2);
+        assert_eq!(json["data"]["mime"], "image/png");
+        let _ = fs::remove_file(staged_path);
+    }
+
+    #[tokio::test]
+    async fn attachment_stage_rejects_wrong_content_type() {
+        const TOKEN: &str = "attachment-content-type-token";
+        let authority = Arc::new(RemoteAccessAuthority::for_tests(TOKEN));
+        let app = api_routes(IngressProvenance::LocalOperator)
+            .with_state(route_test_state(std::env::temp_dir().as_path()))
+            .layer(Extension(IngressProvenance::LocalOperator))
+            .layer(Extension(authority));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/remote/attachments/stage")
+                    .header(header::CONTENT_TYPE, "image/gif")
+                    .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                    .body(Body::from(tiny_png()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(json["success"], serde_json::Value::Bool(false));
+        assert_eq!(json["code"], "UNSUPPORTED_MEDIA_TYPE");
+    }
+
+    #[tokio::test]
+    async fn attachment_stage_requires_terminal_input_scope() {
+        let authority = Arc::new(RemoteAccessAuthority::desktop_memory());
+        let (_lease, _) = authority
+            .adopt_or_issue_desktop_credential(None)
+            .expect("desktop credential");
+        let code = authority.issue_pairing_code().expect("pairing code");
+        let paired = authority
+            .pair_device(crate::web::devices::PairRequest {
+                code: code.code,
+                name: "Phone".into(),
+                platform: "ios".into(),
+            })
+            .expect("pair device");
+        authority
+            .set_device_scopes(&paired.device_id, vec!["view".to_string()])
+            .expect("restrict scopes");
+
+        let app = api_routes(IngressProvenance::LocalOperator)
+            .with_state(route_test_state(std::env::temp_dir().as_path()))
+            .layer(Extension(IngressProvenance::LocalOperator))
+            .layer(Extension(authority));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/remote/attachments/stage")
+                    .header(header::CONTENT_TYPE, "image/png")
+                    .header(
+                        header::AUTHORIZATION,
+                        format!("Bearer {}", paired.device_token),
+                    )
+                    .body(Body::from(tiny_png()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(json["code"], "FORBIDDEN");
+        assert_eq!(json["capability"], "terminal.input");
     }
 
     #[tokio::test]

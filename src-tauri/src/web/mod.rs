@@ -61,6 +61,7 @@ pub mod session_workspace_api;
 pub mod sink;
 pub mod skills_api;
 pub mod store;
+pub mod remote_attachments_api;
 pub mod remote_desktop;
 pub mod terminal_ws;
 pub mod upgraded_connections;
@@ -473,6 +474,10 @@ pub async fn serve_router(
     // Capture it independently from the listener address: cloudflared connects to a loopback
     // socket, but its requests must remain PublicTunnel and never inherit LocalOperator rights.
     let host_ingress_provenance = authority.ingress_provenance();
+    // Staged screenshot attachments expire after 24h; sweep once per process at
+    // startup. Both `serve` (se-server) and the desktop shared-live host enter
+    // here, so both compositions share the same policy and directory.
+    crate::remote_attachments::cleanup_at_startup();
     let bind_addr = cfg.bind_addr().ok_or_else(|| {
         format!(
             "invalid host '{}': use 127.0.0.1 (default) or 0.0.0.0 (expose)",
