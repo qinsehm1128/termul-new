@@ -191,6 +191,16 @@ nonisolated enum DesktopFrameFreshness {
     }
 }
 
+/// The attach sheet's target rule (plan §6): a ready agent takes the staged
+/// path as a composer draft, every other terminal gets it typed at the prompt.
+/// Kept beside the other pure shot helpers so the sheet, its tests and the
+/// desktop sheet share one mapping.
+extension DesktopShotTargetResolver {
+    static func attachment(terminalID: String, agentReady: Bool) -> DesktopShotTarget {
+        agentReady ? .agentChat(id: terminalID) : .terminal(id: terminalID)
+    }
+}
+
 /// Quotes a staged host path for the shell so a path with spaces or quotes can
 /// be typed into a PTY or an agent draft verbatim.
 nonisolated enum DesktopShellPath {

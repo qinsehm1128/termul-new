@@ -249,7 +249,7 @@ struct AttachmentStageTests {
         #expect(AttachmentStageError(code: nil, statusCode: 403) == .scopeMissing)
         #expect(AttachmentStageError(code: "INTERNAL", statusCode: 500) == .failed("INTERNAL"))
         #expect(AttachmentStageError.scopeMissing.message
-            == String(localized: "This device needs terminal input permission to stage screenshots."))
+            == String(localized: "This device needs terminal input permission to send images."))
     }
 }
 

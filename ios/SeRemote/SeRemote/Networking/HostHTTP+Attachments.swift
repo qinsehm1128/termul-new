@@ -49,19 +49,19 @@ nonisolated enum AttachmentStageError: Error, Equatable {
     var message: String {
         switch self {
         case .scopeMissing:
-            String(localized: "This device needs terminal input permission to stage screenshots.")
+            String(localized: "This device needs terminal input permission to send images.")
         case .unsupportedMediaType, .contentTypeMismatch:
-            String(localized: "Only PNG and JPEG screenshots can be sent.")
+            String(localized: "Only PNG and JPEG images can be sent.")
         case .payloadTooLarge:
-            String(localized: "The screenshot is too large to send.")
+            String(localized: "The image is larger than 8 MiB.")
         case .invalidImage:
-            String(localized: "The screenshot could not be read.")
+            String(localized: "The image could not be read.")
         case .dimensionsTooLarge:
-            String(localized: "The screenshot is larger than 4096 px.")
+            String(localized: "The image is larger than 4096 px.")
         case .emptyBody:
-            String(localized: "The screenshot was empty.")
+            String(localized: "The image was empty.")
         case .failed:
-            String(localized: "The host could not stage the screenshot.")
+            String(localized: "The host could not stage the image.")
         }
     }
 }
