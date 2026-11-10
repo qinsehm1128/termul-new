@@ -18,6 +18,13 @@ final class FileStore {
     /// loading, failure and rich states instead of disappearing on error.
     var hasPreview: Bool { previewName != nil }
 
+    /// Path of the file the store currently previews (published before the
+    /// request, so a cover can render its loading and failure states).
+    var currentPreviewPath: String? { previewPath }
+
+    /// Path of the folder at the bottom of the breadcrumb trail.
+    var currentRootPath: String? { crumbs.first?.path }
+
     private var previewPath: String?
     private var http: HostHTTP?
 
@@ -29,6 +36,15 @@ final class FileStore {
         crumbs = [DirectoryEntry(name: rootName(path), path: path, type: "directory")]
         clearPreview()
         await load(path)
+    }
+
+    /// Opens `path` as the listing root only when it is not the current one, so
+    /// reopening the terminal file panel keeps its navigation.
+    func openRootIfNeeded(_ path: String) async {
+        guard FilePanelPresentation.shouldReloadRoot(currentRoot: currentRootPath, requestedRoot: path) else {
+            return
+        }
+        await openRoot(path)
     }
 
     func open(_ entry: DirectoryEntry) async {
