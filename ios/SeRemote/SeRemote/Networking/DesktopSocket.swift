@@ -283,7 +283,15 @@ final class DesktopSocket {
         guard let http else { throw HostError.unexpected("Desktop transport is not configured") }
         let metadata = try await http.desktopInfo()
         guard generation == epoch, !Task.isCancelled else { throw CancellationError() }
+        // A JPEG fallback is sticky for this socket's lifetime: reconnect must
+        // not re-request h264 just because the old cached info still lists it.
+        // Only a fresh info that newly advertises h264 clears the flag.
+        let advertisedBefore = info?.supportedCodecs.contains(DesktopCodec.h264.rawValue) ?? false
+        let advertisesNow = metadata.supportedCodecs.contains(DesktopCodec.h264.rawValue)
         info = metadata
+        if h264Disabled && advertisesNow && !advertisedBefore {
+            h264Disabled = false
+        }
         displays = metadata.displays
         controlEnabled = metadata.controlEnabled
         if !metadata.supported { throw HostError.ipc("", "SCREEN_UNSUPPORTED") }
@@ -338,7 +346,7 @@ final class DesktopSocket {
         guard generation == epoch else { throw CancellationError() }
         authenticated = true
         // Startup joins the same ordered queue as subsequent display switches and inputs.
-        h264Disabled = false
+        // h264Disabled stays sticky across reconnects (see connect()).
         startStream(display: activeDisplay)
         startHeartbeat(socket: socket, epoch: epoch)
         issue = nil

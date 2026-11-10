@@ -4,7 +4,9 @@ import Foundation
 /// (key frames only) and one AVCC sample. Every length is validated with
 /// subtraction before any payload slice is allocated.
 nonisolated struct DesktopH264Packet: Sendable {
-    static let maxParameterSetBytes = 1024 * 1024
+    /// Matches the host cap (`h264.rs` rejects SPS/PPS above 1024 bytes), so a
+    /// packet cannot make this client allocate 1 MiB per parameter set.
+    static let maxParameterSetBytes = 1024
 
     let display: String
     let seq: UInt64

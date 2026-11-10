@@ -4,6 +4,27 @@ import CoreVideo
 import Foundation
 import VideoToolbox
 
+/// Consecutive decode failures since the last good IDR. Most deltas of an
+/// incompatible stream (a 1080p SPS on a 720p device) still decode, so a delta
+/// success must not hide the incompatibility: only a successful keyframe
+/// resets the streak, and three failures since the last IDR force JPEG.
+nonisolated struct H264FailureTracker {
+    static let maxConsecutiveFailures = 3
+    private(set) var consecutiveFailures = 0
+
+    mutating func reset() { consecutiveFailures = 0 }
+
+    mutating func recordSuccess(isKey: Bool) {
+        if isKey { consecutiveFailures = 0 }
+    }
+
+    /// Returns true when this failure completes the 3-strike fallback.
+    mutating func recordFailure() -> Bool {
+        consecutiveFailures += 1
+        return consecutiveFailures >= Self.maxConsecutiveFailures
+    }
+}
+
 /// Decodes one frozen P1 H.264 stream. Owned exclusively by DesktopFrameWorker,
 /// so no locking is needed around its session; only the VideoToolbox output box
 /// crosses into the decoder's callback queue.
@@ -42,8 +63,6 @@ nonisolated final class DesktopH264Decoder {
         }
     }
 
-    private static let maxConsecutiveFailures = 3
-
     static var isHardwareDecodeSupported: Bool {
         VTIsHardwareDecodeSupported(kCMVideoCodecType_H264)
     }
@@ -54,7 +73,7 @@ nonisolated final class DesktopH264Decoder {
     private var lastSequence: UInt64?
     private var waitingForKeyframe = true
     private var keyframeRequested = false
-    private var consecutiveFailures = 0
+    private var failures = H264FailureTracker()
     private var forceFallback = false
 
     /// New connection, display switch or explicit restart: try H.264 again.
@@ -64,7 +83,7 @@ nonisolated final class DesktopH264Decoder {
         lastSequence = nil
         waitingForKeyframe = true
         keyframeRequested = false
-        consecutiveFailures = 0
+        failures.reset()
         forceFallback = false
     }
 
@@ -76,7 +95,7 @@ nonisolated final class DesktopH264Decoder {
         lastSequence = nil
         waitingForKeyframe = true
         keyframeRequested = false
-        consecutiveFailures = 0
+        failures.reset()
         forceFallback = true
     }
 
@@ -104,7 +123,9 @@ nonisolated final class DesktopH264Decoder {
                 packet.sample, session: session, formatDescription: formatDescription,
                 presentationTime: CMTime(value: Int64(bitPattern: packet.seq), timescale: 30))
             lastSequence = packet.seq
-            consecutiveFailures = 0
+            // Only a decodable IDR proves the stream matches this decoder;
+            // a delta that happens to decode must not clear the streak.
+            failures.recordSuccess(isKey: packet.isKey)
             waitingForKeyframe = false
             return Outcome(image: image, requestKeyframe: false, fallbackToJPEG: false)
         } catch {
@@ -122,8 +143,7 @@ nonisolated final class DesktopH264Decoder {
     private func failure() -> Outcome {
         invalidateSession()
         waitingForKeyframe = true
-        consecutiveFailures += 1
-        if consecutiveFailures >= Self.maxConsecutiveFailures {
+        if failures.recordFailure() {
             forceFallback = true
             return Outcome(image: nil, requestKeyframe: false, fallbackToJPEG: true)
         }

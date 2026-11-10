@@ -39,6 +39,35 @@ const VIDEO_QUEUE: usize = 4;
 static NEXT_VIEWER: AtomicU64 = AtomicU64::new(1);
 type DesktopResult<T> = Result<T, &'static str>;
 
+/// Test-only capture override: the transport start path runs on the test
+/// thread (current-thread runtime), so a thread-local fake capture lets the
+/// wire negotiation be exercised without screen-recording permission.
+#[cfg(test)]
+type TestCapture =
+    Box<dyn FnMut(&str, u32) -> Result<image::RgbaImage, screen::ScreenError> + Send + 'static>;
+
+#[cfg(test)]
+thread_local! {
+    static TEST_CAPTURE: std::cell::RefCell<Option<TestCapture>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn set_test_capture(capture: TestCapture) {
+    TEST_CAPTURE.with(|slot| *slot.borrow_mut() = Some(capture));
+}
+
+/// Starts a capture session, honoring the test-only fake capture if installed.
+fn start_session(
+    config: StreamConfig,
+) -> Result<(StreamSession, StreamReceiver), screen::ScreenError> {
+    #[cfg(test)]
+    if let Some(capture) = TEST_CAPTURE.with(|slot| slot.borrow_mut().take()) {
+        return StreamSession::start_with_capture(config, capture);
+    }
+    StreamSession::start(config)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct AccessFailure {
     code: &'static str,
@@ -675,7 +704,7 @@ async fn run_with_input(
                             Ok(displays) => {
                                 drop_controller(&mut input,&mut control_active,&service,id);
                                 stop_stream(&mut stream,&service,id,&principal,"OK");
-                                match StreamSession::start(StreamConfig {
+                                match start_session(StreamConfig {
                                     display:display.clone(),
                                     fps:fps.unwrap_or(0),
                                     max_width:max_width.unwrap_or(1920),

@@ -205,12 +205,22 @@ struct State {
     stopped: bool,
     closed: bool,
     receiver_alive: bool,
+    /// Keyframe requests folded into an already pending/sent IDR.
+    coalesced_keyframes: u64,
+    /// Last accepted (non-coalesced) keyframe request.
+    last_keyframe_request: Option<Instant>,
+    /// Last IDR actually published; requests inside the coalesce window wait
+    /// for that IDR instead of bumping the generation again.
+    last_keyframe_sent: Option<Instant>,
 }
 
 struct Shared {
     state: Mutex<State>,
     changed: Condvar,
     capacity: usize,
+    /// Minimum spacing between accepted keyframe requests: one frame interval,
+    /// never less than 250 ms.
+    keyframe_coalesce_window: Duration,
 }
 
 impl Shared {
@@ -298,7 +308,7 @@ impl StreamSession {
         Self::start_with_capture(config, capture_raw)
     }
 
-    fn start_with_capture<F>(
+    pub(crate) fn start_with_capture<F>(
         mut config: StreamConfig,
         capture: F,
     ) -> Result<(Self, StreamReceiver), ScreenError>
@@ -340,9 +350,14 @@ impl StreamSession {
                 stopped: false,
                 closed: false,
                 receiver_alive: true,
+                coalesced_keyframes: 0,
+                last_keyframe_request: None,
+                last_keyframe_sent: None,
             }),
             changed: Condvar::new(),
             capacity: config.queue_capacity.clamp(1, 4),
+            keyframe_coalesce_window: Duration::from_secs_f64(1.0 / f64::from(config.fps.max(1)))
+                .max(Duration::from_millis(250)),
         });
         let thread_shared = shared.clone();
         let worker = thread::Builder::new()
@@ -374,9 +389,32 @@ impl StreamSession {
     }
 
     pub fn request_keyframe(&self) {
+        let now = Instant::now();
         let mut state = self.shared.lock();
+        // Coalesce: an IDR is already pending (start/switch/overflow), or one
+        // was sent inside the coalesce window (>= 250 ms, one per frame
+        // interval). Bumping the generation here would make every in-flight
+        // capture stale and starve the canvas.
+        let pending = state.force_keyframe;
+        let recently_sent = state
+            .last_keyframe_sent
+            .is_some_and(|sent| now.saturating_duration_since(sent) < self.shared.keyframe_coalesce_window);
+        let recently_requested = state
+            .last_keyframe_request
+            .is_some_and(|request| now.saturating_duration_since(request) < Duration::from_millis(250));
+        if pending || recently_sent || recently_requested {
+            state.coalesced_keyframes = state.coalesced_keyframes.wrapping_add(1);
+            let coalesced = state.coalesced_keyframes;
+            drop(state);
+            // Rate-limited count only: no per-request line.
+            if coalesced == 1 || coalesced % 30 == 0 {
+                log::info!("operation=desktop_keyframe_coalesced count={coalesced}");
+            }
+            return;
+        }
         state.force_keyframe = true;
         state.generation = state.generation.wrapping_add(1);
+        state.last_keyframe_request = Some(now);
         state.queue.clear();
         self.shared.changed.notify_all();
     }
@@ -428,11 +466,28 @@ where
     let mut differ = FrameDiffer::new(config.quality);
     let mut h264_state = H264State::default();
     let mut seq = 0u64;
+    // Boundaries only: start/stop/errors at info, aggregate stats at debug and
+    // never more than once per 30 s. A per-tick info line would be 30 lines/s.
+    let mut ticks = 0u64;
+    let mut published = 0u64;
+    let mut errors = 0u64;
+    let mut last_stats = Instant::now();
+    log::info!(
+        "operation=desktop_capture_start display={} codec={} fps={} max_width={}",
+        config.display,
+        config.codec.as_str(),
+        config.fps,
+        config.max_width
+    );
     loop {
         let (display, generation, force_keyframe) = {
             let mut state = shared.lock();
             loop {
                 if state.stopped || !state.receiver_alive {
+                    log::info!(
+                        "operation=desktop_capture_stop display={} ticks={ticks} frames={published} errors={errors}",
+                        state.display
+                    );
                     return;
                 }
                 let remaining = next_capture.saturating_duration_since(Instant::now());
@@ -455,9 +510,9 @@ where
         // cannot exceed the configured maximum capture rate.
         next_capture = Instant::now() + interval;
         let capture_started = Instant::now();
-        let result: Result<(), ScreenError> = (|| {
+        let result: Result<bool, ScreenError> = (|| {
             let image = capture(&display, config.max_width)?;
-            let published = match config.codec {
+            let did_publish = match config.codec {
                 StreamCodec::H264 => capture_h264(
                     shared,
                     generation,
@@ -479,19 +534,31 @@ where
                     }
                 }
             };
-            if published {
+            if did_publish {
                 seq = seq
                     .checked_add(1)
                     .ok_or_else(|| capture_error("frame sequence exhausted"))?;
             }
-            Ok(())
+            Ok(did_publish)
         })();
-        log::info!(
-            "operation=desktop_capture stable_code={} duration_ms={}",
-            result.as_ref().err().map_or("OK", ScreenError::code),
-            capture_started.elapsed().as_millis()
-        );
+        ticks = ticks.saturating_add(1);
+        if last_stats.elapsed() >= Duration::from_secs(30) {
+            log::debug!(
+                "operation=desktop_capture_stats codec={} ticks={ticks} frames={published} errors={errors}",
+                config.codec.as_str()
+            );
+            last_stats = Instant::now();
+        }
+        if matches!(&result, Ok(true)) {
+            published = published.saturating_add(1);
+        }
         if let Err(error) = result {
+            errors = errors.saturating_add(1);
+            log::info!(
+                "operation=desktop_capture_error stable_code={} duration_ms={}",
+                error.code(),
+                capture_started.elapsed().as_millis()
+            );
             let mut state = shared.lock();
             if state.stopped {
                 return;
@@ -506,6 +573,9 @@ where
             state.closed = true;
             shared.changed.notify_all();
             return;
+        }
+        if result == Ok(true) {
+            published = published.saturating_add(1);
         }
     }
 }
@@ -549,10 +619,45 @@ fn publish_frame(
 #[derive(Default)]
 struct H264State {
     encoder: Option<H264Encoder>,
-    /// Last encoded canvas: identical frames are skipped entirely.
-    last_frame: Option<(u32, u32, Vec<u8>)>,
+    /// Cheap change detection: `(width, height, fingerprint)`. A full RGBA
+    /// copy per frame (~8 MiB at 1080p, 30 fps) is never retained.
+    last_frame: Option<(u32, u32, u64)>,
     /// Set after a dropped frame or queue overflow: the next frame must be an IDR.
     force_keyframe: bool,
+    /// Effective bitrate after oversize/encode-failure step-downs.
+    bitrate_kbps: Option<u32>,
+    /// Consecutive encode failures; a fresh encoder gets three attempts.
+    encode_failures: u32,
+}
+
+/// 64-bit fingerprint of one canvas. Hashing costs one pass with no
+/// allocation; a collision would at worst skip one tick until the periodic IDR.
+fn frame_fingerprint(width: u32, height: u32, image: &RgbaImage) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    width.hash(&mut hasher);
+    height.hash(&mut hasher);
+    image.as_raw().hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Recovers from a failed/oversize encode: drop the session, demand an IDR on
+/// the next tick (even when the canvas did not change) and halve the bitrate.
+/// Returns an error after three consecutive failures so a permanently broken
+/// encoder still terminates the stream instead of spinning forever.
+fn recover_from_encode_failure(
+    state: &mut H264State,
+    configured_bitrate_kbps: u32,
+) -> Result<(), ScreenError> {
+    state.encoder = None;
+    state.force_keyframe = true;
+    state.encode_failures = state.encode_failures.saturating_add(1);
+    let current = state.bitrate_kbps.unwrap_or(configured_bitrate_kbps);
+    state.bitrate_kbps = Some((current / 2).max(codec::MIN_BITRATE_KBPS));
+    if state.encode_failures >= 3 {
+        return Err(capture_error("h264 encoding failed"));
+    }
+    Ok(())
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -618,14 +723,18 @@ fn capture_h264(
         return Err(capture_error("capture too small for h264"));
     }
     let mut force_keyframe = requested_keyframe || state.force_keyframe;
-    // Unchanged screen: the client already holds a decodable frame.
-    if !force_keyframe
-        && state.last_frame.as_ref().is_some_and(|(w, h, bytes)| {
-            *w == width && *h == height && bytes.as_slice() == image.as_raw()
-        })
-    {
+    // Unchanged screen: the client already holds a decodable frame. A forced
+    // keyframe (including retry after an encode failure) always re-encodes.
+    let unchanged = !force_keyframe
+        && state.last_frame.is_some_and(|(w, h, fingerprint)| {
+            w == width
+                && h == height
+                && fingerprint == frame_fingerprint(width, height, image)
+        });
+    if unchanged {
         return Ok(false);
     }
+    let effective_bitrate_kbps = state.bitrate_kbps.unwrap_or(bitrate_kbps);
     // A new session starts with an IDR, which also covers display switches and
     // resolution changes (both recreate the encoder).
     if state
@@ -636,11 +745,11 @@ fn capture_h264(
     {
         state.encoder = None;
         force_keyframe = true;
-        match H264Encoder::new(even_width, even_height, bitrate_kbps, fps) {
+        match H264Encoder::new(even_width, even_height, effective_bitrate_kbps, fps) {
             Ok(encoder) => {
                 log::info!(
                     "desktop_h264_encoder_ready width={even_width} height={even_height} \
-                     bitrate_kbps={bitrate_kbps} fps={fps}"
+                     bitrate_kbps={effective_bitrate_kbps} fps={fps}"
                 );
                 state.encoder = Some(encoder);
             }
@@ -655,13 +764,16 @@ fn capture_h264(
         None => return Err(capture_error("h264 encoder unavailable")),
     };
     let encoded = match encode_result {
-        Ok(Some(encoded)) => encoded,
+        Ok(Some(encoded)) => {
+            state.encode_failures = 0;
+            encoded
+        }
         Ok(None) => return Ok(false),
         Err(error) => {
             log::warn!("desktop_h264_encode_failed reason={}", error.reason());
-            state.encoder = None;
-            state.force_keyframe = true;
-            return Err(capture_error("h264 encoding failed"));
+            // Retry the same canvas as a smaller IDR on the next tick.
+            recover_from_encode_failure(state, bitrate_kbps)?;
+            return Ok(false);
         }
     };
     let header = H264Header {
@@ -678,16 +790,26 @@ fn capture_h264(
         },
         len: encoded.sample.len() as u32,
     };
-    let packet = codec::encode_h264_frame(&H264Frame {
+    let packet = match codec::encode_h264_frame(&H264Frame {
         header,
         payload: encoded.payload(),
-    })
-    .map_err(capture_error)?;
+    }) {
+        Ok(packet) => packet,
+        Err(error) => {
+            // Oversized or rejected framing: never a silent drop.
+            log::warn!("desktop_h264_packet_rejected reason={error}");
+            recover_from_encode_failure(state, bitrate_kbps)?;
+            return Ok(false);
+        }
+    };
     let outcome = publish_h264_packet(shared, generation, encoded.keyframe, packet)?;
-    state.last_frame = Some((width, height, image.as_raw().clone()));
+    state.last_frame = Some((width, height, frame_fingerprint(width, height, image)));
     match outcome {
         H264Publish::Sent => {
             state.force_keyframe = false;
+            if encoded.keyframe {
+                shared.lock().last_keyframe_sent = Some(Instant::now());
+            }
             Ok(true)
         }
         H264Publish::DroppedNeedsKeyframe => {
@@ -733,9 +855,21 @@ mod tests {
                 stopped: false,
                 closed: false,
                 receiver_alive: true,
+                coalesced_keyframes: 0,
+                last_keyframe_request: None,
+                last_keyframe_sent: None,
             }),
             changed: Condvar::new(),
             capacity,
+            keyframe_coalesce_window: Duration::from_millis(250),
+        }
+    }
+
+    fn session_over(shared: Arc<Shared>) -> StreamSession {
+        StreamSession {
+            shared,
+            worker: None,
+            codec: StreamCodec::Jpeg,
         }
     }
 
@@ -888,18 +1022,124 @@ mod tests {
         )
         .is_err());
         // Pretend a frame was already encoded and is identical: no packet.
-        state.last_frame = Some((256, 256, image.as_raw().clone()));
+        state.last_frame = Some((256, 256, frame_fingerprint(256, 256, &image)));
         assert!(!capture_h264(&stream, 0, "1", 0, &image, false, &mut state, 4000, 30).unwrap());
         assert!(stream.lock().queue.is_empty());
+        let unchanged_fingerprint = frame_fingerprint(256, 256, &image);
+        let mut changed = image.clone();
+        changed.put_pixel(0, 0, Rgba([1, 2, 3, 4]));
+        assert_ne!(
+            unchanged_fingerprint,
+            frame_fingerprint(256, 256, &changed),
+            "a changed canvas must never look unchanged"
+        );
         // Odd geometry is cropped, and h264::even_dimension is the single rule.
         assert_eq!(h264::even_dimension(1919), 1918);
         assert_eq!(h264::even_dimension(1080), 1080);
+    }
+
+    /// RV-005: a pending IDR absorbs further requests without bumping the
+    /// generation, so in-flight captures stay publishable.
+    #[test]
+    fn keyframe_requests_are_coalesced_into_a_pending_idr() {
+        let shared_state = Arc::new(shared(2));
+        shared_state.lock().force_keyframe = true;
+        let session = session_over(shared_state.clone());
+        session.request_keyframe();
+        session.request_keyframe();
+        session.request_keyframe();
+        let state = shared_state.lock();
+        assert_eq!(state.generation, 0, "pending IDR must not be superseded");
+        assert_eq!(state.coalesced_keyframes, 3);
+    }
+
+    /// RV-005: repeated requests inside the coalesce window do not starve the
+    /// capture loop, so frames keep arriving.
+    #[test]
+    fn twenty_back_to_back_keyframe_requests_still_publish_frames() {
+        let tick = Arc::new(AtomicU64::new(0));
+        let counter = tick.clone();
+        let config = StreamConfig {
+            display: "1".into(),
+            fps: 30,
+            max_width: 128,
+            queue_capacity: 4,
+            ..StreamConfig::default()
+        };
+        let (mut session, receiver) = StreamSession::start_with_capture(config, move |_, _| {
+            let n = counter.fetch_add(1, Ordering::SeqCst) as u8;
+            Ok(RgbaImage::from_fn(128, 128, |x, y| {
+                Rgba([x as u8, y as u8, n, 255])
+            }))
+        })
+        .unwrap();
+        // Drain the start IDR so the window is tied to a real publication.
+        receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+        let mut received = 0;
+        for _ in 0..20 {
+            session.request_keyframe();
+            while let Ok(_) = receiver.try_recv() {
+                received += 1;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while received == 0 && Instant::now() < deadline {
+            if receiver.recv_timeout(Duration::from_millis(200)).is_ok() {
+                received += 1;
+            }
+        }
+        assert!(
+            received > 0,
+            "20 rapid keyframe requests must not starve the stream"
+        );
+        session.stop();
+    }
+
+    /// RV-003: an encode failure/oversize drops the session, forces an IDR on
+    /// the next tick and halves the bitrate; three failures terminate.
+    #[test]
+    fn encode_failure_forces_an_idr_and_steps_the_bitrate_down() {
+        let mut state = H264State::default();
+        state.bitrate_kbps = Some(4_000);
+        recover_from_encode_failure(&mut state, 4_000).unwrap();
+        assert!(state.encoder.is_none());
+        assert!(state.force_keyframe);
+        assert_eq!(state.bitrate_kbps, Some(2_000));
+        recover_from_encode_failure(&mut state, 4_000).unwrap();
+        assert_eq!(state.bitrate_kbps, Some(1_000));
+        assert!(recover_from_encode_failure(&mut state, 4_000).is_err());
+        assert_eq!(state.encode_failures, 3);
+    }
+
+    /// RV-003: an unchanged canvas is still re-encoded when a keyframe is forced.
+    #[test]
+    fn forced_keyframe_reencodes_an_unchanged_canvas() {
+        let _guard = h264::lock_test_encoder();
+        if !h264::available() {
+            eprintln!("skipping: VideoToolbox unavailable on this host");
+            return;
+        }
+        let shared = Arc::new(shared(2));
+        let mut state = H264State::default();
+        let image = canvas();
+        state.last_frame = Some((256, 256, frame_fingerprint(256, 256, &image)));
+        assert!(capture_h264(
+            &shared, 0, "1", 0, &image, true, &mut state, 4_000, 30
+        )
+        .unwrap());
+        let packet = match shared.lock().queue.pop_front() {
+            Some(StreamEvent::Frame(packet)) => packet,
+            other => panic!("expected a published frame, got {other:?}"),
+        };
+        assert!(codec::decode_h264_frame(&packet).unwrap().header.key);
     }
 
     /// Full H.264 session over synthetic frames: negotiation, IDR first, then
     /// deltas, all through the frozen wire framing. Needs no screen permission.
     #[test]
     fn h264_session_emits_idr_then_deltas() {
+        let _guard = h264::lock_test_encoder();
         if !h264::available() {
             eprintln!("skipping: VideoToolbox unavailable on this host");
             return;

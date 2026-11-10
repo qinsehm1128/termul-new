@@ -4,6 +4,7 @@ use super::super::{
 };
 use super::*;
 use axum::{body::to_bytes, middleware, routing::get, Router};
+use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 use tower::ServiceExt;
 
 fn authority() -> Arc<RemoteAccessAuthority> {
@@ -271,4 +272,202 @@ async fn paired_device_cannot_read_or_set_local_consent_or_emergency_endpoint() 
             .unwrap();
         assert_eq!(response.status(), StatusCode::FORBIDDEN, "{method} {path}");
     }
+}
+
+fn stream_app(authority: Arc<RemoteAccessAuthority>, service: Arc<DesktopService>) -> Router {
+    Router::new()
+        .route("/remote/desktop/info", get(info))
+        .route("/remote/desktop/stream", get(stream))
+        .layer(middleware::from_fn(crate::web::auth::capability_middleware))
+        .layer(Extension(RemoteRouteClass::RemoteDesktop))
+        .layer(Extension(IngressProvenance::PublicTunnel))
+        .layer(Extension(authority))
+        .layer(Extension(service))
+}
+
+type TestSocket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+async fn next_message(socket: &mut TestSocket) -> WsMessage {
+    tokio::time::timeout(Duration::from_secs(10), socket.next())
+        .await
+        .expect("timed out waiting for a websocket message")
+        .expect("websocket closed")
+        .expect("websocket error")
+}
+
+async fn next_meta(socket: &mut TestSocket) -> Value {
+    loop {
+        if let WsMessage::Text(text) = next_message(socket).await {
+            let value: Value = serde_json::from_str(&text).unwrap();
+            if value["type"] == "meta" {
+                return value;
+            }
+        }
+    }
+}
+
+async fn next_binary(socket: &mut TestSocket) -> Vec<u8> {
+    loop {
+        if let WsMessage::Binary(bytes) = next_message(socket).await {
+            return bytes.to_vec();
+        }
+    }
+}
+
+async fn connect_stream(addr: SocketAddr, token: &str) -> TestSocket {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let mut request = format!("ws://{addr}/remote/desktop/stream")
+        .into_client_request()
+        .unwrap();
+    request
+        .headers_mut()
+        .insert("origin", "https://desktop.test".parse().unwrap());
+    let (mut socket, _) = connect_async(request).await.unwrap();
+    socket
+        .send(WsMessage::Text(
+            json!({"id":"auth","type":"authenticate","payload":{"token":token}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    loop {
+        if let WsMessage::Text(text) = next_message(&mut socket).await {
+            let value: Value = serde_json::from_str(&text).unwrap();
+            if value["success"] == true {
+                break;
+            }
+            if value["type"] == "error" {
+                panic!("authentication failed: {value}");
+            }
+        }
+    }
+    socket
+}
+
+fn fake_capture() -> Box<dyn FnMut(&str, u32) -> Result<image::RgbaImage, screen::ScreenError> + Send>
+{
+    Box::new(|_, _| Ok(image::RgbaImage::from_pixel(320, 240, image::Rgba([1, 2, 3, 255]))))
+}
+
+/// `info` always advertises `jpeg`, and `h264` exactly when a session is usable.
+#[tokio::test]
+async fn info_advertises_codecs_array() {
+    let authority = authority();
+    let paired = pair(&authority);
+    authority
+        .set_device_scopes(&paired.device_id, vec!["screen.view".into()])
+        .unwrap();
+    let app = desktop_app(authority, DesktopService::for_tests(true, false));
+    let (status, body) = request_info(app, &paired.device_token).await;
+    assert_eq!(status, StatusCode::OK);
+    let codecs = body["codecs"].as_array().expect("codecs must be an array");
+    assert!(
+        codecs.iter().any(|codec| codec == "jpeg"),
+        "jpeg is always advertised"
+    );
+    assert_eq!(
+        codecs.iter().any(|codec| codec == "h264"),
+        screen::available_codecs().contains(&"h264")
+    );
+}
+
+/// RV-010: legacy start → JPEG @3fps, unusable h264 → JPEG @3fps, and an h264
+/// start round trip that publishes a real IDR (fake capture, no TCC prompt).
+#[tokio::test]
+async fn stream_start_negotiates_the_frozen_meta() {
+    if !screen::supported() {
+        eprintln!("skipping: desktop capture is unavailable in this test session");
+        return;
+    }
+    let authority = authority();
+    let paired = pair(&authority);
+    authority
+        .set_device_scopes(&paired.device_id, vec!["screen.view".into()])
+        .unwrap();
+    let service = DesktopService::for_tests(true, false);
+    let app = stream_app(authority.clone(), service);
+    let (status, body) = request_info(app.clone(), &paired.device_token).await;
+    assert_eq!(status, StatusCode::OK);
+    let Some(display) = body["displays"]
+        .as_array()
+        .and_then(|list| list.first())
+        .and_then(|display| display["id"].as_str())
+        .map(str::to_owned)
+    else {
+        eprintln!("skipping: this host has no display");
+        return;
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap()
+    });
+    let mut socket = connect_stream(addr, &paired.device_token).await;
+
+    // 1. Legacy payload (no codec/bitrate): JPEG at the legacy default 3 fps.
+    set_test_capture(fake_capture());
+    socket
+        .send(WsMessage::Text(
+            json!({"type":"start","display":display,"maxWidth":320,"quality":60})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    let meta = next_meta(&mut socket).await;
+    assert_eq!(meta["codec"], "jpeg");
+    assert_eq!(meta["fps"], 3);
+    assert_eq!(meta["display"], display);
+
+    // 2. h264 requested while the host cannot create a session: honest fallback.
+    let previous = screen::force_availability_for_tests(Some(false));
+    set_test_capture(fake_capture());
+    socket
+        .send(WsMessage::Text(
+            json!({"type":"start","display":display,"fps":30,"maxWidth":320,
+                   "quality":60,"codec":"h264","bitrate":4000})
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let meta = next_meta(&mut socket).await;
+    assert_eq!(meta["codec"], "jpeg", "unusable h264 must report jpeg");
+    // A requested 30 fps clamps to the JPEG ceiling, not the JPEG default.
+    assert_eq!(meta["fps"], 5);
+    screen::force_availability_for_tests(previous);
+
+    // 3. h264 start round trip: meta says h264 and a decodable IDR arrives.
+    if screen::available_codecs().contains(&"h264") {
+        // Parallel VideoToolbox sessions would slow the encoder benchmark test.
+        let _encoder_guard = screen::lock_test_encoder();
+        set_test_capture(fake_capture());
+        socket
+            .send(WsMessage::Text(
+                json!({"type":"start","display":display,"fps":30,"maxWidth":320,
+                       "quality":60,"codec":"h264","bitrate":4000})
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let meta = next_meta(&mut socket).await;
+        assert_eq!(meta["codec"], "h264");
+        assert_eq!(meta["fps"], 30);
+        let packet = next_binary(&mut socket).await;
+        let frame = screen::decode_h264_frame(&packet).expect("frozen wire framing");
+        assert!(frame.header.key, "the first h264 frame must be an IDR");
+        assert_eq!(frame.header.ps.len(), 2);
+        assert_eq!((frame.header.w, frame.header.h), (320, 240));
+    } else {
+        eprintln!("skipping h264 round trip: VideoToolbox unavailable on this host");
+    }
+    server.abort();
 }

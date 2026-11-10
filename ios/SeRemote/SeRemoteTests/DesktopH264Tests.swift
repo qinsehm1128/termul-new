@@ -195,4 +195,46 @@ struct DesktopH264Tests {
         let h264 = try JSONDecoder().decode(DesktopStreamMeta.self, from: Data(#"{"codec":"h264"}"#.utf8))
         #expect(h264.codec == .h264)
     }
+
+    @Test func parameterSetCapMatchesHost() {
+        #expect(DesktopH264Packet.maxParameterSetBytes == 1024)
+        let sps = Data(count: 1025)
+        let pps = Data([0x68, 0xce])
+        let sample = avcc([0x65, 0x88])
+        let data = wire(header(ps: [sps.count, pps.count], len: sample.count),
+                        parameterSets: [sps, pps], sample: sample)
+        expectInvalid(data)
+    }
+
+    /// RV-006: only a successful keyframe resets the failure streak, so three
+    /// failures since the last IDR trigger the silent JPEG fallback even when
+    /// deltas in between happened to decode.
+    @Test func failuresSinceLastIdrTriggerTheThreeStrikeFallback() {
+        var tracker = H264FailureTracker()
+        // Mutating calls stay outside #expect: the macro captures its
+        // expression immutably.
+        let first = tracker.recordFailure()
+        let second = tracker.recordFailure()
+        #expect(!first)
+        #expect(!second)
+        #expect(tracker.consecutiveFailures == 2)
+        // A delta decoding successfully must not hide the incompatibility.
+        tracker.recordSuccess(isKey: false)
+        #expect(tracker.consecutiveFailures == 2)
+        let third = tracker.recordFailure()
+        #expect(third, "third failure since the last IDR must fall back")
+        #expect(tracker.consecutiveFailures == 3)
+    }
+
+    @Test func successfulKeyframeClearsTheFailureStreak() {
+        var tracker = H264FailureTracker()
+        let first = tracker.recordFailure()
+        let second = tracker.recordFailure()
+        #expect(!first)
+        #expect(!second)
+        tracker.recordSuccess(isKey: true)
+        #expect(tracker.consecutiveFailures == 0)
+        let third = tracker.recordFailure()
+        #expect(!third)
+    }
 }
