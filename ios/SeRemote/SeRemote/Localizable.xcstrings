@@ -11527,6 +11527,36 @@
           }
         }
       }
+    },
+    "Load older messages" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加载更早的消息"
+          }
+        }
+      }
+    },
+    "Loading…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载…"
+          }
+        }
+      }
+    },
+    "Return to latest" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "回到最新"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
