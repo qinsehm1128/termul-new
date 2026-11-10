@@ -12417,6 +12417,26 @@
           }
         }
       }
+    },
+    "That conversation is no longer available." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该会话已不可用。"
+          }
+        }
+      }
+    },
+    "That project is no longer available." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该项目已不可用。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
