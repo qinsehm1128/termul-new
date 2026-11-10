@@ -543,9 +543,14 @@ struct ConnectedShellScreen: View {
         }
     }
 
+    /// Refresh everything T1 and the rail read. Quick records go first: their
+    /// live shell ids are the exclusion set that keeps those shells out of the
+    /// project groups, and a shell spawned on the host or by `open` must be
+    /// picked up by the same poll (and by the manual refresh button).
     private func refreshHub() async {
         guard session.phase == .connected else { return }
         refreshingHub = true
+        await session.quickTerminals.refresh()
         await hub.refresh(projects: session.projects.projects)
         refreshingHub = false
     }

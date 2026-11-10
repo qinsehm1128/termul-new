@@ -261,6 +261,7 @@ struct TerminalsHubScreen: View {
             )
             showsCreateQuick = false
             localNotice = String(localized: "Quick terminal created. Open it to start a shell on the host.")
+            onRefresh()
         } catch {
             localError = error.localizedDescription
         }
@@ -270,11 +271,15 @@ struct TerminalsHubScreen: View {
         guard row.canOpen, !busy else { return }
         busy = true
         localError = nil
-        defer { busy = false }
+        // `busy` must stay set until the host answers, so it lives inside the
+        // task: a `defer` outside would clear it before the request starts and
+        // let a double tap open two shells.
         Task {
+            defer { busy = false }
             do {
                 let opened = try await session.quickTerminals.open(id: row.id, cols: 80, rows: 24)
                 let claim = QuickTerminalPresentation.attachClaim(opened)
+                onRefresh()
                 onOpen(TerminalOpenRequest(
                     attach: .standalone(terminalID: opened.terminalId, claim: claim),
                     title: row.title,
@@ -307,6 +312,7 @@ struct TerminalsHubScreen: View {
                 let title = renameTitle.trimmingCharacters(in: .whitespacesAndNewlines)
                 try await session.quickTerminals.rename(id: record.id, title: title.isEmpty ? nil : title)
                 localNotice = String(localized: "Quick terminal renamed.")
+                onRefresh()
             } catch {
                 localError = error.localizedDescription
             }
@@ -326,6 +332,7 @@ struct TerminalsHubScreen: View {
                 try await session.quickTerminals.close(id: item.record.id)
                 localNotice = String(localized: "All terminals for this shortcut were closed.")
             }
+            onRefresh()
         } catch {
             localError = error.localizedDescription
         }

@@ -86,6 +86,47 @@ struct TerminalLandingModelTests {
         #expect(model.isEmpty == false)
     }
 
+    @Test("A quick row without a shell can open when the device may create one")
+    func quickCanOpenSpawns() throws {
+        let record = try quickRecord("q", terminal: nil)
+
+        let allowed = TerminalLandingModel.make(
+            summaries: [],
+            projects: [],
+            quickRecords: [record],
+            allowsCreate: true
+        )
+        #expect(allowed.quick.first?.terminalID == nil)
+        // The host spawns on open, so the old "live shell only" gate made a
+        // freshly created shortcut impossible to open from the phone.
+        #expect(allowed.quick.first?.canOpen == true)
+
+        let denied = TerminalLandingModel.make(
+            summaries: [],
+            projects: [],
+            quickRecords: [record],
+            allowsCreate: false
+        )
+        #expect(denied.quick.first?.canOpen == false)
+    }
+
+    @Test("A quick terminal's live shell never leaks into the project groups")
+    func quickShellExcludedFromProjects() throws {
+        let record = try quickRecord("q", terminal: "quick-1")
+        let model = TerminalLandingModel.make(
+            summaries: [
+                summary("quick-1", projectId: "a"),
+                summary("t1", projectId: "a"),
+            ],
+            projects: [try project("a", "Termul")],
+            quickRecords: [record],
+            allowsCreate: true
+        )
+        #expect(model.groups.flatMap(\.rows).map(\.id) == ["t1"])
+        #expect(model.quick.first?.terminalID == "quick-1")
+        #expect(model.quick.first?.canOpen == true)
+    }
+
     @Test("An empty host is an empty landing, never a fabricated terminal")
     func empty() {
         let model = TerminalLandingModel.make(

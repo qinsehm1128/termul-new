@@ -33,8 +33,9 @@ nonisolated struct TerminalLandingModel: Equatable, Sendable {
         let liveCount: Int
         /// The first live shell this shortcut owns, or `nil` when it has none.
         let terminalID: String?
-
-        var canOpen: Bool { terminalID != nil }
+        /// Opening may attach a live shell or ask the host to spawn one. It is
+        /// only disabled when there is neither a shell nor create permission.
+        let canOpen: Bool
     }
 
     /// Last terminal the user had open, when the host still reports it.
@@ -98,7 +99,8 @@ nonisolated struct TerminalLandingModel: Equatable, Sendable {
                 cwd: record.cwd,
                 targetLabel: QuickTerminalPresentation.targetLabel(record.target),
                 liveCount: live.count,
-                terminalID: live.first
+                terminalID: live.first,
+                canOpen: live.first != nil || allowsCreate
             )
         }
 
