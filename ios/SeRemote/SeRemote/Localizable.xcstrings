@@ -4228,6 +4228,16 @@
         }
       }
     },
+    "iPhone · Nocturne" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iPhone · Nocturne"
+          }
+        }
+      }
+    },
     "Keep fixing" : {
       "localizations" : {
         "zh-Hans" : {
@@ -7884,6 +7894,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "快照"
+          }
+        }
+      }
+    },
+    "Snapshot is read-only text. Desktop is a live view and needs the host's Screen Recording permission." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "快照为只读文本；桌面为实时画面，需要主机屏幕录制权限"
           }
         }
       }

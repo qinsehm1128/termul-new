@@ -69,12 +69,19 @@ struct SeEyebrow: View {
 struct SeGroupLabel: View {
     let title: String
     var count: String?
+    /// Standing explanation for the group, kept out of the layout as a tooltip.
+    var info: String? = nil
+    /// Accessible name for the info control; defaults to the group title.
+    var infoAccessibilityLabel: String? = nil
 
     @Environment(\.sePalette) private var palette
 
     var body: some View {
         HStack(spacing: 6) {
             Text(title)
+            if let info {
+                SeInfoTip(text: info, accessibilityLabel: infoAccessibilityLabel ?? title, size: 22)
+            }
             Spacer(minLength: 0)
             if let count {
                 Text(count)

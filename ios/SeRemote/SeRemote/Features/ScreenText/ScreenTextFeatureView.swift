@@ -115,7 +115,10 @@ struct ScreenTextFeatureView: View {
                 Text(verbatim: session.origin.host() ?? String(localized: "Connected host"))
                     .font(SeNocturneType.font(11, weight: .medium))
                     .foregroundStyle(palette.inkSecondary)
-                SeInfoTip(text: String(localized: "A read-only text snapshot from the host. This is not live screen sharing."), size: 24)
+                SeInfoTip(
+                    text: String(localized: "Snapshot is read-only text. Desktop is a live view and needs the host's Screen Recording permission."),
+                    size: 24
+                )
                 Spacer(minLength: 0)
             }
         }

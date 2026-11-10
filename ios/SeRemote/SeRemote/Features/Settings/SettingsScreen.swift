@@ -56,7 +56,11 @@ struct SettingsScreen: View {
                 }
 
                 if let link = permissionLink {
-                    SeGroupLabel(title: String(localized: "Device access"), count: nil)
+                    SeGroupLabel(
+                        title: String(localized: "Device access"),
+                        count: nil,
+                        info: String(localized: "Permissions are managed on the host.")
+                    )
                     SeGroupCard {
                         SeRowItem(icon: .lock, title: String(localized: "Device name"),
                                   detail: link.deviceName ?? String(localized: "This device")) {
@@ -76,11 +80,6 @@ struct SettingsScreen: View {
                         }
                     }
                     .padding(.horizontal, 18)
-                    Text("Permissions are managed on the host.")
-                        .font(SeNocturneType.font(10))
-                        .foregroundStyle(palette.inkTertiary)
-                        .padding(.horizontal, 18)
-                        .padding(.top, 8)
                 }
 
                 SeGroupLabel(title: String(localized: "Appearance"), count: nil)
@@ -121,7 +120,11 @@ struct SettingsScreen: View {
                 }
                 .padding(.horizontal, 18)
 
-                SeGroupLabel(title: String(localized: "Privacy"), count: nil)
+                SeGroupLabel(
+                    title: String(localized: "Privacy"),
+                    count: nil,
+                    info: String(localized: "Git and files are read-only")
+                )
                 SeGroupCard {
                     SeRowItem(icon: .lock, title: String(localized: "Credentials"), detail: String(localized: "Stored in this device keychain, never uploaded"), value: "Face ID") {
                         EmptyView()
@@ -130,10 +133,6 @@ struct SettingsScreen: View {
                         SeRowItem(title: String(localized: "Unpair this host"), destructive: true, action: {
                             hostToForget = host
                         }) {
-                            EmptyView()
-                        }
-                    } else {
-                        SeRowItem(title: String(localized: "Git and files are read-only")) {
                             EmptyView()
                         }
                     }
