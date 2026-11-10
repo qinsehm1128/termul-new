@@ -15,6 +15,11 @@ struct TerminalWorkbenchScreen: View {
     /// A tool screen asked for a full-screen file preview. The shell owns the
     /// cover, so the workbench hands the path out after the tool cover closes.
     var onOpenPreview: ((String) -> Void)? = nil
+    /// True while a sidebar inspector owns the agent surface. The `.agent`
+    /// action then selects the inspector's segment instead of presenting a
+    /// sheet, so a terminal never runs two hook pollers.
+    var hasAgentInspector = false
+    var onShowAgentInspector: () -> Void = {}
 
     @Environment(\.remoteDeviceLink) private var deviceLink
     @Environment(\.sePalette) private var palette
@@ -55,12 +60,14 @@ struct TerminalWorkbenchScreen: View {
         .onAppear(perform: syncCapabilities)
         .onChange(of: allowsInput) { _, _ in syncCapabilities() }
         .onChange(of: allowsAgentView) { _, _ in syncCapabilities() }
+        .onChange(of: hasAgentInspector) { _, _ in syncCapabilities() }
         .onChange(of: isActive) { _, active in
             if !active {
                 model.panelExpanded = false
                 model.dismissSheet()
                 blurToken &+= 1
             }
+            model.setActive(active)
         }
         .sheet(item: sheetRoute) { route in
             sheet(for: route.action)
@@ -90,7 +97,6 @@ struct TerminalWorkbenchScreen: View {
         if let host = model.canvasHost, let id = host.canvasTerminalID {
             TerminalScreen(
                 terminalId: id,
-                buffered: host.canvasBufferedOutput,
                 hostCols: host.canvasCols,
                 lockToHostCols: host.canvasLocksToHostCols,
                 textScale: textScale,
@@ -114,11 +120,6 @@ struct TerminalWorkbenchScreen: View {
             )
             .id(id)
             .transaction { $0.animation = nil }
-            .onAppear {
-                if !model.isStandalone {
-                    session.terminals.pendingOutput[id] = nil
-                }
-            }
         } else {
             emptyState
         }
@@ -313,6 +314,7 @@ struct TerminalWorkbenchScreen: View {
         model.allowsAgentView = allowsAgentView
         model.allowsAgentInput = allowsInput
         model.onExternalAction = onExternalAction
+        model.onSelectInspectorAgent = hasAgentInspector ? onShowAgentInspector : nil
     }
 
     private func toggleFit() {

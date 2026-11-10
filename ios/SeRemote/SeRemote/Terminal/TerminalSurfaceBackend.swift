@@ -21,4 +21,12 @@ protocol TerminalSurfaceBackend: AnyObject {
     func resize(cols: Int, rows: Int)
     func park() async
     func resume() async
+    /// False only for a backend that holds no live attachment (a failed open).
+    /// Close semantics derive from it: no attachment, no destructive close.
+    var isLiveAttached: Bool { get }
+}
+
+extension TerminalSurfaceBackend {
+    /// A workspace surface always has a live PTY behind it.
+    var isLiveAttached: Bool { true }
 }

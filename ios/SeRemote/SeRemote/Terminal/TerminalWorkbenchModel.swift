@@ -23,6 +23,9 @@ final class TerminalWorkbenchModel {
     /// Production probes the hook transcript to light the AgentChip. Tests
     /// turn it off so no HTTP poller outlives them.
     private let probesHook: Bool
+    /// Whether the store already holds a live watch for a terminal. Injected so
+    /// the resume fast path is testable without a host socket.
+    private let isWatching: @MainActor (String) -> Bool
 
     /// The request the surface is showing. Kept across `back()` so returning to
     /// the workbench resumes the same terminal instead of rebuilding it.
@@ -37,6 +40,10 @@ final class TerminalWorkbenchModel {
     /// `onExternalAction` instead, because their views belong to other lanes.
     private(set) var sheetAction: TerminalPanelAction?
     var onExternalAction: ((TerminalPanelAction) -> Void)?
+    /// Set by the shell while a sidebar inspector owns the agent surface. The
+    /// `.agent` action then selects the inspector's Agent segment instead of
+    /// presenting a sheet, so one terminal never runs two hook pollers.
+    var onSelectInspectorAgent: (() -> Void)?
 
     /// Link capabilities, mirrored into the hook probe. The screen owns the
     /// environment read; the model must not guess.
@@ -60,12 +67,14 @@ final class TerminalWorkbenchModel {
             try await backend.attach()
             return backend
         },
-        probesHook: Bool = true
+        probesHook: Bool = true,
+        isWatching: (@MainActor (String) -> Bool)? = nil
     ) {
         self.session = session
         self.makeWorkspaceBackend = workspaceBackend
         self.makeStandaloneBackend = standaloneBackend
         self.probesHook = probesHook
+        self.isWatching = isWatching ?? { session.terminals.isWatching($0) }
     }
 
     // MARK: - Reading the surface
@@ -156,7 +165,8 @@ final class TerminalWorkbenchModel {
             agentReady: agentReady,
             permissionCount: agentPermissionCount,
             subtitle: session.currentTerminalProjectName,
-            fitActive: session.terminals.displayMode == .phone
+            fitActive: session.terminals.displayMode == .phone,
+            standaloneAttached: activeBackend?.isLiveAttached ?? false
         )
     }
 
@@ -168,7 +178,27 @@ final class TerminalWorkbenchModel {
 
     /// Show a terminal. Backend switches release or park the previous lease
     /// before the new one claims geometry, and never kill the shell.
+    ///
+    /// Returning to the surface `back()` parked is a resume, not an open: the
+    /// canvas never unmounted, so re-running select/watch would re-watch the
+    /// PTY from seq 0 and replay the whole scrollback into the live view.
     func open(_ request: TerminalOpenRequest) async {
+        if activeBackend == nil,
+           let parkedRequest = self.request,
+           parkedRequest.attach == request.attach,
+           case .workspace = request.attach,
+           let backend = workspaceBackend,
+           isWatching(request.terminalID) {
+            panelExpanded = false
+            errorMessage = nil
+            // Keep the display metadata current without touching the surface.
+            self.request = request
+            activeBackend = backend
+            await backend.resume()
+            startHookProbe(for: request.terminalID)
+            return
+        }
+
         let previousRequest = self.request
         let previousBackend = activeBackend
 
@@ -214,9 +244,15 @@ final class TerminalWorkbenchModel {
                 self.request = request
                 stopHookProbe()
             } catch {
+                // No surface exists: keep no request, or the panel would offer a
+                // destructive "Close Terminal" for a shell this app never
+                // attached to. A failed attach may still have taken a host view
+                // lease, so drop that too — the PTY itself keeps running.
                 activeBackend = nil
-                self.request = request
+                standaloneBackend = nil
+                self.request = nil
                 errorMessage = error.localizedDescription
+                await session.terminals.releaseViewer(for: request.terminalID)
             }
         }
     }
@@ -236,6 +272,18 @@ final class TerminalWorkbenchModel {
             projectID: backend.activeProjectID,
             projectName: current.projectName
         )
+        startHookProbe(for: terminalID)
+    }
+
+    /// The surface left or returned to the screen. The PTY, the request and the
+    /// backend all stay; only the agent poller follows visibility, so a hidden
+    /// workbench stops probing at the visible cadence.
+    func setActive(_ active: Bool) {
+        guard active else {
+            stopHookProbe()
+            return
+        }
+        guard activeBackend != nil, let terminalID = request?.terminalID else { return }
         startHookProbe(for: terminalID)
     }
 
@@ -261,7 +309,13 @@ final class TerminalWorkbenchModel {
         switch action {
         case .files, .attach:
             onExternalAction?(action)
-        case .desktop, .agent, .more:
+        case .agent:
+            if let onSelectInspectorAgent {
+                onSelectInspectorAgent()
+            } else {
+                sheetAction = .agent
+            }
+        case .desktop, .more:
             sheetAction = action
         }
     }
@@ -306,11 +360,15 @@ final class TerminalWorkbenchModel {
         sheetAction = nil
 
         if case let .standalone(terminalID, _) = request.attach {
+            let attached = activeBackend?.isLiveAttached ?? false
             await standaloneBackend?.park()
             standaloneBackend = nil
             activeBackend = nil
             stopHookProbe()
             self.request = nil
+            // An unattached quick terminal has no host close route: the failed
+            // open already detached, and the shell keeps running.
+            guard attached else { return .disconnectedView }
             let record = session.quickTerminals.records.first {
                 $0.terminalId == terminalID || $0.terminalIds.contains(terminalID)
             }
@@ -365,7 +423,6 @@ final class TerminalWorkbenchModel {
 @MainActor
 protocol TerminalSurfaceCanvasHost: AnyObject {
     var canvasTerminalID: String? { get }
-    var canvasBufferedOutput: Data { get }
     var canvasCols: Int { get }
     var canvasRows: Int { get }
     var canvasLocksToHostCols: Bool { get }

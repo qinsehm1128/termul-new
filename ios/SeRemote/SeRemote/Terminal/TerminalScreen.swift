@@ -7,7 +7,6 @@ struct TerminalScreen: UIViewRepresentable {
     private var allowsInput: Bool { deviceLink?.allows("terminal.input") ?? true }
 
     var terminalId: String
-    var buffered: Data
     var hostCols: Int
     var lockToHostCols: Bool
     var textScale: CGFloat
@@ -40,9 +39,9 @@ struct TerminalScreen: UIViewRepresentable {
             context.coordinator.onTextScaleChange(scale, settled)
         }
         context.coordinator.attach(view)
-        if !buffered.isEmpty {
-            view.feed(byteArray: [UInt8](buffered)[...])
-        }
+        // Buffered output is not replayed here: `onReady` installs the feed and
+        // drains the backlog in the same synchronous step, so no byte can fall
+        // between the snapshot this struct captured and the installed feed.
         onReady { data in
             view.feed(byteArray: [UInt8](data)[...])
         }

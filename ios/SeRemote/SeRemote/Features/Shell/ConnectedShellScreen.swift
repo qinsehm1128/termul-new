@@ -142,10 +142,22 @@ struct ConnectedShellScreen: View {
                     }
 
                     if showsCommand {
-                        ConnectedCommandPalette(session: session, onOpenSession: {
-                            showsCommand = false
-                            reopenWorkbench()
-                        }, onClose: { showsCommand = false })
+                        ConnectedCommandPalette(
+                            session: session,
+                            onOpenSession: {
+                                showsCommand = false
+                                reopenWorkbench()
+                            },
+                            onOpenConversation: { conversationID in
+                                showsCommand = false
+                                openConversation(id: conversationID)
+                            },
+                            onOpenProject: { projectID in
+                                showsCommand = false
+                                openProject(projectID)
+                            },
+                            onClose: { showsCommand = false }
+                        )
                         .transition(.opacity)
                         .zIndex(20)
                     }
@@ -286,12 +298,39 @@ struct ConnectedShellScreen: View {
         }
     }
 
+    /// iPad centre pane while the workbench is closed. Back only parks the
+    /// surface, so the placeholder keeps the way back into it.
     private var iPadTerminalEmptyState: some View {
         VStack(alignment: .leading, spacing: 12) {
             SeDisplayText(text: String(localized: "Terminals"))
             Text("Pick a terminal from the sidebar.")
                 .font(SeNocturneType.font(11.5))
                 .foregroundStyle(palette.inkSecondary)
+            if let request = navigation.openRequest {
+                Button(action: reopenWorkbench) {
+                    HStack(spacing: 10) {
+                        SeIconView(icon: .terminal, size: 15, stroke: 1.6, color: palette.ink)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(String(localized: "Resume"))
+                                .font(SeNocturneType.font(12, weight: .semibold))
+                                .foregroundStyle(palette.ink)
+                            Text(request.title)
+                                .font(SeNocturneType.font(10, mono: true))
+                                .foregroundStyle(palette.inkSecondary)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                        SeIconView(icon: .arrowRight, size: 13, stroke: 1.6, color: palette.inkTertiary)
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 52)
+                    .background(palette.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(SePressable())
+                .accessibilityLabel(Text(String(localized: "Resume")))
+                .accessibilityValue(Text(request.title))
+            }
             Spacer(minLength: 0)
         }
         .padding(NocturneToolMetrics.gutter)
@@ -312,7 +351,9 @@ struct ConnectedShellScreen: View {
             },
             onOpenPreview: { path in
                 presentPreview(path)
-            }
+            },
+            hasAgentInspector: sidebar,
+            onShowAgentInspector: { inspectorSegment = .agent }
         )
     }
 
@@ -697,6 +738,40 @@ struct ConnectedShellScreen: View {
                 showsChatCover = true
             }
         }
+    }
+
+    /// ⌘K conversation row. The palette carries the id, the shell resolves it
+    /// against the list it already shows.
+    private func openConversation(id: String) {
+        guard let conversation = session.conversations.conversations.first(where: { $0.id == id }) else {
+            landingNotice = String(localized: "That conversation is no longer available.")
+            return
+        }
+        openConversation(conversation)
+    }
+
+    /// ⌘K project row: land on T1 with the project scoped. A project that
+    /// already has a live terminal opens that terminal instead of an empty list.
+    private func openProject(_ projectID: String) {
+        guard let project = session.projects.projects.first(where: { $0.id == projectID }) else {
+            landingNotice = String(localized: "That project is no longer available.")
+            return
+        }
+        if let summary = hub.summaries.first(where: { $0.projectId == projectID }) {
+            Task { await open(TerminalLandingModel.request(for: summary, projects: session.projects.projects)) }
+            return
+        }
+        leaveWorkbench()
+        Task {
+            await session.selectProject(project)
+            await refreshHub()
+        }
+    }
+
+    /// Return to T1 without closing anything: the surface only parks its lease.
+    private func leaveWorkbench() {
+        closeWorkbench()
+        Task { await terminalModel.back() }
     }
 
     private func openNeed(_ item: NeedsItem) {

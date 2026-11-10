@@ -86,9 +86,14 @@ nonisolated struct TerminalPanelPresentation: Equatable, Sendable {
         agentReady: Bool,
         permissionCount: Int,
         subtitle: String? = nil,
-        fitActive: Bool = true
+        fitActive: Bool = true,
+        standaloneAttached: Bool = true
     ) -> TerminalPanelPresentation {
         let isStandalone = request?.attach.isStandalone ?? false
+        // The host close route only exists for a quick terminal this surface is
+        // actually attached to. Without a live attachment the honest action is
+        // a view disconnect that leaves the shell running.
+        let closeShell = isStandalone && standaloneAttached
 
         let activeIndex = items.firstIndex(where: { $0.id == activeID })
         let counter: String
@@ -142,7 +147,7 @@ nonisolated struct TerminalPanelPresentation: Equatable, Sendable {
             showsTabs: !isStandalone,
             pty: pty,
             agent: agent,
-            close: isStandalone ? .closeShell : .disconnect,
+            close: closeShell ? .closeShell : .disconnect,
             isStandalone: isStandalone
         )
     }

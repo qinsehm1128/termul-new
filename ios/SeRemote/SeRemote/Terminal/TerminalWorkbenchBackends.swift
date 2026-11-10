@@ -63,11 +63,6 @@ final class WorkspaceTerminalBackend: TerminalSurfaceBackend, TerminalSurfaceCan
 
     var canvasTerminalID: String? { session.terminals.activeId }
 
-    var canvasBufferedOutput: Data {
-        guard let id = session.terminals.activeId else { return Data() }
-        return session.terminals.pendingOutput[id] ?? Data()
-    }
-
     var canvasCols: Int { activeTerminal?.cols ?? 80 }
     var canvasRows: Int { activeTerminal?.rows ?? 24 }
 
@@ -75,10 +70,17 @@ final class WorkspaceTerminalBackend: TerminalSurfaceBackend, TerminalSurfaceCan
         session.terminals.displayMode == .desktop
     }
 
+    /// Install the mounted canvas as the destination for this terminal's output
+    /// and replay whatever the store buffered while no feed existed, in one
+    /// synchronous step. Splitting the replay from the install would let output
+    /// that arrives in between land in the buffer and be lost on the next mount.
     func installCanvasFeed(_ feed: @escaping (Data) -> Void) {
         guard let id = session.terminals.activeId else { return }
         session.terminals.onFeed = { incomingId, data in
             if incomingId == id { feed(data) }
+        }
+        if let buffered = session.terminals.consumeOutput(for: id) {
+            feed(buffered)
         }
     }
 
@@ -138,6 +140,10 @@ final class StandaloneTerminalBackend: TerminalSurfaceBackend, TerminalSurfaceCa
 
     var activeProjectID: String? { request.projectID }
 
+    /// True only while the viewer holds a host attach. A quick terminal whose
+    /// attach failed has no close route and must not claim one.
+    var isLiveAttached: Bool { viewer?.isAttached == true }
+
     /// Quick terminals are not bound to a conversation, so there is no hook
     /// surface to advertise.
     var agentReady: Bool { false }
@@ -169,8 +175,6 @@ final class StandaloneTerminalBackend: TerminalSurfaceBackend, TerminalSurfaceCa
     // MARK: - Canvas
 
     var canvasTerminalID: String? { viewer?.terminalId ?? request.terminalID }
-
-    var canvasBufferedOutput: Data { Data() }
 
     var canvasCols: Int { viewer?.cols ?? 80 }
     var canvasRows: Int { viewer?.rows ?? 24 }

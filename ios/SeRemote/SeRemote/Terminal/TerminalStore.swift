@@ -30,7 +30,10 @@ struct LiveTerminal: Identifiable, Hashable, Sendable {
 final class TerminalStore {
     var terminals: [LiveTerminal] = []
     var activeId: String?
-    var pendingOutput: [String: Data] = [:]
+    /// Bytes that arrived while no canvas feed was installed. Only the store
+    /// writes them; `consumeOutput` hands them to the mounting canvas exactly
+    /// once, in the same step that installs the feed.
+    private(set) var pendingOutput: [String: Data] = [:]
     var errorMessage: String?
     var isConnecting = false
     var isRefreshingScreenObservation = false
@@ -68,6 +71,9 @@ final class TerminalStore {
     private var origin: URL?
     private var credentials: HostCredentials?
     private var watchedId: String?
+    /// Connection generation that took the watch. Watches are per-connection,
+    /// so `watchedId` alone cannot prove the host still replays to us.
+    private var watchedGeneration: Int?
     private var lastConversationId: String?
     private var lastProjectId: String?
 
@@ -126,6 +132,7 @@ final class TerminalStore {
             }
             if self.watchedId == terminalId {
                 self.watchedId = nil
+                self.watchedGeneration = nil
             }
             if self.activeId == terminalId {
                 self.activeId = self.terminals.first?.id
@@ -194,6 +201,17 @@ final class TerminalStore {
         }
     }
 
+    /// Drop whatever standalone viewer this PTY still holds. A failed open must
+    /// not leave a host view lease behind for the rest of the app run.
+    func releaseViewer(for terminalId: String) async {
+        guard let box = viewers[terminalId] else { return }
+        guard let viewer = box.viewer else {
+            viewers.removeValue(forKey: terminalId)
+            return
+        }
+        await releaseViewer(viewer)
+    }
+
     /// Claims are one-per-spawn. Keeping the ones this device received lets a
     /// later open that reuses the same live PTY attach instead of stranding it.
     private func rememberClaim(_ claim: String, for terminalId: String) {
@@ -220,7 +238,7 @@ final class TerminalStore {
             } else {
                 activeId = terminals.first?.id
             }
-            if let activeId, watchedId != activeId {
+            if let activeId, !isWatching(activeId) {
                 await open(activeId)
             }
         } catch {
@@ -250,10 +268,26 @@ final class TerminalStore {
         terminals[index].screenObservation = observation
     }
 
+    /// True when this PTY is already the watched terminal on the live
+    /// connection. A second watch would ask the host to replay from seq 0 into
+    /// a canvas that already shows that output.
+    func isWatching(_ terminalId: String) -> Bool {
+        guard let socket, socket.isConnected else { return false }
+        return watchedId == terminalId && watchedGeneration == socket.connectionGeneration
+    }
+
     func open(_ terminalId: String) async {
         guard let socket else { return }
         do {
             try await ensureConnected()
+            // Already watching this PTY on this connection: only re-assert the
+            // phone viewport. Re-watching here replayed the whole scrollback
+            // into the mounted canvas on every return from T1.
+            if isWatching(terminalId) {
+                activeId = terminalId
+                scheduleRefit(force: true)
+                return
+            }
             if let watchedId, watchedId != terminalId {
                 await releaseDisplayMode(for: watchedId)
                 await socket.detach(terminalId: watchedId)
@@ -263,6 +297,7 @@ final class TerminalStore {
                 terminals[index].terminalScreenEngine = attached.terminalScreenEngine
             }
             watchedId = terminalId
+            watchedGeneration = socket.connectionGeneration
             activeId = terminalId
             refitEpoch &+= 1
             // A fresh watch may land on a PTY the desktop resized meanwhile;

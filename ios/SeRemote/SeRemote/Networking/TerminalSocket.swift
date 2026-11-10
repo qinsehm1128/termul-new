@@ -85,6 +85,10 @@ struct LiveTerminalSummary: Decodable, Identifiable, Sendable {
 final class TerminalSocket {
     private(set) var isConnected = false
     private(set) var isRevoked = false
+    /// Bumped on every authenticated connection. A watch lives on the socket
+    /// connection that took it, so a caller holding one must compare this
+    /// generation before assuming the host still replays to it.
+    private(set) var connectionGeneration = 0
     private var origin: URL?
 
     var onBytes: (@MainActor (String, Data) -> Void)?
@@ -132,6 +136,7 @@ final class TerminalSocket {
             _ = try await self.request("authenticate", payload: ["token": token], as: EmptyPayload.self)
             guard !isRevoked else { throw HostError.deviceRevoked }
             isConnected = true
+            connectionGeneration &+= 1
             HostLog.session.info("terminal WebSocket authenticated")
         } catch {
             if case HostError.deviceRevoked = error {

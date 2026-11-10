@@ -30,6 +30,7 @@ struct TerminalWorkbenchModelTests {
         var activeCwdValue: String?
         var activeProjectIDValue: String?
         var agentReadyValue = false
+        var isLiveAttachedValue = true
         private(set) var writes: [String] = []
         private(set) var resizes: [(cols: Int, rows: Int)] = []
 
@@ -54,6 +55,7 @@ struct TerminalWorkbenchModelTests {
         var activeCwd: String? { activeCwdValue }
         var activeProjectID: String? { activeProjectIDValue }
         var agentReady: Bool { agentReadyValue }
+        var isLiveAttached: Bool { isLiveAttachedValue }
 
         func select(_ id: String) async {
             log.append("\(name).select")
@@ -92,7 +94,11 @@ struct TerminalWorkbenchModelTests {
         let session: WorkspaceSession
     }
 
-    private func makeFixture() -> Fixture {
+    private func makeFixture(
+        watching: Bool = false,
+        standaloneFails: Bool = false,
+        standaloneAttached: Bool = true
+    ) -> Fixture {
         let session = WorkspaceSession(
             accessURL: URL(string: "http://127.0.0.1:53290")!,
             bearer: "test"
@@ -112,7 +118,10 @@ struct TerminalWorkbenchModelTests {
             workspaceBackend: { _ in workspace },
             standaloneBackend: { _, request in
                 log.append("standalone.attach")
-                return FakeBackend(
+                if standaloneFails {
+                    throw HostError.network("The host refused the attach.")
+                }
+                let backend = FakeBackend(
                     name: "standalone",
                     log: log,
                     items: [TerminalSurfaceItem(
@@ -122,8 +131,11 @@ struct TerminalWorkbenchModelTests {
                     )],
                     activeTitle: request.title
                 )
+                backend.isLiveAttachedValue = standaloneAttached
+                return backend
             },
-            probesHook: false
+            probesHook: false,
+            isWatching: { _ in watching }
         )
         return Fixture(model: model, log: log, workspace: workspace, session: session)
     }
@@ -249,6 +261,94 @@ struct TerminalWorkbenchModelTests {
         #expect(fixture.model.request == request)
         #expect(fixture.model.activeBackend == nil)
         #expect(!fixture.log.events.contains { $0.contains("kill") || $0.contains("close") })
+    }
+
+    @Test("Returning to the parked terminal only resumes it")
+    func backThenReopenResumes() async {
+        let fixture = makeFixture(watching: true)
+        await fixture.model.open(workspaceRequest("t1"))
+        await fixture.model.back()
+        fixture.log.clear()
+
+        await fixture.model.open(workspaceRequest("t1"))
+
+        #expect(fixture.log.events == ["workspace.resume"])
+        #expect(fixture.model.request?.terminalID == "t1")
+        #expect(fixture.model.activeBackend != nil)
+        #expect(fixture.model.errorMessage == nil)
+    }
+
+    @Test("Returning to a different terminal still takes the full open path")
+    func reopenOtherTerminalSelects() async {
+        let fixture = makeFixture(watching: true)
+        await fixture.model.open(workspaceRequest("t1"))
+        await fixture.model.back()
+        fixture.log.clear()
+
+        await fixture.model.open(workspaceRequest("t2", title: "dev server"))
+
+        #expect(fixture.log.events == ["workspace.select", "workspace.resume"])
+        #expect(fixture.model.request?.terminalID == "t2")
+    }
+
+    @Test("A failed quick open keeps no request, surface or destructive close")
+    func failedQuickOpenLeavesNoSurface() async {
+        let fixture = makeFixture(standaloneFails: true)
+
+        await fixture.model.open(standaloneRequest("q1"))
+
+        #expect(fixture.model.request == nil)
+        #expect(fixture.model.activeBackend == nil)
+        #expect(fixture.model.errorMessage != nil)
+        #expect(fixture.model.panelPresentation.close == .disconnect)
+        #expect(await fixture.model.closeActiveTerminal() == nil)
+    }
+
+    @Test("An unattached quick backend never runs the host close route")
+    func unattachedQuickCloseOnlyDisconnects() async {
+        let fixture = makeFixture(standaloneAttached: false)
+        await fixture.model.open(standaloneRequest("q1"))
+        #expect(fixture.model.panelPresentation.close == .disconnect)
+        fixture.log.clear()
+
+        let result = await fixture.model.closeActiveTerminal()
+
+        #expect(result == .disconnectedView)
+        #expect(fixture.log.events == ["standalone.park"])
+        #expect(fixture.model.request == nil)
+    }
+
+    @Test("The agent action selects the inspector when one owns the surface")
+    func agentActionPrefersInspector() async {
+        let fixture = makeFixture()
+        await fixture.model.open(workspaceRequest("t1"))
+        var selections = 0
+        fixture.model.onSelectInspectorAgent = { selections += 1 }
+
+        fixture.model.present(.agent)
+
+        #expect(selections == 1)
+        #expect(fixture.model.sheetAction == nil)
+
+        fixture.model.onSelectInspectorAgent = nil
+        fixture.model.present(.agent)
+
+        #expect(fixture.model.sheetAction == .agent)
+    }
+
+    @Test("Leaving the screen stops the agent poller without touching the surface")
+    func inactiveStopsProbe() async {
+        let fixture = makeFixture()
+        await fixture.model.open(workspaceRequest("t1"))
+        let request = fixture.model.request
+        fixture.log.clear()
+
+        fixture.model.setActive(false)
+
+        #expect(fixture.model.hookStore == nil)
+        #expect(fixture.model.request == request)
+        #expect(fixture.model.activeBackend != nil)
+        #expect(fixture.log.events.isEmpty)
     }
 
     // MARK: - Paths

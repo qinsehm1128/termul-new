@@ -95,6 +95,25 @@ struct TerminalPanelPresentationTests {
         #expect(presentation.agent == nil)
     }
 
+    @Test("An unattached quick terminal never offers a destructive close")
+    func unattachedStandaloneDisconnects() {
+        let presentation = TerminalPanelPresentation.make(
+            request: standaloneRequest(),
+            items: [TerminalSurfaceItem(id: "q1", title: "Quick shell", cwd: "/repo")],
+            activeID: "q1",
+            cols: 80,
+            rows: 24,
+            agentName: nil,
+            agentReady: false,
+            permissionCount: 0,
+            standaloneAttached: false
+        )
+
+        #expect(presentation.close == .disconnect)
+        #expect(presentation.isStandalone)
+        #expect(!presentation.close.isDestructive)
+    }
+
     @Test("The agent row appears only when an agent is ready")
     func agentRowVisibility() {
         let hidden = TerminalPanelPresentation.make(
