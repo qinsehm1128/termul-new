@@ -53,7 +53,8 @@ struct AttachmentPickerModelTests {
         #expect(deliveries.first?.target == .terminal(id: "term-1"))
         #expect(deliveries.first?.shot.mimeType == "image/png")
         #expect(model.errorMessage == nil)
-        #expect(model.notice == String(localized: "Uploaded shot.png · path written to terminal"))
+        let name = "shot.png"
+        #expect(model.notice == String(localized: "Uploaded \(name) · path written to terminal"))
         #expect(model.isClosed)
         #expect(didClose)
         #expect(!model.isUploading)
@@ -71,7 +72,8 @@ struct AttachmentPickerModelTests {
         await model.send(data: try Self.pngData(), name: "shot.png")
 
         #expect(deliveredTarget == .agentChat(id: "term-1"))
-        #expect(model.notice == String(localized: "Uploaded shot.png · drafted to the agent"))
+        let name = "shot.png"
+        #expect(model.notice == String(localized: "Uploaded \(name) · drafted to the agent"))
         #expect(model.errorMessage == nil)
         #expect(didClose)
     }
