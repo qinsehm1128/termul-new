@@ -86,11 +86,16 @@ struct TerminalAgentChatContainer<Terminal: View>: View {
                 terminalID: terminalID, client: AgentChatClient(http: http),
                 canView: canView, canInput: canInput
             )
+            current.setConversationVisible(showConversation)
             store = current
             await current.follow()
         }
         .onAppear { if showConversation { dismissTerminalKeyboard() } }
-        .onChange(of: showConversation) { _, _ in dismissTerminalKeyboard() }
+        .onChange(of: showConversation) { _, visible in
+            dismissTerminalKeyboard()
+            store.setConversationVisible(visible)
+            if visible { Task { await store.refresh() } }
+        }
         .onChange(of: canView) { _, value in
             store.canView = value
             if !value { Task { await store.refresh() } }

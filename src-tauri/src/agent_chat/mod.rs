@@ -23,6 +23,76 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+/// Machine-readable chat failure codes shared by the Tauri command, the
+/// authenticated web facade and every client. Clients branch on these codes,
+/// never on free-text messages.
+pub mod codes {
+    /// No agent hook session is reporting for this terminal: an expected state.
+    pub const NO_HOOK: &str = "AGENT_CHAT_NO_HOOK";
+    /// A hook session exists, but its adapter has no transcript reader.
+    pub const UNSUPPORTED: &str = "UNSUPPORTED_AGENT_CHAT";
+    /// A real transport or transcript failure.
+    pub const ERROR: &str = "AGENT_CHAT_ERROR";
+}
+
+/// Adapters whose transcripts this module can read. Anything else is a hook
+/// session without a chat view, not a failure.
+const CHAT_ADAPTERS: [&str; 3] = ["claude-code", "pi", "qin-code"];
+
+/// Typed chat failure. Expected absence carries a stable code instead of an
+/// error message so clients can render an empty state; `Failed` keeps the
+/// internal detail server-side.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChatError {
+    NoHook,
+    UnsupportedAgent,
+    Failed(String),
+}
+
+impl ChatError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::NoHook => codes::NO_HOOK,
+            Self::UnsupportedAgent => codes::UNSUPPORTED,
+            Self::Failed(_) => codes::ERROR,
+        }
+    }
+    /// Client-visible reason. Generic by construction: never a terminal id,
+    /// payload, prompt or transcript path.
+    pub fn message(&self) -> &'static str {
+        match self {
+            Self::NoHook => "No agent is reporting a chat session for this terminal.",
+            Self::UnsupportedAgent => "This agent session has no chat transcript view.",
+            Self::Failed(_) => "Chat is temporarily unavailable.",
+        }
+    }
+    /// Expected absence is a state, not a fault.
+    pub fn is_expected(&self) -> bool {
+        !matches!(self, Self::Failed(_))
+    }
+    /// Server-side detail for real failures only; expected states stay silent.
+    /// These reasons are static strings, never terminal ids or payloads.
+    pub fn log_detail(&self) {
+        if let Self::Failed(reason) = self {
+            log::debug!("agent chat request failed: {reason}");
+        }
+    }
+}
+
+impl std::fmt::Display for ChatError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message())
+    }
+}
+
+impl std::error::Error for ChatError {}
+
+impl From<String> for ChatError {
+    fn from(value: String) -> Self {
+        Self::Failed(value)
+    }
+}
+
 const ACK_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_QUEUE: usize = 64;
 const MAX_RECEIPTS: usize = 64;
@@ -709,17 +779,16 @@ fn hook_name(kind: HookKind) -> &'static str {
 
 /// Transcript readers are a closed builtin set; custom adapter state never selects
 /// a parser by fallback or by a user-provided file extension.
-fn unsupported_or_missing(terminal: &str) -> String {
-    if agent_hooks::state::latest(terminal).is_some_and(|value| {
-        !matches!(
-            value.identity.adapter_id.as_str(),
-            "claude-code" | "pi" | "qin-code"
-        )
-    }) {
-        "UNSUPPORTED_AGENT_CHAT".into()
-    } else {
-        "terminal has no hooked agent".into()
+fn classify_adapter(adapter: Option<&str>) -> ChatError {
+    match adapter {
+        Some(id) if !CHAT_ADAPTERS.contains(&id) => ChatError::UnsupportedAgent,
+        _ => ChatError::NoHook,
     }
+}
+
+fn unsupported_or_missing(terminal: &str) -> ChatError {
+    let adapter = agent_hooks::state::latest(terminal).map(|value| value.identity.adapter_id);
+    classify_adapter(adapter.as_ref().map(|id| id.as_str()))
 }
 fn derived_chat_hook(value: agent_hooks::contract::HookStateDto) -> Option<AgentHookEvent> {
     use agent_hooks::contract::DerivedState;
@@ -766,20 +835,20 @@ enum Request {
         String,
         Option<u64>,
         Option<u64>,
-        mpsc::SyncSender<Result<ChatSnapshot, String>>,
+        mpsc::SyncSender<Result<ChatSnapshot, ChatError>>,
     ),
     Send(
         String,
         String,
         SendOptions,
         Option<SendGuard>,
-        mpsc::SyncSender<Result<Delivery, String>>,
+        mpsc::SyncSender<Result<Delivery, ChatError>>,
     ),
     Control(
         String,
         String,
         Option<SendGuard>,
-        mpsc::SyncSender<Result<(), String>>,
+        mpsc::SyncSender<Result<(), ChatError>>,
     ),
 }
 
@@ -929,7 +998,7 @@ fn run(
                     .get_mut(&id)
                     .ok_or_else(|| unsupported_or_missing(&id))
                     .and_then(|s| {
-                        if options.force {
+                        let delivery = if options.force {
                             let id = options
                                 .delivery_id
                                 .as_deref()
@@ -942,7 +1011,8 @@ fn run(
                             Err("delivery_id requires force".into())
                         } else {
                             s.enqueue(text, guard, &writer)
-                        }
+                        };
+                        delivery.map_err(ChatError::Failed)
                     });
                 if let Some(session) = sessions.get(&id) {
                     emit(&id, session.cursor);
@@ -951,15 +1021,15 @@ fn run(
             }
             Ok(Request::Control(id, action, guard, reply)) => {
                 let result = if guard.as_ref().is_some_and(|guard| !guard()) {
-                    Err("terminal.input scope denied".into())
+                    Err(ChatError::Failed("terminal.input scope denied".into()))
                 } else if sessions
                     .get(&id)
                     .is_some_and(|s| s.hook.kind != HookKind::SessionEnd)
                 {
                     match action.as_str() {
-                        "interrupt" => writer(&id, "\x1b"),
-                        "stop" => writer(&id, "\x03"),
-                        _ => Err("unknown chat control".into()),
+                        "interrupt" => writer(&id, "\x1b").map_err(ChatError::Failed),
+                        "stop" => writer(&id, "\x03").map_err(ChatError::Failed),
+                        _ => Err(ChatError::Failed("unknown chat control".into())),
                     }
                 } else {
                     Err(unsupported_or_missing(&id))
@@ -1001,35 +1071,35 @@ fn make_room(sessions: &mut HashMap<String, Session>) -> bool {
     }
     sessions.len() < MAX_SESSIONS
 }
-fn service() -> Result<&'static Service, String> {
+fn service() -> Result<&'static Service, ChatError> {
     SERVICE
         .get()
-        .ok_or_else(|| "chat service unavailable".into())
+        .ok_or_else(|| ChatError::Failed("chat service unavailable".into()))
 }
-pub fn snapshot(id: &str, after: Option<u64>) -> Result<ChatSnapshot, String> {
+pub fn snapshot(id: &str, after: Option<u64>) -> Result<ChatSnapshot, ChatError> {
     snapshot_page(id, after, None)
 }
 pub fn snapshot_page(
     id: &str,
     after: Option<u64>,
     before: Option<u64>,
-) -> Result<ChatSnapshot, String> {
+) -> Result<ChatSnapshot, ChatError> {
     let (tx, rx) = mpsc::sync_channel(1);
     service()?
         .tx
         .try_send(Request::Snapshot(id.into(), after, before, tx))
-        .map_err(|_| "chat worker busy")?;
+        .map_err(|_| ChatError::Failed("chat worker busy".into()))?;
     rx.recv_timeout(RPC_TIMEOUT)
-        .map_err(|_| "chat worker timeout")?
+        .map_err(|_| ChatError::Failed("chat worker timeout".into()))?
 }
-pub fn send(id: &str, text: String) -> Result<Delivery, String> {
+pub fn send(id: &str, text: String) -> Result<Delivery, ChatError> {
     send_authorized(id, text, None)
 }
 pub fn send_authorized(
     id: &str,
     text: String,
     guard: Option<SendGuard>,
-) -> Result<Delivery, String> {
+) -> Result<Delivery, ChatError> {
     send_with_options(id, text, SendOptions::default(), guard)
 }
 pub fn send_with_options(
@@ -1037,26 +1107,31 @@ pub fn send_with_options(
     text: String,
     options: SendOptions,
     guard: Option<SendGuard>,
-) -> Result<Delivery, String> {
+) -> Result<Delivery, ChatError> {
     let (tx, rx) = mpsc::sync_channel(1);
     service()?
         .tx
         .try_send(Request::Send(id.into(), text, options, guard, tx))
-        .map_err(|_| "chat worker busy")?;
-    rx.recv_timeout(RPC_TIMEOUT)
-        .map_err(|_| "chat worker timeout; delivery must not be retried automatically")?
+        .map_err(|_| ChatError::Failed("chat worker busy".into()))?;
+    rx.recv_timeout(RPC_TIMEOUT).map_err(|_| {
+        ChatError::Failed("chat worker timeout; delivery must not be retried automatically".into())
+    })?
 }
-pub fn control(id: &str, action: &str) -> Result<(), String> {
+pub fn control(id: &str, action: &str) -> Result<(), ChatError> {
     control_authorized(id, action, None)
 }
-pub fn control_authorized(id: &str, action: &str, guard: Option<SendGuard>) -> Result<(), String> {
+pub fn control_authorized(
+    id: &str,
+    action: &str,
+    guard: Option<SendGuard>,
+) -> Result<(), ChatError> {
     let (tx, rx) = mpsc::sync_channel(1);
     service()?
         .tx
         .try_send(Request::Control(id.into(), action.into(), guard, tx))
-        .map_err(|_| "chat worker busy")?;
+        .map_err(|_| ChatError::Failed("chat worker busy".into()))?;
     rx.recv_timeout(RPC_TIMEOUT)
-        .map_err(|_| "chat worker timeout")?
+        .map_err(|_| ChatError::Failed("chat worker timeout".into()))?
 }
 
 #[cfg(test)]

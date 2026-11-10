@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { agentChatApi, subscribeAgentChatUpdated } from './agent-chat-api'
+import {
+  AgentChatError,
+  agentChatAbsence,
+  agentChatApi,
+  agentChatErrorCode,
+  subscribeAgentChatUpdated
+} from './agent-chat-api'
 import {
   _resetRemoteAccessCredentialForTests,
   setRemoteAccessCredential
@@ -186,5 +192,48 @@ describe('terminal agent chat facade parity', () => {
     fetcher.mockRejectedValue(new Error('offline'))
     await expect(agentChatApi.snapshot('pty')).rejects.toThrow()
     expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('expected chat absence codes', () => {
+  it('normalizes the bare desktop rejection code and keeps the message generic', async () => {
+    mocks.desktop = true
+    mocks.invoke.mockRejectedValue('AGENT_CHAT_NO_HOOK')
+    await expect(agentChatApi.snapshot('pty/a')).rejects.toMatchObject({
+      code: 'AGENT_CHAT_NO_HOOK',
+      message: 'No agent is reporting a chat session for this terminal.'
+    })
+    expect(agentChatAbsence('AGENT_CHAT_NO_HOOK')).toBe('no-hook')
+    expect(agentChatAbsence(new Error('AGENT_CHAT_NO_HOOK'))).toBeNull()
+    expect(agentChatAbsence({ code: 'UNSUPPORTED_AGENT_CHAT' })).toBe('unsupported')
+    expect(agentChatAbsence(new Error('boom'))).toBeNull()
+    expect(agentChatErrorCode({ code: 'AGENT_BUSY' })).toBe('AGENT_BUSY')
+    expect(agentChatErrorCode(undefined)).toBe('AGENT_CHAT_ERROR')
+    // Transport codes render as their message, not "AgentChatError: ...".
+    expect(String(new AgentChatError('AGENT_CHAT_ERROR'))).toBe(
+      'Agent chat is temporarily unavailable; the terminal is still usable.'
+    )
+  })
+
+  it('keeps web absence codes non-fatal for both transports', async () => {
+    mocks.desktop = false
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              success: false,
+              code: 'AGENT_CHAT_NO_HOOK',
+              error: 'No agent is reporting a chat session for this terminal.'
+            })
+          )
+      )
+    )
+    await expect(agentChatApi.send('pty', 'hello')).rejects.toMatchObject({
+      code: 'AGENT_CHAT_NO_HOOK'
+    })
+    expect(agentChatAbsence({ code: 'AGENT_CHAT_NO_HOOK' })).toBe('no-hook')
+    expect(agentChatAbsence({ code: 'AGENT_CHAT_ERROR' })).toBeNull()
   })
 })

@@ -17,6 +17,42 @@ enum AgentChatDraftInbox {
 import Observation
 import OSLog
 
+/// Expected reasons a terminal has no conversation to show. Both are states,
+/// not failures: the terminal stays usable and the empty state explains them.
+enum AgentChatAbsence: String, Equatable, Sendable {
+    case noHook = "AGENT_CHAT_NO_HOOK"
+    case unsupported = "UNSUPPORTED_AGENT_CHAT"
+}
+
+/// Pure polling cadence, so the backoff is testable without timers.
+///
+/// The first retry keeps the base cadence, then intervals double (1s, 2s, 4s,
+/// 8s) up to the ceiling. Hidden conversations poll slowly just to learn
+/// whether a hook appeared; visibility itself is not a failure.
+struct AgentChatBackoffPolicy: Equatable, Sendable {
+    var baseMilliseconds = 1_000
+    var ceilingMilliseconds = 10_000
+    var hiddenMilliseconds = 10_000
+    private(set) var consecutiveFailures = 0
+
+    mutating func recordUnavailable() {
+        consecutiveFailures = min(consecutiveFailures + 1, 16)
+    }
+
+    mutating func reset() {
+        consecutiveFailures = 0
+    }
+
+    func intervalMilliseconds(visible: Bool) -> Int {
+        guard visible else { return hiddenMilliseconds }
+        var value = baseMilliseconds
+        for _ in 1..<max(consecutiveFailures, 1) {
+            value = min(value * 2, ceilingMilliseconds)
+        }
+        return min(value, ceilingMilliseconds)
+    }
+}
+
 @MainActor
 @Observable
 final class AgentChatStore {
@@ -43,6 +79,8 @@ final class AgentChatStore {
     private(set) var isSubmitting = false
     private(set) var isControlling = false
     private(set) var errorMessage: String?
+    /// Expected absence: the empty state explains it, `errorMessage` stays nil.
+    private(set) var absence: AgentChatAbsence?
     private(set) var reason: String?
     private(set) var submissionNotice: String?
     var draft = ""
@@ -50,12 +88,27 @@ final class AgentChatStore {
     var canInput: Bool
     private var refreshing = false
     private var mutationError: String?
+    private var backoff = AgentChatBackoffPolicy()
+    private var lastLoggedUnavailable: String?
+    private var refreshRequested = false
+    private(set) var isConversationVisible = true
+    /// Test seam for the transition log; production writes one os_log line.
+    private let logUnavailable: (String) -> Void
 
-    init(terminalID: String, client: AgentChatClient, canView: Bool = true, canInput: Bool = true) {
+    init(
+        terminalID: String,
+        client: AgentChatClient,
+        canView: Bool = true,
+        canInput: Bool = true,
+        logUnavailable: @escaping (String) -> Void = { message in
+            HostLog.ui.info("\(message, privacy: .public)")
+        }
+    ) {
         self.terminalID = terminalID
         self.client = client
         self.canView = canView
         self.canInput = canInput
+        self.logUnavailable = logUnavailable
     }
 
     var canSend: Bool {
@@ -65,14 +118,43 @@ final class AgentChatStore {
 
     var canControl: Bool { canView && canInput && isReady && !isSubmitting && !isControlling }
 
-    /// One reader owns polling. Transient failures leave the transcript intact and expose a terminal fallback.
+    /// Current polling cadence. Diagnostics and tests only; not user-visible.
+    var pollIntervalMilliseconds: Int {
+        backoff.intervalMilliseconds(visible: isConversationVisible)
+    }
+
+    /// One reader owns polling. Transient failures and expected absence leave the
+    /// transcript intact, back off, and expose the terminal fallback.
     func follow() async {
         HostLog.ui.info("agent_chat follow started")
         defer { HostLog.ui.info("agent_chat follow ended") }
         while !Task.isCancelled {
             await refresh()
-            do { try await Task.sleep(for: .seconds(1)) } catch { break }
+            var waited = 0
+            let interval = backoff.intervalMilliseconds(visible: isConversationVisible)
+            while !Task.isCancelled && !refreshRequested && waited < interval {
+                do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+                waited += 250
+            }
+            refreshRequested = false
         }
+    }
+
+    /// The terminal segment keeps the same mounted conversation; hiding it only
+    /// slows polling down, and showing it refreshes immediately at the base cadence.
+    func setConversationVisible(_ visible: Bool) {
+        guard isConversationVisible != visible else { return }
+        isConversationVisible = visible
+        guard visible else { return }
+        backoff.reset()
+        refreshRequested = true
+    }
+
+    /// Explicit user retry: the first attempt is immediate and at full cadence.
+    func retry() async {
+        backoff.reset()
+        refreshRequested = false
+        await refresh()
     }
 
     func refresh() async {
@@ -88,6 +170,7 @@ final class AgentChatStore {
             deliveries = []
             toolCalls = []
             messageToolIDs = [:]
+            absence = nil
             reason = String(localized: "This link does not allow viewing terminal conversations.")
             return
         }
@@ -102,10 +185,35 @@ final class AgentChatStore {
         } catch is CancellationError {
             return
         } catch {
+            let absent = Self.absence(for: error)
             isReady = false
-            errorMessage = String(localized: "Conversation unavailable. Return to the terminal or retry.")
-            // Never log the response body, prompt, terminal id, or credentials.
-            HostLog.ui.error("agent_chat snapshot failed")
+            absence = absent
+            // Expected absence is not an error: the empty state carries the explanation.
+            errorMessage = absent == nil
+                ? String(localized: "Conversation unavailable. Return to the terminal or retry.")
+                : nil
+            backoff.recordUnavailable()
+            noteUnavailable(absent)
+        }
+    }
+
+    private static func absence(for error: Error) -> AgentChatAbsence? {
+        guard case HostError.ipc(_, let code) = error else { return nil }
+        return AgentChatAbsence(rawValue: code)
+    }
+
+    /// One log line per unavailable transition; never one per poll tick, and
+    /// never a terminal id, prompt or payload.
+    private func noteUnavailable(_ absent: AgentChatAbsence?) {
+        let state = absent?.rawValue ?? "AGENT_CHAT_ERROR"
+        guard lastLoggedUnavailable != state else { return }
+        lastLoggedUnavailable = state
+        if let absent {
+            logUnavailable(
+                "agent_chat has no conversation to show (\(absent.rawValue)); showing the empty state"
+            )
+        } else {
+            logUnavailable("agent_chat snapshot failed; retrying with backoff")
         }
     }
 
@@ -146,6 +254,9 @@ final class AgentChatStore {
         reason = snapshot.reason
         isReady = snapshot.state == "ready"
         isLoading = false
+        backoff.reset()
+        lastLoggedUnavailable = nil
+        absence = nil
         errorMessage = mutationError
     }
 
@@ -269,7 +380,13 @@ final class AgentChatStore {
         } catch is CancellationError {
             return
         } catch {
-            errorMessage = String(localized: "Conversation unavailable. Retry or use the terminal.")
+            let absent = Self.absence(for: error)
+            absence = absent
+            isReady = false
+            errorMessage = absent == nil
+                ? String(localized: "Conversation unavailable. Retry or use the terminal.")
+                : nil
+            noteUnavailable(absent)
         }
     }
 

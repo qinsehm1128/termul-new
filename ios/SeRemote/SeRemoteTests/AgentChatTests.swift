@@ -481,6 +481,107 @@ struct AgentChatTests {
         #expect(!store.canControl)
     }
 
+    private func loggingStore(
+        _ fake: AgentChatFake,
+        logs: @escaping (String) -> Void
+    ) -> AgentChatStore {
+        AgentChatStore(
+            terminalID: "pty-1",
+            client: AgentChatClient(
+                snapshot: { terminal, cursor, before in try await fake.snapshot(terminal, cursor, before) },
+                send: { terminal, text, options in try await fake.send(terminal, text, options) },
+                control: { terminal, action in await fake.control(terminal, action) }
+            ),
+            logUnavailable: logs
+        )
+    }
+
+    @Test("Backoff doubles from 1s to the 10s ceiling and resets")
+    func backoffPolicySequence() {
+        var policy = AgentChatBackoffPolicy()
+        #expect(policy.intervalMilliseconds(visible: true) == 1_000)
+        var visible: [Int] = []
+        for _ in 0..<5 {
+            policy.recordUnavailable()
+            visible.append(policy.intervalMilliseconds(visible: true))
+        }
+        #expect(visible == [1_000, 2_000, 4_000, 8_000, 10_000])
+        #expect(policy.intervalMilliseconds(visible: false) == 10_000)
+        policy.reset()
+        #expect(policy.intervalMilliseconds(visible: true) == 1_000)
+    }
+
+    @Test("No hooked agent is an empty state, not an error, and is logged once per transition")
+    func noHookIsAnEmptyState() async {
+        let fake = AgentChatFake(value: snapshot())
+        await fake.setReadError(HostError.ipc("Chat snapshot unavailable", "AGENT_CHAT_NO_HOOK"))
+        var logs: [String] = []
+        let store = loggingStore(fake) { logs.append($0) }
+        await store.refresh()
+        #expect(store.errorMessage == nil)
+        #expect(store.absence == .noHook)
+        #expect(!store.isReady)
+        #expect(store.pollIntervalMilliseconds == 1_000)
+        await store.refresh()
+        await store.refresh()
+        #expect(logs.count == 1)
+        #expect(logs.first?.contains("AGENT_CHAT_NO_HOOK") == true)
+        #expect(store.pollIntervalMilliseconds == 4_000)
+        #expect(store.errorMessage == nil)
+    }
+
+    @Test("Recovery clears the absence and returns polling to the base cadence")
+    func recoveryResetsBackoff() async {
+        let fake = AgentChatFake(value: snapshot())
+        await fake.setReadError(HostError.ipc("unsupported", "UNSUPPORTED_AGENT_CHAT"))
+        var logs: [String] = []
+        let store = loggingStore(fake) { logs.append($0) }
+        await store.refresh()
+        await store.refresh()
+        #expect(store.absence == .unsupported)
+        #expect(store.errorMessage == nil)
+        #expect(store.pollIntervalMilliseconds == 2_000)
+        await fake.setReadError(nil)
+        await store.refresh()
+        #expect(store.absence == nil)
+        #expect(store.errorMessage == nil)
+        #expect(store.isReady)
+        #expect(store.pollIntervalMilliseconds == 1_000)
+        // A later failure is a new transition, so it logs again.
+        await fake.setReadError(HostError.ipc("gone", "AGENT_CHAT_NO_HOOK"))
+        await store.refresh()
+        #expect(logs.count == 2)
+    }
+
+    @Test("Real failures keep the message and do not log once per poll tick")
+    func realFailureLogsOnce() async {
+        let fake = AgentChatFake(value: snapshot())
+        await fake.setReadError(URLError(.networkConnectionLost))
+        var logs: [String] = []
+        let store = loggingStore(fake) { logs.append($0) }
+        await store.refresh()
+        #expect(store.absence == nil)
+        #expect(store.errorMessage == String(localized: "Conversation unavailable. Return to the terminal or retry."))
+        await store.refresh()
+        await store.refresh()
+        #expect(logs.count == 1)
+        #expect(store.pollIntervalMilliseconds == 4_000)
+    }
+
+    @Test("Polling is slow while the terminal segment shows and refreshes when conversation appears")
+    func visibilityDrivesCadence() async {
+        let fake = AgentChatFake(value: snapshot())
+        await fake.setReadError(HostError.ipc("none", "AGENT_CHAT_NO_HOOK"))
+        let store = loggingStore(fake) { _ in }
+        await store.refresh()
+        store.setConversationVisible(false)
+        #expect(store.pollIntervalMilliseconds == 10_000)
+        store.setConversationVisible(true)
+        #expect(store.pollIntervalMilliseconds == 1_000)
+        await store.retry()
+        #expect(store.pollIntervalMilliseconds == 1_000)
+    }
+
     @Test("Degraded state and whitespace draft cannot send or control")
     func degradedAndEmpty() async {
         let fake = AgentChatFake(value: snapshot(state: "degraded"))
@@ -599,6 +700,7 @@ private actor AgentChatFake {
     let failSend: Bool
     let delaySend: Bool
     var failRead = false
+    var readError: (any Error)?
     var cursors: [UInt64?] = []
     var beforeCursors: [UInt64?] = []
     var page: AgentChatSnapshot?
@@ -615,6 +717,7 @@ private actor AgentChatFake {
     }
 
     func setFailRead() { failRead = true }
+    func setReadError(_ error: (any Error)?) { readError = error }
     func setPage(_ value: AgentChatSnapshot, delayed: Bool = false) { page = value; delayPage = delayed }
     func finishPage() { if let page { pageContinuation?.resume(returning: page); pageContinuation = nil } }
     func snapshot(_ terminal: String, _ cursor: UInt64?, _ before: UInt64?) async throws -> AgentChatSnapshot {
@@ -624,6 +727,7 @@ private actor AgentChatFake {
             if delayPage { return await withCheckedContinuation { pageContinuation = $0 } }
             return page
         }
+        if let readError { throw readError }
         if failRead { throw URLError(.networkConnectionLost) }
         return value
     }

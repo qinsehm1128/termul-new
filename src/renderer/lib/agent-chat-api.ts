@@ -13,22 +13,99 @@ import { isTauriContext } from './tauri-runtime'
 import { webServerAgentChat } from './web-server-api'
 
 function unwrap<T>(result: IpcResult<T>): T {
-  if (!result.success) throw Object.assign(new Error(result.error), { code: result.code })
+  if (!result.success) throw new AgentChatError(result.code ?? AGENT_CHAT_ERROR, result.error)
   return result.data
+}
+
+/** Stable codes shared with the desktop command and the se-server facade. */
+export const AGENT_CHAT_NO_HOOK = 'AGENT_CHAT_NO_HOOK'
+export const UNSUPPORTED_AGENT_CHAT = 'UNSUPPORTED_AGENT_CHAT'
+export const AGENT_CHAT_ERROR = 'AGENT_CHAT_ERROR'
+
+/** Absence is a state, not a fault; the terminal itself stays usable. */
+export type AgentChatAbsence = 'no-hook' | 'unsupported'
+
+const absenceMessages: Record<string, string> = {
+  [AGENT_CHAT_NO_HOOK]: 'No agent is reporting a chat session for this terminal.',
+  [UNSUPPORTED_AGENT_CHAT]: 'This agent session has no chat transcript view.'
+}
+const genericMessage = 'Agent chat is temporarily unavailable; the terminal is still usable.'
+
+/** Transport failure that always carries a machine-readable code. */
+export class AgentChatError extends Error {
+  readonly code: string
+
+  constructor(code: string, message = absenceMessages[code] ?? genericMessage) {
+    super(message)
+    this.name = 'AgentChatError'
+    this.code = code
+  }
+
+  /** `String(error)` and templates render the message, never "Error: ...". */
+  override toString(): string {
+    return this.message
+  }
+}
+
+/** Code for either transport: Tauri rejects with the bare code, web with a code field. */
+export function agentChatErrorCode(cause: unknown): string {
+  if (typeof cause === 'string') return cause
+  if (cause && typeof cause === 'object' && 'code' in cause) {
+    const code = (cause as { code?: unknown }).code
+    if (typeof code === 'string' && code) return code
+  }
+  return AGENT_CHAT_ERROR
+}
+
+/** Expected absence, or null for a real failure. */
+export function agentChatAbsence(cause: unknown): AgentChatAbsence | null {
+  const code = agentChatErrorCode(cause)
+  if (code === AGENT_CHAT_NO_HOOK) return 'no-hook'
+  if (code === UNSUPPORTED_AGENT_CHAT) return 'unsupported'
+  return null
+}
+
+/** Normalize both transports so callers branch on one error type. */
+function failure(cause: unknown): AgentChatError {
+  if (cause instanceof AgentChatError) return cause
+  const code = agentChatErrorCode(cause)
+  if (absenceMessages[code]) return new AgentChatError(code)
+  const message = cause instanceof Error ? cause.message : undefined
+  return new AgentChatError(code, message || genericMessage)
 }
 
 export function createTauriAgentChatApi(): AgentChatApi<ChatMessage, ToolCall> {
   return {
-    snapshot: (terminalId, after, before) =>
-      invoke('agent_chat_snapshot', { terminalId, after: after ?? null, before: before ?? null }),
-    send: (terminalId, text, options) =>
-      invoke('agent_chat_send', {
-        terminalId,
-        text,
-        ...(options?.force !== undefined ? { force: options.force } : {}),
-        ...(options?.delivery_id !== undefined ? { deliveryId: options.delivery_id } : {})
-      }),
-    control: (terminalId, action) => invoke('agent_chat_control', { terminalId, action })
+    snapshot: async (terminalId, after, before) => {
+      try {
+        return await invoke<AgentChatSnapshot<ChatMessage, ToolCall>>('agent_chat_snapshot', {
+          terminalId,
+          after: after ?? null,
+          before: before ?? null
+        })
+      } catch (cause) {
+        throw failure(cause)
+      }
+    },
+    send: async (terminalId, text, options) => {
+      try {
+        return await invoke('agent_chat_send', {
+          terminalId,
+          text,
+          ...(options?.force !== undefined ? { force: options.force } : {}),
+          ...(options?.delivery_id !== undefined ? { deliveryId: options.delivery_id } : {})
+        })
+      } catch (cause) {
+        throw failure(cause)
+      }
+    },
+    control: async (terminalId, action) => {
+      try {
+        return await invoke('agent_chat_control', { terminalId, action })
+      } catch (cause) {
+        throw failure(cause)
+      }
+    }
   }
 }
 

@@ -819,3 +819,41 @@ fn failed_forced_write_is_final_and_never_resent() {
     s.flush(&failed);
     assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
+
+#[test]
+fn expected_absence_has_stable_codes_and_generic_messages() {
+    for (error, code) in [
+        (ChatError::NoHook, "AGENT_CHAT_NO_HOOK"),
+        (ChatError::UnsupportedAgent, "UNSUPPORTED_AGENT_CHAT"),
+    ] {
+        assert_eq!(error.code(), code);
+        assert!(error.is_expected());
+        assert!(!error.message().is_empty());
+        // Generic on purpose: client-visible text never carries terminal identity.
+        assert!(!error.message().contains("terminal-fixture"));
+    }
+    let failed = ChatError::Failed("worker detail terminal-fixture".into());
+    assert_eq!(failed.code(), "AGENT_CHAT_ERROR");
+    assert!(!failed.is_expected());
+    assert!(!failed.message().contains("terminal-fixture"));
+    assert_eq!(ChatError::from("boom".to_string()).code(), "AGENT_CHAT_ERROR");
+}
+
+#[test]
+fn adapter_classification_separates_absence_from_unsupported_readers() {
+    for supported in ["claude-code", "pi", "qin-code"] {
+        assert_eq!(classify_adapter(Some(supported)), ChatError::NoHook);
+    }
+    assert_eq!(classify_adapter(None), ChatError::NoHook);
+    for unsupported in ["custom-adapter", "codex", ""] {
+        assert_eq!(
+            classify_adapter(Some(unsupported)),
+            ChatError::UnsupportedAgent
+        );
+    }
+    // An unknown terminal has no hook state at all, which is the expected state.
+    assert_eq!(
+        unsupported_or_missing("terminal-without-hooks"),
+        ChatError::NoHook
+    );
+}

@@ -30,8 +30,16 @@ const deliveryLabels = {
 } as const
 
 function TerminalAgentChat({ terminalId }: { terminalId: string }) {
-  const { snapshot, error, refresh, loadOlder, loadingOlder, browsingOlder, returnLatest } =
-    useTerminalAgentChat(terminalId)
+  const {
+    snapshot,
+    error,
+    absence,
+    refresh,
+    loadOlder,
+    loadingOlder,
+    browsingOlder,
+    returnLatest
+  } = useTerminalAgentChat(terminalId)
   const tracked = useTerminalStore(
     (state) => state.terminals.find((terminal) => terminal.ptyId === terminalId)?.agentSession
   )
@@ -134,7 +142,14 @@ function TerminalAgentChat({ terminalId }: { terminalId: string }) {
           对话视图已降级：{error || snapshot?.reason || '无法解析会话记录'}。请切回终端继续操作。
         </div>
       )}
-      {!snapshot && !error && (
+      {!snapshot && !error && absence && (
+        <p role="status" className="p-3 text-sm text-muted-foreground">
+          {absence === 'unsupported'
+            ? '该 Agent 会话不支持对话视图。请切回终端继续操作。'
+            : '未检测到已连接的 Agent 会话。请在终端中启动受支持的 Agent 并启用 hooks，或切回终端。'}
+        </p>
+      )}
+      {!snapshot && !error && !absence && (
         <p role="status" className="p-3 text-sm text-muted-foreground">
           正在读取会话记录…
         </p>

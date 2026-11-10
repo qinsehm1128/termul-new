@@ -37,6 +37,20 @@ pub(super) fn update_allowed(
     principal.is_some_and(|principal| authority.require_scope(principal, "view").is_ok())
 }
 
+/// Same stable codes as the Tauri command: clients branch on `code`, so an
+/// expected absence ("no hooked agent") is never reported as a failure.
+fn failure_body<T>(error: crate::agent_chat::ChatError) -> IpcBody<T> {
+    error.log_detail();
+    IpcBody::err(error.message(), error.code())
+}
+
+/// A worker join failure is a real fault and never an expected absence state.
+fn worker_failure<T>() -> IpcBody<T> {
+    failure_body(crate::agent_chat::ChatError::Failed(
+        "chat worker unavailable".into(),
+    ))
+}
+
 fn allowed(
     authority: &RemoteAccessAuthority,
     principal: &RemotePrincipal,
@@ -62,11 +76,8 @@ pub async fn snapshot(
     .await;
     match value {
         Ok(Ok(value)) => Json(IpcBody::ok(value)).into_response(),
-        _ => Json(IpcBody::<()>::err(
-            "Chat snapshot unavailable",
-            "AGENT_CHAT_ERROR",
-        ))
-        .into_response(),
+        Ok(Err(error)) => Json(failure_body::<()>(error)).into_response(),
+        Err(_) => Json(worker_failure::<()>()).into_response(),
     }
 }
 pub async fn send(
@@ -98,11 +109,8 @@ pub async fn send(
     .await;
     match value {
         Ok(Ok(value)) => Json(IpcBody::ok(value)).into_response(),
-        _ => Json(IpcBody::<()>::err(
-            "Chat send not confirmed; do not retry automatically",
-            "AGENT_CHAT_ERROR",
-        ))
-        .into_response(),
+        Ok(Err(error)) => Json(failure_body::<()>(error)).into_response(),
+        Err(_) => Json(worker_failure::<()>()).into_response(),
     }
 }
 pub async fn control(
@@ -126,11 +134,8 @@ pub async fn control(
     .await;
     match value {
         Ok(Ok(())) => Json(IpcBody::ok(())).into_response(),
-        _ => Json(IpcBody::<()>::err(
-            "Chat control unavailable",
-            "AGENT_CHAT_ERROR",
-        ))
-        .into_response(),
+        Ok(Err(error)) => Json(failure_body::<()>(error)).into_response(),
+        Err(_) => Json(worker_failure::<()>()).into_response(),
     }
 }
 
@@ -174,6 +179,22 @@ mod tests {
                 .status(),
             StatusCode::FORBIDDEN
         );
+    }
+
+    #[test]
+    fn expected_absence_keeps_a_stable_code_and_generic_message() {
+        let missing = failure_body::<()>(crate::agent_chat::ChatError::NoHook);
+        assert!(!missing.success);
+        assert_eq!(missing.code.as_deref(), Some("AGENT_CHAT_NO_HOOK"));
+        assert_eq!(
+            missing.error.as_deref(),
+            Some("No agent is reporting a chat session for this terminal.")
+        );
+        let unsupported = failure_body::<()>(crate::agent_chat::ChatError::UnsupportedAgent);
+        assert_eq!(unsupported.code.as_deref(), Some("UNSUPPORTED_AGENT_CHAT"));
+        let failed = failure_body::<()>(crate::agent_chat::ChatError::Failed("detail".into()));
+        assert_eq!(failed.code.as_deref(), Some("AGENT_CHAT_ERROR"));
+        assert_eq!(worker_failure::<()>().code.as_deref(), Some("AGENT_CHAT_ERROR"));
     }
 
     #[test]

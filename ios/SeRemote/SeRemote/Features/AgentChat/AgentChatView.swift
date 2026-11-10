@@ -20,7 +20,7 @@ struct AgentChatView: View {
                 HStack {
                     Text(error).font(.footnote).foregroundStyle(palette.danger)
                     Spacer(minLength: 4)
-                    Button("Retry") { Task { await store.refresh() } }
+                    Button("Retry") { Task { await store.retry() } }
                         .frame(minWidth: 44, minHeight: 44)
                 }
                 .padding(.horizontal, 16)
@@ -128,6 +128,11 @@ struct AgentChatView: View {
             } else {
                 Text("Conversation unavailable").font(.headline)
                 Text("Start a supported agent with hooks enabled, or return to the terminal.")
+                if store.absence != nil {
+                    Button("Retry") { Task { await store.retry() } }
+                        .frame(minWidth: 44, minHeight: 44)
+                        .accessibilityIdentifier("agent-chat-retry")
+                }
             }
             if let reason = store.reason, !reason.isEmpty {
                 Text(reason).font(.footnote).textSelection(.enabled)

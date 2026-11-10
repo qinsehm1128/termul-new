@@ -6,16 +6,26 @@ import type { ToolCall } from '../lib/acp-api'
 import {
   AGENT_CHAT_MAX_BYTES,
   AGENT_CHAT_MAX_MESSAGES,
+  agentChatPollDelay,
   mergeAgentChatSnapshot,
   useTerminalAgentChat
 } from './use-terminal-agent-chat'
 
-const mocks = vi.hoisted(() => ({ snapshot: vi.fn(), desktop: false, listen: vi.fn() }))
-vi.mock('../lib/log-api', () => ({ logFrontendError: vi.fn() }))
-vi.mock('../lib/agent-chat-api', () => ({
-  agentChatApi: { snapshot: mocks.snapshot },
-  subscribeAgentChatUpdated: mocks.listen
+const mocks = vi.hoisted(() => ({
+  snapshot: vi.fn(),
+  desktop: false,
+  listen: vi.fn(),
+  logs: vi.fn()
 }))
+vi.mock('../lib/log-api', () => ({ logFrontendError: mocks.logs }))
+vi.mock('../lib/agent-chat-api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/agent-chat-api')>()
+  return {
+    ...actual,
+    agentChatApi: { snapshot: mocks.snapshot },
+    subscribeAgentChatUpdated: mocks.listen
+  }
+})
 vi.mock('../lib/tauri-runtime', () => ({ isTauriContext: () => mocks.desktop }))
 type Snapshot = AgentChatSnapshot<ChatMessage, ToolCall>
 const message = (id: string, text = id): ChatMessage => ({
@@ -42,6 +52,7 @@ beforeEach(() => {
   vi.useFakeTimers()
   mocks.snapshot.mockReset()
   mocks.listen.mockReset()
+  mocks.logs.mockReset()
   mocks.desktop = false
 })
 afterEach(() => {
@@ -391,5 +402,87 @@ describe('terminal agent chat snapshots', () => {
     })
     expect(result.current.error).toBeNull()
     expect(result.current.snapshot?.state).toBe('ready')
+  })
+})
+
+describe('terminal agent chat absence and backoff', () => {
+  it('backs off 2s -> 4s -> 8s -> 10s and never changes on success', () => {
+    expect([0, 1, 2, 3, 4, 5].map(agentChatPollDelay)).toEqual([
+      2000, 2000, 4000, 8000, 10000, 10000
+    ])
+  })
+
+  it('treats a missing hooked agent as an empty state and logs only on transition', async () => {
+    mocks.snapshot.mockRejectedValue('AGENT_CHAT_NO_HOOK')
+    const { result } = renderHook(() => useTerminalAgentChat('pty'))
+    await act(async () => {})
+    expect(result.current.error).toBeNull()
+    expect(result.current.absence).toBe('no-hook')
+    expect(mocks.logs).toHaveBeenCalledTimes(1)
+    expect(mocks.snapshot).toHaveBeenCalledTimes(1)
+    // First retry keeps the base cadence, then doubles up to the ceiling.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000)
+    })
+    expect(mocks.snapshot).toHaveBeenCalledTimes(2)
+    // 4s gap: the next poll lands at t=6s.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3999)
+    })
+    expect(mocks.snapshot).toHaveBeenCalledTimes(2)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    expect(mocks.snapshot).toHaveBeenCalledTimes(3)
+    // 8s gap: the next poll lands at t=14s, then the 10s ceiling applies.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(8000)
+    })
+    expect(mocks.snapshot).toHaveBeenCalledTimes(4)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9999)
+    })
+    expect(mocks.snapshot).toHaveBeenCalledTimes(4)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    expect(mocks.snapshot).toHaveBeenCalledTimes(5)
+    // One line for the whole absence, not one per failed poll.
+    expect(mocks.logs).toHaveBeenCalledTimes(1)
+    expect(mocks.logs.mock.calls[0][0].message).toContain('AGENT_CHAT_NO_HOOK')
+  })
+
+  it('does not report degradation for an unsupported adapter and recovers to the base cadence', async () => {
+    mocks.snapshot
+      .mockRejectedValueOnce({ code: 'UNSUPPORTED_AGENT_CHAT', message: 'unsupported' })
+      .mockResolvedValue(snap())
+    const { result } = renderHook(() => useTerminalAgentChat('pty'))
+    await act(async () => {})
+    expect(result.current.absence).toBe('unsupported')
+    expect(result.current.error).toBeNull()
+    expect(mocks.logs).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000)
+    })
+    expect(result.current.absence).toBeNull()
+    expect(result.current.snapshot?.state).toBe('ready')
+    // Recovery resets the cadence even though the previous poll failed.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000)
+    })
+    expect(mocks.snapshot).toHaveBeenCalledTimes(3)
+  })
+
+  it('keeps real failures as errors, backs off, and logs once per transition', async () => {
+    mocks.snapshot.mockRejectedValue(new Error('unsupported journal'))
+    const { result } = renderHook(() => useTerminalAgentChat('pty'))
+    await act(async () => {})
+    expect(result.current.absence).toBeNull()
+    expect(result.current.error).toBe('unsupported journal')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000)
+    })
+    expect(result.current.error).toBe('unsupported journal')
+    expect(mocks.logs).toHaveBeenCalledTimes(1)
   })
 })

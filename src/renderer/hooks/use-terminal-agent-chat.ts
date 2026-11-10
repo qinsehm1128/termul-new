@@ -2,13 +2,30 @@ import type { AgentChatSnapshot } from '@shared/types/agent-chat.types'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ChatMessage } from '../features/agent-session/stores/acp-store'
 import type { ToolCall } from '../lib/acp-api'
-import { agentChatApi, subscribeAgentChatUpdated } from '../lib/agent-chat-api'
+import {
+  type AgentChatAbsence,
+  agentChatAbsence,
+  agentChatApi,
+  agentChatErrorCode,
+  subscribeAgentChatUpdated
+} from '../lib/agent-chat-api'
 import { logFrontendError } from '../lib/log-api'
 import { isTauriContext } from '../lib/tauri-runtime'
 
 type Snapshot = AgentChatSnapshot<ChatMessage, ToolCall>
 export const AGENT_CHAT_MAX_MESSAGES = 1024
 export const AGENT_CHAT_MAX_BYTES = 16 * 1024 * 1024
+export const AGENT_CHAT_POLL_MS = 2000
+export const AGENT_CHAT_MAX_POLL_MS = 10000
+
+/**
+ * Back off consecutive failures: the first retry keeps the base cadence, then
+ * 2s doubles to the 10s ceiling. Recovery resets to the base cadence.
+ */
+export function agentChatPollDelay(failures: number): number {
+  if (failures <= 0) return AGENT_CHAT_POLL_MS
+  return Math.min(AGENT_CHAT_POLL_MS * 2 ** (failures - 1), AGENT_CHAT_MAX_POLL_MS)
+}
 
 function sequence(message: ChatMessage): number | undefined {
   return (message as ChatMessage & { seq?: number }).seq
@@ -126,6 +143,7 @@ export function mergeAgentChatSnapshot(
 export function useTerminalAgentChat(terminalId: string) {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [absence, setAbsence] = useState<AgentChatAbsence | null>(null)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [browsingOlder, setBrowsingOlder] = useState(false)
   const refreshRef = useRef<() => Promise<void>>(async () => {})
@@ -142,6 +160,9 @@ export function useTerminalAgentChat(terminalId: string) {
     let epoch = 0
     let refreshAgain = false
     let degraded = false
+    let failures = 0
+    let loggedCode: string | null = null
+    let timer: ReturnType<typeof setTimeout> | undefined
     const reportDegradation = () => {
       if (!degraded)
         void logFrontendError({
@@ -152,8 +173,27 @@ export function useTerminalAgentChat(terminalId: string) {
         })
       degraded = true
     }
+    /** One log line per code transition, never one per poll tick. */
+    const noteUnavailable = (code: string) => {
+      if (loggedCode === code) return
+      loggedCode = code
+      if (code === 'AGENT_CHAT_NO_HOOK' || code === 'UNSUPPORTED_AGENT_CHAT')
+        void logFrontendError({
+          source: 'terminal-agent-chat:snapshot',
+          level: 'warn',
+          message: `Terminal Agent chat has no transcript to show (${code}); the empty state is shown and the terminal remains available.`
+        })
+      else reportDegradation()
+    }
+    const schedule = () => {
+      if (disposed) return
+      timer = setTimeout(() => {
+        void refresh().finally(schedule)
+      }, agentChatPollDelay(failures))
+    }
     setSnapshot(null)
     setError(null)
+    setAbsence(null)
     setLoadingOlder(false)
     setBrowsingOlder(false)
     const refresh = async () => {
@@ -171,13 +211,20 @@ export function useTerminalAgentChat(terminalId: string) {
           current = mergeAgentChatSnapshot(current, next)
           setSnapshot(current)
           setError(null)
+          setAbsence(null)
+          failures = 0
+          loggedCode = null
           if (current.state === 'degraded') reportDegradation()
           else degraded = false
         }
       } catch (cause) {
         if (!disposed) {
-          setError(cause instanceof Error ? cause.message : String(cause))
-          reportDegradation()
+          // No hooked agent is a normal state: show the empty view, not an error.
+          const absent = agentChatAbsence(cause)
+          setAbsence(absent)
+          setError(absent ? null : cause instanceof Error ? cause.message : String(cause))
+          noteUnavailable(agentChatErrorCode(cause))
+          failures += 1
         }
       } finally {
         inflight = false
@@ -250,7 +297,7 @@ export function useTerminalAgentChat(terminalId: string) {
     refreshRef.current = refresh
     olderRef.current = loadOlder
     void refresh()
-    const timer = window.setInterval(() => void refresh(), 2000)
+    schedule()
     let unlisten: (() => void) | undefined
     if (isTauriContext()) {
       void subscribeAgentChatUpdated((payload) => {
@@ -266,7 +313,7 @@ export function useTerminalAgentChat(terminalId: string) {
     }
     return () => {
       disposed = true
-      window.clearInterval(timer)
+      if (timer !== undefined) clearTimeout(timer)
       unlisten?.()
     }
   }, [terminalId])
@@ -274,5 +321,14 @@ export function useTerminalAgentChat(terminalId: string) {
   const refresh = useCallback(() => refreshRef.current(), [])
   const loadOlder = useCallback(() => olderRef.current(), [])
   const returnLatest = useCallback(() => latestRef.current(), [])
-  return { snapshot, error, refresh, loadOlder, loadingOlder, browsingOlder, returnLatest }
+  return {
+    snapshot,
+    error,
+    absence,
+    refresh,
+    loadOlder,
+    loadingOlder,
+    browsingOlder,
+    returnLatest
+  }
 }
