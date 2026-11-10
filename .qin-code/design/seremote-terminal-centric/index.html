@@ -340,15 +340,10 @@ body.solo .phone{zoom:1;filter:drop-shadow(0 30px 60px rgba(0,0,0,.6))}
 .tip.open .tip-pop{display:block;animation:rise .25s var(--out)}
 
 /* terminal */
-.tabstrip{display:flex;align-items:center;gap:0;padding:12px 12px 0;border-bottom:1px solid var(--line);margin-top:12px;overflow-x:auto;scrollbar-width:none}
-.tabstrip::-webkit-scrollbar{display:none}
 .tab{position:relative;display:flex;align-items:center;gap:6px;height:34px;padding:0 11px;border:0;background:transparent;font-size:11px;color:#7F8595;cursor:pointer;white-space:nowrap}
 .tab.on{color:#F2F0E8}
 .tab.on::after{content:"";position:absolute;left:8px;right:8px;bottom:-1px;height:2px;background:var(--cobalt);border-radius:2px;animation:grow .35s var(--out)}
 .tab .idx{font-family:var(--mono);font-size:8.5px;opacity:.6}
-.tabadd{width:28px;height:28px;border-radius:7px;border:1px solid rgba(255,255,255,.12);background:transparent;display:grid;place-items:center;color:#9BA1AE;cursor:pointer;margin-left:2px;flex:0 0 auto}
-.termmeta{display:flex;align-items:center;gap:8px;padding:10px 18px 6px;font-family:var(--mono);font-size:8.5px;color:var(--ink3)}
-.termmeta .spacer{flex:1}
 .fitchip{border:1px solid rgba(255,255,255,.12);background:transparent;border-radius:5px;height:20px;padding:0 6px;font-family:var(--mono);font-size:8px;color:#A9AEBB;cursor:pointer}
 .term{margin:0 14px;flex:1;border-radius:14px;background:var(--term);border:1px solid #1D2027;padding:14px 13px;overflow-y:auto;scrollbar-width:none;
   font-family:var(--mono);font-size:10px;line-height:1.75;color:var(--term-ink)}
@@ -456,10 +451,6 @@ body.solo .phone{zoom:1;filter:drop-shadow(0 30px 60px rgba(0,0,0,.6))}
 .padrail .rfoot .meta{font-family:var(--mono);font-size:8px;color:#5C6272;padding:8px 9px 0}
 .padmain{flex:1;display:flex;flex-direction:column;min-width:0;background:#0B0D12}
 .padscroll{flex:1;overflow:hidden;padding:0 34px}
-.padtop{display:flex;align-items:center;gap:8px;padding:30px 0 0}
-.padtop .hostpill{display:flex;align-items:center;gap:6px;height:30px;padding:0 10px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.04);border-radius:8px;font-size:11px}
-.padtop .meta{font-family:var(--mono);font-size:9px;color:#7F8595}
-.padtop .spacer{flex:1}
 .padtitle{font-size:33px;font-weight:600;letter-spacing:-.045em;margin:16px 0 0;color:#F2F0E8}
 .padneed{display:flex;align-items:center;gap:10px;margin-top:14px;padding:0 13px;height:46px;border:1px solid rgba(242,179,107,.26);background:rgba(242,179,107,.09);border-radius:12px;font-size:11.5px}
 .padneed b{font-weight:600}
@@ -501,26 +492,6 @@ body.solo .phone{zoom:1;filter:drop-shadow(0 30px 60px rgba(0,0,0,.6))}
 .hero .hmeta{display:block;font-family:var(--mono);font-size:9px;color:var(--ink3);margin-top:5px}
 .hero .hgo{position:absolute;right:13px;top:50%;transform:translateY(-40%);color:var(--cobalt-deep);display:flex}
 .hero .hgo svg{width:14px;height:14px}
-
-/* terminal title with switcher */
-.wtitle{display:flex;align-items:center;gap:5px;max-width:100%;border:0;background:none;padding:0;cursor:pointer;text-align:left}
-.wtitle b{display:block;font-size:14px;font-weight:600;letter-spacing:-.015em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.wtitle svg{width:12px;height:12px;color:var(--ink3);flex:0 0 auto;margin-top:1px}
-.switcher{position:absolute;left:14px;right:14px;top:100px;z-index:44;padding:6px;border-radius:13px;border:1px solid var(--line2);background:var(--card);box-shadow:0 26px 50px rgba(0,0,0,.55);animation:rise .22s var(--out)}
-.switcher .sh{font-family:var(--mono);font-size:8px;letter-spacing:.08em;color:var(--ink3);padding:6px 9px 5px}
-.switcher button{display:flex;align-items:center;gap:9px;width:100%;height:38px;padding:0 9px;border:0;border-radius:8px;background:transparent;color:var(--ink);font-size:12px;text-align:left;cursor:pointer}
-.switcher button.on{background:rgba(139,155,255,.14)}
-.switcher button svg{width:14px;height:14px;color:var(--ink3)}
-.switcher button .m{margin-left:auto;font-family:var(--mono);font-size:8.5px;color:var(--ink3)}
-.switcher .sep{height:1px;background:var(--line);margin:5px 4px}
-
-/* hook ribbon as a control */
-.ribbonbtn{display:flex;align-items:center;gap:7px;width:calc(100% - 36px);margin:10px 18px 0;padding:8px 10px;border:1px solid var(--line);border-radius:9px;background:var(--card);
-  font-family:var(--mono);font-size:9px;color:var(--ink3);text-align:left;cursor:pointer;flex:0 0 auto}
-.ribbonbtn b{font-family:var(--sans);font-size:11px;font-weight:600;color:var(--ink)}
-.ribbonbtn .live{color:var(--mint)}
-.ribbonbtn .spacer{flex:1}
-.ribbonbtn .go{font-family:var(--mono);font-size:8.5px;color:var(--cobalt-deep)}
 
 /* sheets */
 .sheet-scene .sheet{z-index:57}
@@ -616,14 +587,9 @@ body.solo .phone{zoom:1;filter:drop-shadow(0 30px 60px rgba(0,0,0,.6))}
 .pad.pt .railrow{width:44px;height:34px;margin:0 auto;padding:0;justify-content:center}
 .pad.pt .railrow span{display:none}
 .pad.pt .padrail .rhost .ini{display:inline;font-size:12px;font-weight:600}
-.padterm{flex:1;display:flex;flex-direction:column;min-height:0;padding:0 24px}
-.padterm .tabstrip{margin-top:10px;padding:8px 0 0}
-.padterm .tab{font-size:13px;height:36px}
-.padterm .termmeta{padding:8px 2px 4px;font-size:10px}
+.padterm{flex:1;display:flex;flex-direction:column;min-height:0;padding:70px 0 0;position:relative}
 .padterm .fitchip{font-size:9.5px;height:22px}
-.padterm .ribbonbtn{width:100%;margin:8px 0 0;font-size:11px;padding:9px 11px}
-.padterm .ribbonbtn b{font-size:13px}
-.padterm .term{margin:0;font-size:13px;line-height:1.85;padding:14px}
+.padterm .term{margin:0;border:0;border-radius:0;font-size:13px;line-height:1.85;padding:14px 26px 58px}
 .padterm .keyrow{padding:8px 0 0}
 .padterm .key{height:32px;font-size:11px}
 .padterm .cmdrow{padding:8px 0 14px}
@@ -646,7 +612,7 @@ body.solo .phone{zoom:1;filter:drop-shadow(0 30px 60px rgba(0,0,0,.6))}
 .padinspect .previewbody .code{font-size:9.5px}
 .pad.pt .padinspect{position:absolute;right:0;top:0;bottom:0;z-index:8;box-shadow:-40px 0 70px rgba(0,0,0,.6)}
 .pad.pt .padscrim{display:block;position:absolute;inset:0;z-index:7;background:rgba(4,6,10,.42)}
-.pad.pt .padterm{padding:0 20px}
+.pad.pt .padterm{padding:64px 0 0}
 .pad .railrow{display:flex;align-items:center;gap:7px;height:30px;margin:0 10px;padding:0 8px;border-radius:7px;font-size:11.5px;color:#C3C8D4;background:transparent;border:0;text-align:left}
 .pad .railrow.on{background:rgba(139,155,255,.15);color:#F2F0E8}
 .pad .railrow .dot{width:5px;height:5px}
@@ -656,8 +622,6 @@ body.solo .phone{zoom:1;filter:drop-shadow(0 30px 60px rgba(0,0,0,.6))}
 .app[data-mode=day] .hero{border-color:rgba(67,83,238,.20);background:linear-gradient(150deg,rgba(67,83,238,.10),rgba(67,83,238,.02))}
 .app[data-mode=day] .hero .hrow b{color:#10151C}
 .app[data-mode=day] .hero .hgo{color:#3341C9}
-.app[data-mode=day] .switcher{background:#fff;border-color:rgba(16,21,28,.14);box-shadow:0 26px 50px rgba(20,28,40,.18)}
-.app[data-mode=day] .switcher button{color:#10151C}
 .app[data-mode=day] .filerows,.app[data-mode=day] .previewcard,.app[data-mode=day] .actgroup,.app[data-mode=day] .confirmcard,.app[data-mode=day] .targetchip{background:#fff;border-color:rgba(16,21,28,.09)}
 .app[data-mode=day] .crumbs b{color:#10151C}
 .app[data-mode=day] .previewcard .ph b{color:#10151C}
@@ -829,11 +793,9 @@ body.solo .phone{zoom:1;filter:drop-shadow(0 30px 60px rgba(0,0,0,.6))}
 .app[data-mode=day] .modelchip{background:rgba(16,21,28,.04);border-color:rgba(16,21,28,.10);color:#4B5666}
 .app[data-mode=day] .modelchip .dot{background:#0C7A5A}
 .app[data-mode=day] .send{background:#10151C;color:#F1F4F8}
-.app[data-mode=day] .tabstrip{border-color:rgba(16,21,28,.10)}
 .app[data-mode=day] .tab{color:#7A8697}
 .app[data-mode=day] .tab.on{color:#10151C}
-.app[data-mode=day] .tabadd{background:#fff;border-color:rgba(16,21,28,.12);color:#4B5666}
-.app[data-mode=day] .termmeta,.app[data-mode=day] .conmeta{color:#7A8697}
+.app[data-mode=day] .conmeta{color:#7A8697}
 .app[data-mode=day] .fitchip{border-color:rgba(16,21,28,.14);color:#4B5666}
 .app[data-mode=day] .key{background:#fff;border-color:rgba(16,21,28,.12);color:#4B5666}
 .app[data-mode=day] .termdock,.app[data-mode=day] .condock{background:#F1F4F8;border-color:rgba(16,21,28,.08)}
@@ -920,7 +882,6 @@ body.solo .phone{zoom:1;filter:drop-shadow(0 30px 60px rgba(0,0,0,.6))}
 .pad.pt .padrail .rfoot .rnav2{margin:0 auto}
 .pad.pt .padscroll{padding:0 26px}
 .pad.pt .padtitle{font-size:30px}
-.pad.pt .padtop{padding-top:24px}
 .pad.pt .pad-toggle{display:none}
 .padapp .spine{flex:0 0 auto}
 
@@ -935,8 +896,10 @@ body.solo .board-tools{display:none!important}
 
 /* ============ v2 review: collapsed chrome · keyboard · full-screen files ============ */
 /* T2 without dock: terminal runs to the home indicator, one floating glass cluster */
-.term.t2b{margin-bottom:10px;padding-bottom:54px}
-.term.t2b.kb{margin-bottom:0;padding-bottom:16px}
+.page.t2full{padding-top:112px}
+.app.termbg .page.t2full{background:var(--term)}
+.term.t2b{margin:0;border-radius:0;border:0;padding:14px 16px 58px}
+.term.t2b.kb{padding-bottom:16px}
 .floatcluster{position:absolute;right:14px;bottom:22px;z-index:24;display:flex;align-items:center;gap:2px;padding:4px;border-radius:999px;
   background:rgba(18,22,31,.60);border:1px solid rgba(255,255,255,.13);
   -webkit-backdrop-filter:blur(18px) saturate(1.5);backdrop-filter:blur(18px) saturate(1.5);
@@ -1061,10 +1024,92 @@ body.solo .board-tools{display:none!important}
 .padcover .pvpill{bottom:30px;height:48px;font-size:13.5px;color:#0B0D12}
 .padcover .pcfade{position:absolute;left:0;right:0;bottom:0;height:130px;pointer-events:none;z-index:3;
   background:linear-gradient(to top,#0B0D12 18%,rgba(11,13,18,.86) 56%,transparent)}
-.padterm .term{padding-bottom:52px}
 .pvpage.imm .pvbody{padding-top:62px;padding-bottom:44px}
 .pvpage.imm .pvfade{height:58px}
 .pline{white-space:pre-wrap;word-break:break-all}
+
+/* ============ v3 review: floating title pill + drop-down panel ============ */
+.app.termbg .statusbar{color:#E9E7DC}
+.wpill{position:absolute;left:14px;top:62px;z-index:30;display:flex;align-items:center;height:40px;padding:0 4px;
+  border-radius:999px;background:rgba(18,22,31,.64);border:1px solid rgba(255,255,255,.13);
+  -webkit-backdrop-filter:blur(20px) saturate(1.6);backdrop-filter:blur(20px) saturate(1.6);
+  box-shadow:0 10px 26px rgba(0,0,0,.42),inset 0 1px 0 rgba(255,255,255,.10)}
+.wpill-back{width:32px;height:32px;border:0;border-radius:50%;background:transparent;color:#DDE1EA;display:grid;place-items:center;cursor:pointer;flex:0 0 auto}
+.wpill-back:active{background:rgba(255,255,255,.10)}
+.wpill-back svg{width:15px;height:15px}
+.wpill-div{width:1px;height:16px;background:rgba(255,255,255,.14);margin:0 3px 0 1px;flex:0 0 auto}
+.wpill-main{display:flex;align-items:center;gap:7px;height:32px;padding:0 8px 0 4px;border:0;border-radius:999px;background:transparent;color:#F2F0E8;cursor:pointer;min-width:0}
+.wpill-main b{font-size:11.5px;font-weight:600;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:116px}
+.wpill-count{font-family:var(--mono);font-size:8px;color:#A9AEBB;border:1px solid rgba(255,255,255,.14);border-radius:4px;padding:2px 4px;flex:0 0 auto}
+.wpill-main svg{width:11px;height:11px;color:#8E93A0;flex:0 0 auto}
+.agentchip{position:absolute;right:14px;top:62px;z-index:30;display:flex;align-items:center;gap:6px;height:40px;padding:0 10px;
+  border-radius:999px;background:rgba(18,22,31,.64);border:1px solid rgba(255,255,255,.13);color:#F2F0E8;cursor:pointer;
+  -webkit-backdrop-filter:blur(20px) saturate(1.6);backdrop-filter:blur(20px) saturate(1.6);
+  box-shadow:0 10px 26px rgba(0,0,0,.42),inset 0 1px 0 rgba(255,255,255,.10)}
+.agentchip b{font-size:11px;font-weight:600;letter-spacing:-.01em}
+.agentchip .dot{width:6px;height:6px}
+.abadge{min-width:15px;height:15px;padding:0 4px;border-radius:8px;background:rgba(242,179,107,.94);color:#20160A;
+  font-family:var(--mono);font-size:8.5px;display:grid;place-items:center}
+
+/* expanded panel: overlays the terminal, never resizes it */
+.wpanelscrim{position:absolute;inset:0;z-index:31;background:rgba(4,5,8,.42)}
+.wpanel{position:absolute;left:10px;right:10px;top:58px;z-index:32;border-radius:20px;padding:11px 12px 10px;
+  background:rgba(20,24,33,.84);border:1px solid rgba(255,255,255,.14);
+  -webkit-backdrop-filter:blur(26px) saturate(1.7);backdrop-filter:blur(26px) saturate(1.7);
+  box-shadow:0 30px 60px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.12);
+  animation:sheetDown .3s var(--out) both}
+.wp-head{display:flex;align-items:center;gap:8px;padding:1px 3px 9px}
+.wp-ttl{flex:1;min-width:0;display:flex;align-items:baseline;gap:8px}
+.wp-ttl b{font-size:13px;font-weight:600;letter-spacing:-.015em;color:#F2F0E8;white-space:nowrap;flex:0 0 auto}
+.wp-ttl span{font-family:var(--mono);font-size:8.5px;color:#8E93A0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.wp-collapse{width:28px;height:28px;border:1px solid rgba(255,255,255,.12);border-radius:50%;background:rgba(255,255,255,.05);color:#C3C8D4;display:grid;place-items:center;cursor:pointer;flex:0 0 auto}
+.wp-collapse svg{width:13px;height:13px}
+.wp-tabs{display:flex;align-items:center;gap:2px;padding:0 2px;border-bottom:1px solid rgba(255,255,255,.10);overflow:hidden}
+.wpanel .tab{height:34px;padding:0 10px;font-size:11.5px}
+.wp-new{margin-left:auto;display:flex;align-items:center;gap:5px;height:28px;padding:0 9px;border:1px solid rgba(255,255,255,.14);
+  border-radius:7px;background:transparent;color:#C3C8D4;font-size:10px;cursor:pointer;flex:0 0 auto}
+.wp-new svg{width:11px;height:11px}
+.wp-meta{display:flex;align-items:center;gap:7px;padding:9px 5px 8px;font-family:var(--mono);font-size:8.5px;color:#9BA1AE}
+.wp-meta .spacer{flex:1}
+.wp-agent{display:flex;align-items:center;gap:7px;width:100%;padding:8px 9px;border:1px solid rgba(255,255,255,.10);border-radius:9px;
+  background:rgba(255,255,255,.05);font-family:var(--mono);font-size:9px;color:#9BA1AE;text-align:left;cursor:pointer;margin-bottom:9px}
+.wp-agent b{font-family:var(--sans);font-size:11px;font-weight:600;color:#F2F0E8}
+.wp-agent .live{color:#6FE3B4}
+.wp-agent .spacer{flex:1}
+.wp-agent .go{font-family:var(--mono);font-size:8.5px;color:#B7C0FF}
+.wp-acts{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}
+.wp-acts button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;height:52px;
+  border:1px solid rgba(255,255,255,.10);border-radius:11px;background:rgba(255,255,255,.05);color:#DDE1EA;font-size:10px;cursor:pointer}
+.wp-acts button:active{background:rgba(255,255,255,.10)}
+.wp-acts button svg{width:16px;height:16px;color:#B7C0FF}
+.wp-note{font-family:var(--mono);font-size:8px;color:#7F8595;padding:9px 4px 0}
+.app[data-mode=day] .wpill,.app[data-mode=day] .agentchip{background:rgba(255,255,255,.78);border-color:rgba(16,21,28,.12);color:#10151C}
+.app[data-mode=day] .wpill-main{color:#10151C}
+.app[data-mode=day] .wpill-main svg,.app[data-mode=day] .wpill-count{color:#5C6878}
+.app[data-mode=day] .wpill-back{color:#10151C}
+.app[data-mode=day] .wpill-div{background:rgba(16,21,28,.16)}
+.app[data-mode=day] .wpanel .tab{color:#8E93A0}
+.app[data-mode=day] .wpanel .tab.on{color:#F2F0E8}
+.app[data-mode=day] .wpanel .fitchip{border-color:rgba(255,255,255,.14);color:#A9AEBB}
+
+/* iPad: same pill + chip inside the terminal pane */
+.pad .wpill{left:26px;top:22px}
+.pad .agentchip{right:26px;top:22px}
+.pad.pt .wpill{left:20px;top:18px}
+.pad.pt .agentchip{right:336px;top:18px}
+.pad.pt .padterm .term{padding:14px 20px 58px}
+.pad .wpanelscrim{display:none}
+.pad.panelopen .wpanelscrim{display:block;position:absolute;inset:0;z-index:7;background:rgba(4,5,8,.36)}
+.pad .wpanel{display:none;left:26px;right:auto;width:420px;top:74px}
+.pad.pt .wpanel{left:20px;right:20px;width:auto;top:70px}
+.pad.panelopen .wpanel{display:block}
+.pad .wpanel .wp-meta{gap:6px}
+.pad .wpanel .padhint{font-size:8.5px;color:#9BA1AE}
+.pad .wpanel .padhint svg{width:11px;height:11px}
+
+.still *,.still *::before,.still *::after{animation:none!important;transition:none!important}
+@keyframes sheetDown{from{opacity:0;transform:translateY(-14px)}to{opacity:1;transform:none}}
+
 .typed{color:#DCE6A0}
 .pvpill svg,.pcbtn svg{pointer-events:none}
 </style>
@@ -1073,17 +1118,17 @@ body.solo .board-tools{display:none!important}
 <div class="board">
   <header class="mast">
     <div>
-      <div class="brandline"><span class="brandmark">S</span> SeRemote <span class="tagpill">iOS 27</span> <span class="tagpill">v2 review</span></div>
+      <div class="brandline"><span class="brandmark">S</span> SeRemote <span class="tagpill">iOS 27</span> <span class="tagpill">v3 review</span></div>
       <div class="kicker">以终端为中心 · 静态原型</div>
       <h1>终端，<br><span class="thin">会话，工具。</span></h1>
     </div>
     <div class="mast-right">
-      <p><b>底栏：终端 · 会话 · 工具。</b>文件是列表 + 整屏预览；对话、桌面是 sheet；设置留在抽屉。</p>
-      <p class="mono" style="font-size:10px;letter-spacing:.04em;color:#6E7484;margin-top:10px">393 × 852 · 23 屏 · iPad 横竖 + 整屏预览 · 全部可点</p>
+      <p><b>底栏：终端 · 会话 · 工具。</b>终端上没有固定头部：左上玻璃胶囊展开面板，文件 / 桌面 / 更多都在面板里。</p>
+      <p class="mono" style="font-size:10px;letter-spacing:.04em;color:#6E7484;margin-top:10px">393 × 852 · 24 屏 · iPad 横竖 + 整屏预览 · 全部可点</p>
     </div>
   </header>
 
-  <div class="boardhint"><span class="mono">可点</span> 终端行 → 工作台 · ⌨ → 键盘 · ＋ → 附件 · 文件 → 列表 · 点文件 → 整屏预览 · 插入路径 → 终端</div>
+  <div class="boardhint"><span class="mono">可点</span> 终端行 → 工作台 · 胶囊 → 面板 · 面板标签 → 切换终端 · 文件 / 桌面 / 更多 → 各自面板 · Agent chip → 对话 · ＋ → 附件 · ⌨ → 键盘</div>
 
   <div class="exhibits">
     <section class="exhibit" id="ex-home">
@@ -1101,143 +1146,149 @@ body.solo .board-tools{display:none!important}
     <section class="exhibit" id="ex-wterm">
       <div class="ex-head"><span class="ex-idx">03</span><div class="ex-title">工作台<span>Workbench</span></div><span class="ex-tag">T2 · 核心</span></div>
       <div class="phone" data-app="wterm"><div class="bezel"><div class="screen"></div></div></div>
-      <p class="ex-note">终端吃满到 home indicator；右下角一颗玻璃胶囊：附件、键盘。</p>
+      <p class="ex-note">终端从状态栏下吃满到 home indicator；左上玻璃胶囊是标题 + 标签计数，右上 Agent chip，右下附件 / 键盘。</p>
+    </section>
+
+    <section class="exhibit" id="ex-wterm-expanded">
+      <div class="ex-head"><span class="ex-idx">04</span><div class="ex-title">工作台<span>Panel</span></div><span class="ex-tag">T2 · 展开</span></div>
+      <div class="phone" data-app="wterm-expanded"><div class="bezel"><div class="screen"></div></div></div>
+      <p class="ex-note">点胶囊落下玻璃面板：标签、PTY、Agent、文件 / 桌面 / 更多；面板浮在终端上，不改终端尺寸，PTY 不重排。</p>
     </section>
 
     <section class="exhibit" id="ex-wterm-keyboard">
-      <div class="ex-head"><span class="ex-idx">04</span><div class="ex-title">工作台<span>Keyboard</span></div><span class="ex-tag">T2 · 键盘</span></div>
+      <div class="ex-head"><span class="ex-idx">05</span><div class="ex-title">工作台<span>Keyboard</span></div><span class="ex-tag">T2 · 键盘</span></div>
       <div class="phone" data-app="wterm-keyboard"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">⌨ 直起键盘；按键行是键盘配件，敲键直接进 PTY；收起回到 T2。</p>
     </section>
 
     <section class="exhibit" id="ex-wterm-nohook">
-      <div class="ex-head"><span class="ex-idx">05</span><div class="ex-title">工作台<span>No hook</span></div><span class="ex-tag">无代理</span></div>
+      <div class="ex-head"><span class="ex-idx">06</span><div class="ex-title">工作台<span>No hook</span></div><span class="ex-tag">无代理</span></div>
       <div class="phone" data-app="wterm-nohook"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">同一个工作台，没有 hook 会话时细带消失。</p>
     </section>
 
     <section class="exhibit" id="ex-files">
-      <div class="ex-head"><span class="ex-idx">06</span><div class="ex-title">文件<span>Files</span></div><span class="ex-tag">T3 · 列表</span></div>
+      <div class="ex-head"><span class="ex-idx">07</span><div class="ex-title">文件<span>Files</span></div><span class="ex-tag">T3 · 列表</span></div>
       <div class="phone" data-app="files"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">只有面包屑和列表，列表吃满 sheet；点文件开整屏预览。</p>
     </section>
 
     <section class="exhibit" id="ex-files-preview">
-      <div class="ex-head"><span class="ex-idx">07</span><div class="ex-title">预览<span>Preview</span></div><span class="ex-tag">整屏 · Quick Look</span></div>
+      <div class="ex-head"><span class="ex-idx">08</span><div class="ex-title">预览<span>Preview</span></div><span class="ex-tag">整屏 · Quick Look</span></div>
       <div class="phone" data-app="files-preview"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">盖住整台手机；点内容是收起 chrome，✕ 或下滑关闭。</p>
     </section>
 
     <section class="exhibit" id="ex-files-immersive">
-      <div class="ex-head"><span class="ex-idx">08</span><div class="ex-title">预览<span>Immersive</span></div><span class="ex-tag">无 chrome</span></div>
+      <div class="ex-head"><span class="ex-idx">09</span><div class="ex-title">预览<span>Immersive</span></div><span class="ex-tag">无 chrome</span></div>
       <div class="phone" data-app="files-immersive"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">chrome 全部隐藏；再点一下内容回到带按钮的预览。</p>
     </section>
 
     <section class="exhibit" id="ex-files-md">
-      <div class="ex-head"><span class="ex-idx">09</span><div class="ex-title">预览<span>Markdown</span></div><span class="ex-tag">整屏</span></div>
+      <div class="ex-head"><span class="ex-idx">10</span><div class="ex-title">预览<span>Markdown</span></div><span class="ex-tag">整屏</span></div>
       <div class="phone" data-app="files-md"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">Markdown 走同一套整屏预览，底部同样只有插入路径。</p>
     </section>
 
     <section class="exhibit" id="ex-attach">
-      <div class="ex-head"><span class="ex-idx">10</span><div class="ex-title">附件<span>Attach</span></div><span class="ex-tag">＋ · 选本地文件</span></div>
+      <div class="ex-head"><span class="ex-idx">11</span><div class="ex-title">附件<span>Attach</span></div><span class="ex-tag">＋ · 选本地文件</span></div>
       <div class="phone" data-app="attach"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">＋ 打开：照片、拍照、文件；目标行按桌面同一规则。</p>
     </section>
 
     <section class="exhibit" id="ex-attach-sent">
-      <div class="ex-head"><span class="ex-idx">11</span><div class="ex-title">附件<span>Sent</span></div><span class="ex-tag">路径已写入</span></div>
+      <div class="ex-head"><span class="ex-idx">12</span><div class="ex-title">附件<span>Sent</span></div><span class="ex-tag">路径已写入</span></div>
       <div class="phone" data-app="attach-sent"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">文件先落到主机的暂存目录，再把路径打进提示符。</p>
     </section>
 
     <section class="exhibit" id="ex-chat">
-      <div class="ex-head"><span class="ex-idx">12</span><div class="ex-title">对话<span>Chat</span></div><span class="ex-tag">T4 · 大 Sheet</span></div>
+      <div class="ex-head"><span class="ex-idx">13</span><div class="ex-title">对话<span>Chat</span></div><span class="ex-tag">T4 · 大 Sheet</span></div>
       <div class="phone" data-app="chat"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">对话是终端的面板；许可卡留在对话里。</p>
     </section>
 
     <section class="exhibit" id="ex-desktop">
-      <div class="ex-head"><span class="ex-idx">13</span><div class="ex-title">桌面<span>Desktop</span></div><span class="ex-tag">T5 · 选区</span></div>
+      <div class="ex-head"><span class="ex-idx">14</span><div class="ex-title">桌面<span>Desktop</span></div><span class="ex-tag">T5 · 选区</span></div>
       <div class="phone" data-app="desktop"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">拖动取景；发送到当前终端，或整屏。</p>
     </section>
 
     <section class="exhibit" id="ex-more">
-      <div class="ex-head"><span class="ex-idx">14</span><div class="ex-title">更多<span>More</span></div><span class="ex-tag">T6 · 动作</span></div>
+      <div class="ex-head"><span class="ex-idx">15</span><div class="ex-title">更多<span>More</span></div><span class="ex-tag">T6 · 动作</span></div>
       <div class="phone" data-app="more"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">七个动作，最后是红色的关闭终端。</p>
     </section>
 
     <section class="exhibit" id="ex-more-confirm">
-      <div class="ex-head"><span class="ex-idx">15</span><div class="ex-title">更多<span>Confirm</span></div><span class="ex-tag">二次确认</span></div>
+      <div class="ex-head"><span class="ex-idx">16</span><div class="ex-title">更多<span>Confirm</span></div><span class="ex-tag">二次确认</span></div>
       <div class="phone" data-app="more-confirm"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">关闭前只说后果：关闭后该 shell 会结束。</p>
     </section>
 
     <section class="exhibit" id="ex-conversations">
-      <div class="ex-head"><span class="ex-idx">16</span><div class="ex-title">会话<span>Conversations</span></div><span class="ex-tag">底栏二</span></div>
+      <div class="ex-head"><span class="ex-idx">17</span><div class="ex-title">会话<span>Conversations</span></div><span class="ex-tag">底栏二</span></div>
       <div class="phone" data-app="conversations"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">只列代理会话；行点击回到终端并打开对话。</p>
     </section>
 
     <section class="exhibit" id="ex-tools">
-      <div class="ex-head"><span class="ex-idx">17</span><div class="ex-title">工具<span>Tools</span></div><span class="ex-tag">底栏三</span></div>
+      <div class="ex-head"><span class="ex-idx">18</span><div class="ex-title">工具<span>Tools</span></div><span class="ex-tag">底栏三</span></div>
       <div class="phone" data-app="tools"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">四格作用域是当前项目；最近项目回到终端分组。</p>
     </section>
 
     <section class="exhibit" id="ex-git">
-      <div class="ex-head"><span class="ex-idx">18</span><div class="ex-title">更改<span>Git</span></div><span class="ex-tag">只读</span></div>
+      <div class="ex-head"><span class="ex-idx">19</span><div class="ex-title">更改<span>Git</span></div><span class="ex-tag">只读</span></div>
       <div class="phone" data-app="git"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">从终端进入，返回终端；不做提交。</p>
     </section>
 
     <section class="exhibit" id="ex-tasks">
-      <div class="ex-head"><span class="ex-idx">19</span><div class="ex-title">定时任务<span>Tasks</span></div><span class="ex-tag">主机</span></div>
+      <div class="ex-head"><span class="ex-idx">20</span><div class="ex-title">定时任务<span>Tasks</span></div><span class="ex-tag">主机</span></div>
       <div class="phone" data-app="tasks"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">任务属于主机；开关就地生效。</p>
     </section>
 
     <section class="exhibit" id="ex-search">
-      <div class="ex-head"><span class="ex-idx">20</span><div class="ex-title">搜索<span>Search</span></div><span class="ex-tag">只读</span></div>
+      <div class="ex-head"><span class="ex-idx">21</span><div class="ex-title">搜索<span>Search</span></div><span class="ex-tag">只读</span></div>
       <div class="phone" data-app="search"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">命令与文件；返回终端。</p>
     </section>
 
     <section class="exhibit" id="ex-screen">
-      <div class="ex-head"><span class="ex-idx">21</span><div class="ex-title">屏幕文本<span>Screen text</span></div><span class="ex-tag">快照</span></div>
+      <div class="ex-head"><span class="ex-idx">22</span><div class="ex-title">屏幕文本<span>Screen text</span></div><span class="ex-tag">快照</span></div>
       <div class="phone" data-app="screen"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">最近一次抓取的文本，可复制。</p>
     </section>
 
     <section class="exhibit" id="ex-settings">
-      <div class="ex-head"><span class="ex-idx">22</span><div class="ex-title">设置<span>Settings</span></div><span class="ex-tag">本机</span></div>
+      <div class="ex-head"><span class="ex-idx">23</span><div class="ex-title">设置<span>Settings</span></div><span class="ex-tag">本机</span></div>
       <div class="phone" data-app="settings"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">设置在抽屉底部，不占底栏。</p>
     </section>
 
     <section class="exhibit" id="ex-drawer">
-      <div class="ex-head"><span class="ex-idx">23</span><div class="ex-title">抽屉<span>Drawer</span></div><span class="ex-tag">全部去处</span></div>
+      <div class="ex-head"><span class="ex-idx">24</span><div class="ex-title">抽屉<span>Drawer</span></div><span class="ex-tag">全部去处</span></div>
       <div class="phone" data-app="drawer"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">三个去处 + 主机；设置与版本在底部。</p>
     </section>
 
     <section class="exhibit padwrap" id="ex-pad-ls">
-      <div class="ex-head"><span class="ex-idx">24</span><div class="ex-title">iPad<span>Landscape</span></div><span class="ex-tag">1194 × 834 · 侧栏 250 + 检查器 320</span></div>
+      <div class="ex-head"><span class="ex-idx">25</span><div class="ex-title">iPad<span>Landscape</span></div><span class="ex-tag">1194 × 834 · 侧栏 250 + 检查器 320</span></div>
       <div class="pad ls"><div class="screen"></div></div>
-      <p class="ex-note">左：主机与终端；中：T2 无按键行，右下胶囊；右：纯文件列表。</p>
+      <p class="ex-note">左：主机与终端；中：终端吃满，左上胶囊 + 右上 Agent chip，点胶囊开面板；右：纯文件列表。</p>
     </section>
 
     <section class="exhibit padwrap" id="ex-pad-pt">
-      <div class="ex-head"><span class="ex-idx">25</span><div class="ex-title">iPad<span>Portrait</span></div><span class="ex-tag">834 × 1194 · 76pt 轨道</span></div>
+      <div class="ex-head"><span class="ex-idx">26</span><div class="ex-title">iPad<span>Portrait</span></div><span class="ex-tag">834 × 1194 · 76pt 轨道</span></div>
       <div class="pad pt"><div class="screen"></div></div>
-      <p class="ex-note">检查器改为右侧滑入，盖住终端；轨道只留图标。</p>
+      <p class="ex-note">检查器右侧滑入盖住终端；轨道只留图标，胶囊与 Agent chip 留在窗格顶部。</p>
     </section>
 
     <section class="exhibit padwrap" id="ex-pad-preview">
-      <div class="ex-head"><span class="ex-idx">26</span><div class="ex-title">iPad<span>Preview</span></div><span class="ex-tag">整屏 · 盖住整台 iPad</span></div>
+      <div class="ex-head"><span class="ex-idx">27</span><div class="ex-title">iPad<span>Preview</span></div><span class="ex-tag">整屏 · 盖住整台 iPad</span></div>
       <div class="pad ls" data-pad="preview"><div class="screen"></div></div>
       <p class="ex-note">检查器点文件，同一个整屏预览盖住整台 iPad。</p>
     </section>
@@ -1346,36 +1397,37 @@ function refreshBtn(msg){
   return '<button class="iconbtn" data-act="toast" data-msg="'+(msg||'已刷新')+'" aria-label="刷新">'+ic('refresh',15)+'</button>';
 }
 const TERMS={zsh:'zsh — Termul',dev:'dev server',test:'tests'};
-function termSwitcher(s){
-  if(!s.switcher) return '';
-  const rows=[['zsh','1'],['dev','2'],['test','3']];
-  return '<div class="switcher"><div class="sh">TERMUL · 3 个终端</div>'+
-    rows.map(function(r){
-      return '<button class="'+((s.term||'zsh')===r[0]?'on':'')+'" data-act="term" data-term="'+r[0]+'">'+ic('terminal',14)+TERMS[r[0]]+'<span class="m">'+r[1]+'</span></button>';
-    }).join('')+
-    '<div class="sep"></div><button data-act="newterm">'+ic('plus',14)+'新建终端</button></div>';
-}
-function termHeader(s, back, nohook){
-  return '<div class="navbar">'+
-    (back?'<button class="back" data-act="go" data-to="terminals" aria-label="返回终端">'+ic('chevL',15)+'</button>':'')+
-    '<div class="ttl"><button class="wtitle" data-act="switcher" aria-label="切换终端"><b>'+TERMS[s.term||'zsh']+'</b>'+ic('chevD',12)+'</button><span>MacBook Pro · termul · main</span></div>'+
-    '<button class="iconbtn" data-act="go" data-to="files" aria-label="文件">'+ic('file',15)+'</button>'+
-    '<button class="iconbtn" data-act="go" data-to="desktop" aria-label="桌面">'+ic('hosts',15)+'</button>'+
-    '<button class="iconbtn" data-act="go" data-to="more"'+(nohook?' data-nohook="1"':'')+' aria-label="更多">'+ic('dots',15)+'</button>'+
-  '</div>'+termSwitcher(s);
-}
-function termTabs(s){
+const TERM_IDS=['zsh','dev','test'];
+function termPill(s, nohook){
   const cur=s.term||'zsh';
-  const tabs=[['zsh','zsh','1'],['dev','dev','2'],['test','test','3']];
-  return '<div class="tabstrip">'+tabs.map(function(t){
-    return '<button class="tab '+(cur===t[0]?'on':'')+'" data-act="term" data-term="'+t[0]+'"><span class="idx">'+t[2]+'</span>'+t[1]+'</button>';
-  }).join('')+'<button class="tabadd" data-act="newterm" aria-label="新建终端">'+ic('plus',13)+'</button></div>';
+  const n=TERM_IDS.indexOf(cur)+1;
+  return '<div class="wpill">'+
+    '<button class="wpill-back" data-act="go" data-to="terminals" aria-label="返回">'+ic('chevL',15)+'</button>'+
+    '<span class="wpill-div"></span>'+
+    '<button class="wpill-main" data-act="go" data-to="wterm-expanded" aria-label="终端菜单">'+
+      '<b>'+TERMS[cur]+'</b><span class="wpill-count">'+n+'/3</span>'+ic('chevD',11)+'</button></div>'+
+    (nohook?'':'<button class="agentchip" data-act="go" data-to="chat" aria-label="Agent 对话"><i class="dot live"></i><b>Claude</b><span class="abadge">1</span></button>');
 }
-function termMeta(){
-  return '<div class="termmeta"><i class="dot live"></i><span>PTY · Ready</span><span>80 × 24</span><span class="spacer"></span><button class="fitchip">FIT</button><button class="fitchip">A+</button></div>';
-}
-function hookRibbon(){
-  return '<button class="ribbonbtn" data-act="go" data-to="chat"><i class="dot live"></i><b>Claude Code</b><span>· 工作中 · 1 个许可</span><span class="spacer"></span><span class="go">对话 ›</span></button>';
+function termPanel(s, nohook){
+  const cur=s.term||'zsh';
+  const tabs=TERM_IDS.map(function(t,i){
+    return '<button class="tab '+(cur===t?'on':'')+'" data-act="term" data-term="'+t+'"><span class="idx">'+(i+1)+'</span>'+t+'</button>';
+  }).join('');
+  return '<div class="wpanelscrim" data-act="go" data-to="wterm"></div>'+
+    '<div class="wpanel">'+
+      '<div class="wp-head"><div class="wp-ttl"><b>'+TERMS[cur]+'</b><span>MacBook Pro · termul · main</span></div>'+
+        '<button class="wp-collapse" data-act="go" data-to="wterm" aria-label="收起面板">'+ic('chevD',13)+'</button></div>'+
+      '<div class="wp-tabs">'+tabs+'<button class="wp-new" data-act="newterm">'+ic('plus',11)+'新建</button></div>'+
+      '<div class="wp-meta"><i class="dot live"></i><span>Ready</span><span>80 × 24</span><span class="spacer"></span>'+
+        '<button class="fitchip">FIT</button><button class="fitchip">A+</button></div>'+
+      (nohook?'':'<button class="wp-agent" data-act="go" data-to="chat"><i class="dot live"></i><b>Claude Code</b><span>· 工作中 · 1 个许可</span><span class="spacer"></span><span class="go">对话 ›</span></button>')+
+      '<div class="wp-acts">'+
+        '<button data-act="go" data-to="files">'+ic('file',16)+'<span>文件</span></button>'+
+        '<button data-act="go" data-to="desktop">'+ic('hosts',16)+'<span>桌面</span></button>'+
+        '<button data-act="go" data-to="more">'+ic('dots',16)+'<span>更多</span></button>'+
+      '</div>'+
+      
+    '</div>';
 }
 function termText(staged, trim){
   const prompt='<span class="mint">➜</span> <span class="path">~/project/termul</span> <span class="blue">git:(main)</span>';
@@ -1429,9 +1481,9 @@ function kbDock(s){
 }
 function termPage(s, opts){
   opts=opts||{};
-  const kb=!!opts.keyboard;
-  return '<div class="page full">'+termHeader(s, opts.back, opts.nohook)+termTabs(s)+termMeta()+
-    (opts.ribbon?hookRibbon():'')+
+  const kb=!!opts.keyboard, nohook=!!opts.nohook;
+  return '<div class="page full t2full">'+
+    (opts.panel?termPanel(s,nohook):termPill(s,nohook))+
     '<div class="term t2b'+(kb?' kb':'')+'">'+termText(kb?null:(s.staged||''), kb)+'</div>'+
     (kb?kbDock(s):floatCluster())+'</div>';
 }
@@ -1506,9 +1558,10 @@ SCREENS.terminals = function(s){
     '<div style="height:28px"></div></div></div>';
 };
 
-SCREENS.wterm = function(s){ return termPage(s,{back:true,ribbon:!s.nohook,nohook:s.nohook}); };
-SCREENS['wterm-keyboard'] = function(s){ return termPage(s,{back:true,ribbon:!s.nohook,nohook:s.nohook,keyboard:true}); };
-SCREENS['wterm-nohook'] = function(s){ s.nohook=true; return termPage(s,{back:true,nohook:true}); };
+SCREENS.wterm = function(s){ return termPage(s,{nohook:!!s.nohook}); };
+SCREENS['wterm-expanded'] = function(s){ return termPage(s,{panel:true,nohook:!!s.nohook}); };
+SCREENS['wterm-keyboard'] = function(s){ return termPage(s,{keyboard:true,nohook:!!s.nohook}); };
+SCREENS['wterm-nohook'] = function(s){ s.nohook=true; return termPage(s,{nohook:true}); };
 
 SCREENS.tools = function(s){
   const tiles=[
@@ -1570,7 +1623,7 @@ function filesSheet(){
   '</div>';
 }
 SCREENS.files = function(s){
-  return sheetScene(termPage({...s,switcher:false},{back:true,ribbon:!s.nohook,nohook:s.nohook}), filesSheet());
+  return sheetScene(termPage(s,{nohook:!!s.nohook}), filesSheet());
 };
 
 const SWIFT_LINES=[
@@ -1682,10 +1735,10 @@ function attachSheet(s){
     '</div></div>';
 }
 SCREENS.attach = function(s){
-  return sheetScene(termPage({...s,switcher:false},{back:true,ribbon:!s.nohook,nohook:s.nohook}), attachSheet(s));
+  return sheetScene(termPage(s,{nohook:!!s.nohook}), attachSheet(s));
 };
 SCREENS['attach-sent'] = function(s){
-  return termPage({...s,staged:s.staged||ATTACH_PATH},{back:true,ribbon:!s.nohook,nohook:s.nohook});
+  return termPage({...s,staged:s.staged||ATTACH_PATH},{nohook:!!s.nohook});
 };
 
 /* ---------- T4 chat ---------- */
@@ -1696,7 +1749,7 @@ SCREENS.chat = function(s){
       '<div class="perm-bd"><p>运行测试来验证重连退避。</p><div class="code"><span class="k">swift</span> test --filter TerminalSocket</div>'+
       '<div class="perm-actions"><button class="btn btn-primary" data-act="confirm">允许一次</button><button class="btn btn-deny" data-act="toast" data-msg="已拒绝">拒绝</button></div>'+
       '<button class="perm-always" data-act="toast" data-msg="已加入允许列表">本会话总是允许 swift test</button></div></div>';
-  return sheetScene(termPage({...s,switcher:false},{back:true,ribbon:true}),
+  return sheetScene(termPage(s,{}),
     '<div class="sheet chatsheet"><div class="grabber"></div>'+
     '<div class="row between" style="padding:0 16px;gap:10px"><div style="min-width:0">'+
       '<div class="row" style="gap:7px"><span class="agentmark">C</span><b style="font-size:13px;letter-spacing:-.01em">Claude Code</b><span class="mono" style="font-size:8.5px;color:var(--ink3)">Sonnet 4.5</span></div>'+
@@ -1726,7 +1779,7 @@ SCREENS.desktop = function(s){
     '<div class="win w3"><div class="wb"><i></i><i></i><i></i><span class="t">Notes</span></div><div class="wc">重连：保留 sessionID\n退避 0.5 → 8s\n测试：14 通过</div></div>'+
     '<div class="sel"><span>选区 · 412 × 268</span><i class="c1"></i><i class="c2"></i><i class="c3"></i><i class="c4"></i></div>'+
   '</div>';
-  return sheetScene(termPage({...s,switcher:false},{back:true,ribbon:true}),
+  return sheetScene(termPage(s,{}),
     '<div class="sheet desksheet"><div class="grabber"></div>'+
     '<div class="row between"><div><b style="font-size:15px;letter-spacing:-.02em">桌面 · 主显示器</b>'+
       '<div class="mono" style="font-size:8.5px;color:var(--ink3);margin-top:3px">MacBook Pro · 1512 × 982</div></div>'+
@@ -1768,10 +1821,10 @@ function moreSheet(s, confirm){
     '<div class="actgroup"><button class="actitem danger" data-act="go" data-to="more-confirm">关闭终端</button></div></div>';
 }
 SCREENS.more = function(s){
-  return sheetScene(termPage({...s,switcher:false},{back:true,nohook:!!s.nohook,ribbon:!s.nohook}), moreSheet(s,false));
+  return sheetScene(termPage(s,{nohook:!!s.nohook}), moreSheet(s,false));
 };
 SCREENS['more-confirm'] = function(s){
-  return sheetScene(termPage({...s,switcher:false},{back:true,ribbon:true}), moreSheet(s,true));
+  return sheetScene(termPage(s,{}), moreSheet(s,true));
 };
 
 /* ---------- T7 conversations ---------- */
@@ -1925,9 +1978,6 @@ function padHTML(variant){
   const rr=function(name,meta,on){
     return '<button class="railrow'+(on?' on':'')+'">'+ic('terminal',13)+'<span>'+name+'</span><span class="r">'+(meta||'')+'</span></button>';
   };
-  const tabs=[['zsh','1',1],['dev','2',0],['test','3',0]].map(function(t){
-    return '<button class="tab'+(t[2]?' on':'')+'"><span class="idx">'+t[1]+'</span>'+t[0]+'</button>';
-  }).join('');
   const rail='<aside class="padrail">'+
     '<div class="brand"><span class="rail-logo">S</span><div><b>SeRemote</b><span>MacBook Pro</span></div></div>'+
     '<div class="rhost"><i class="dot live"></i><span>MacBook Pro</span><span class="ini">M</span></div>'+
@@ -1941,15 +1991,27 @@ function padHTML(variant){
       '<div class="meta">SeRemote 27.4 (189)</div>'+
     '</div></aside>';
   const main='<div class="padmain"><div class="padterm">'+
-    '<div class="padtop"><button class="hostpill">'+ic('terminal',13)+'zsh — Termul '+ic('chevD',10)+'</button>'+
-      '<span class="meta">MacBook Pro · termul · main</span><span class="spacer"></span>'+
-      '<button class="iconbtn" aria-label="文件">'+ic('file',15)+'</button><button class="iconbtn" aria-label="桌面">'+ic('hosts',15)+'</button><button class="iconbtn" aria-label="更多">'+ic('dots',15)+'</button></div>'+
-    '<div class="tabstrip">'+tabs+'<button class="tabadd" aria-label="新建终端">'+ic('plus',13)+'</button></div>'+
-    '<div class="termmeta"><i class="dot live"></i><span>PTY · Ready</span><span>80 × 24</span><span class="spacer"></span>'+
-      '<span class="padhint">'+ic('keyboard',12)+' 硬件键盘</span>'+tip('连接硬件键盘时自动收起屏幕键盘；屏幕上的附件与键盘入口仍在右下角。')+
-      '<button class="fitchip">FIT</button><button class="fitchip">A+</button></div>'+
-    '<button class="ribbonbtn"><i class="dot live"></i><b>Claude Code</b><span>· 工作中 · 1 个许可</span><span class="spacer"></span><span class="go">对话 ›</span></button>'+
+    '<div class="wpill">'+
+      '<button class="wpill-back" aria-label="返回">'+ic('chevL',15)+'</button>'+
+      '<span class="wpill-div"></span>'+
+      '<button class="wpill-main" aria-label="终端菜单"><b>zsh — Termul</b><span class="wpill-count">1/3</span>'+ic('chevD',11)+'</button></div>'+
+    '<button class="agentchip" aria-label="Agent 对话"><i class="dot live"></i><b>Claude</b><span class="abadge">1</span></button>'+
     '<div class="term">'+termText()+'</div>'+
+    '<div class="wpanelscrim"></div>'+
+    '<div class="wpanel padpanel">'+
+      '<div class="wp-head"><div class="wp-ttl"><b>zsh — Termul</b><span>MacBook Pro · termul · main</span></div>'+
+        '<button class="wp-collapse" aria-label="收起面板">'+ic('chevD',13)+'</button></div>'+
+      '<div class="wp-meta"><i class="dot live"></i><span>Ready</span><span>80 × 24</span><span class="spacer"></span>'+
+        '<span class="padhint">'+ic('keyboard',12)+' 硬件键盘</span>'+
+        '<button class="fitchip">FIT</button><button class="fitchip">A+</button></div>'+
+      '<button class="wp-agent"><i class="dot live"></i><b>Claude Code</b><span>· 工作中 · 1 个许可</span><span class="spacer"></span><span class="go">对话 ›</span></button>'+
+      '<div class="wp-acts">'+
+        '<button>'+ic('file',16)+'<span>文件</span></button>'+
+        '<button>'+ic('hosts',16)+'<span>桌面</span></button>'+
+        '<button>'+ic('dots',16)+'<span>更多</span></button>'+
+      '</div>'+
+      
+    '</div>'+
     '<div class="floatcluster padcluster">'+
       '<button aria-label="附件">'+ic('plus',17)+'</button>'+
       '<button aria-label="键盘">'+ic('keyboard',17)+'</button></div>'+
@@ -1977,6 +2039,7 @@ function padHTML(variant){
   return '<div class="padapp">'+rail+main+inspect+'<div class="padscrim"></div>'+cover+'</div>';
 }
 
+const TERM_BG={wterm:1,'wterm-expanded':1,'wterm-keyboard':1,'wterm-nohook':1,'attach-sent':1,files:1,desktop:1,chat:1,attach:1,more:1,'more-confirm':1};
 const TAB_GROUP={terminals:'terminals',conversations:'conversations',drawer:'terminals',tools:'tools',git:'tools',tasks:'tools',search:'tools',screen:'tools'};
 const URLP=new URLSearchParams(location.search);
 
@@ -1988,7 +2051,7 @@ class App{
     this.el=el; this.phone=el.classList.contains('phone')?el:null;
     this.base=screen||el.dataset.screen||el.dataset.app;
     this.s={screen:this.base==='drawer'?'drawer':this.base, mode:MODE, decided:(opts&&opts.decided)||false,
-      rail:this.base==='drawer'||el.dataset.rail==='1', term:'zsh', switcher:false, cmd:'', nohook:this.base==='wterm-nohook'};
+      rail:this.base==='drawer'||el.dataset.rail==='1', term:'zsh', cmd:'', nohook:this.base==='wterm-nohook'};
     if(this.base==='more-confirm') this.s.screen='more-confirm';
     this.screenEl=el.querySelector('.screen');
     this.screenEl.classList.add('app');
@@ -2001,6 +2064,7 @@ class App{
     const s=this.s;
     this.el.dataset.mode=s.mode;
     this.screenEl.dataset.mode=s.mode;
+    this.screenEl.classList.toggle('termbg',!!TERM_BG[s.screen]);
     this.screenEl.innerHTML=statusbar()+SCREENS[s.screen](s)+(s.rail?rail(s):'')+'<div class="toast"></div>';
     const tg=TAB_GROUP[s.screen];
     if(tg) this.screenEl.insertAdjacentHTML('beforeend',tabbar(tg));
@@ -2018,14 +2082,13 @@ class App{
     if(!b) return;
     const act=b.dataset.act;
     if(act==='go'){
-      this.s.screen=b.dataset.to; this.s.rail=(b.dataset.to==='drawer'); this.s.decided=false; this.s.switcher=false;
+      this.s.screen=b.dataset.to; this.s.rail=(b.dataset.to==='drawer'); this.s.decided=false;
       this.s.menu=false;
       if(b.dataset.to!=='attach-sent') this.s.staged='';
       if(b.dataset.nohook) this.s.nohook=true;
       this.render(); e.preventDefault(); return;
     }
-    if(act==='switcher'){ this.s.switcher=!this.s.switcher; this.render(); return; }
-    if(act==='term'){ this.s.term=b.dataset.term||'zsh'; this.s.switcher=false; this.render(); return; }
+    if(act==='term'){ this.s.term=b.dataset.term||'zsh'; this.s.screen='wterm'; this.render(); return; }
     if(act==='openfile'){
       this.s.file=b.dataset.file; this.s.staged=''; this.s.menu=false;
       this.s.screen=b.dataset.kind==='md'?'files-md':'files-preview';
@@ -2040,16 +2103,16 @@ class App{
       this.render(); return;
     }
     if(act==='insertpath'){
-      this.s.staged=b.dataset.path||'src/net/TerminalSocket.swift'; this.s.screen='wterm'; this.s.switcher=false; this.s.menu=false;
+      this.s.staged=b.dataset.path||'src/net/TerminalSocket.swift'; this.s.screen='wterm'; this.s.menu=false;
       this.render(); this.toast('已插入路径'); return;
     }
     if(act==='sendSel'){
-      this.s.screen='wterm'; this.s.switcher=false; this.render(); this.toast('已发送选区到 zsh — Termul'); return;
+      this.s.screen='wterm'; this.render(); this.toast('已发送选区到 zsh — Termul'); return;
     }
     if(act==='sendAll'){
-      this.s.screen='wterm'; this.s.switcher=false; this.render(); this.toast('已发送整屏'); return;
+      this.s.screen='wterm'; this.render(); this.toast('已发送整屏'); return;
     }
-    if(act==='closeterm'){ this.s.screen='terminals'; this.s.switcher=false; this.render(); this.toast('已关闭 shell'); return; }
+    if(act==='closeterm'){ this.s.screen='terminals'; this.render(); this.toast('已关闭 shell'); return; }
     if(act==='newterm'){ this.toast('新建终端'); return; }
     if(act==='hidekb'){ this.s.screen='wterm'; this.render(); return; }
     if(act==='openrail'){ this.s.rail=true; this.render(); return; }
@@ -2093,6 +2156,13 @@ const apps=[];
 document.querySelectorAll('.pad .screen').forEach(function(el){
   const pad=el.closest('.pad');
   el.innerHTML=padHTML(pad&&pad.dataset.pad==='preview'?'preview':'');
+});
+
+// iPad: tapping the pill drops the same panel over the terminal pane
+document.addEventListener('click',function(e){
+  const pad=e.target.closest('.pad'); if(!pad) return;
+  if(e.target.closest('.wpill-main')){ pad.classList.add('panelopen'); return; }
+  if(e.target.closest('.wp-collapse')||e.target.closest('.wpanelscrim')) pad.classList.remove('panelopen');
 });
 document.querySelectorAll('[data-app]').forEach(function(el){
   const app=new App(el);
