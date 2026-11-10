@@ -46,7 +46,41 @@
     "reloadFailed": "无法重新加载适配器",
     "previewFailed": "无法预览变更",
     "mutationFailed": "无法应用变更",
-    "openFolderFailed": "无法打开适配器文件夹"
+    "openFolderFailed": "无法打开适配器文件夹",
+    "shortcutLabel": "Hooks",
+    "shortcutHint": "打开 Hooks 设置",
+    "activeSessions": "活跃 Hook 会话：{{count}}",
+    "sessions": {
+      "title": "实时会话",
+      "helpLabel": "关于实时 Hook 会话",
+      "help": "已安装 Hook 上报的实时状态，只读。",
+      "empty": "暂无 Hook 会话",
+      "terminal": "终端",
+      "project": "项目",
+      "ready": "就绪",
+      "restore": "恢复",
+      "updated": "更新",
+      "yes": "是",
+      "no": "否",
+      "justNow": "刚刚",
+      "states": {
+        "busy": "忙",
+        "idle": "空闲",
+        "needs_approval": "待授权",
+        "blocked": "已阻塞",
+        "error": "错误",
+        "ended": "已结束"
+      },
+      "restoreStates": {
+        "pending_confirmation": "待确认",
+        "confirmed": "已确认",
+        "unconfirmed": "未确认",
+        "stale": "已过期",
+        "interrupted": "已中断",
+        "ended": "已结束",
+        "snapshot_missing": "快照缺失"
+      }
+    }
   },
   "page": {
     "title": "应用偏好设置",
@@ -70,6 +104,7 @@
     "behavior": "行为",
     "projectDefaults": "新项目默认值",
     "aiAgents": "AI 代理",
+    "hooks": "Hooks",
     "mcpServers": "MCP 服务器",
     "remoteAccess": "远程访问",
     "shortcuts": "键盘快捷键",

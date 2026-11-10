@@ -799,7 +799,7 @@ describe('AppPreferences updates and runtime grouping', () => {
     desktop?: boolean
     platform?: string
     language?: 'en' | 'zh-CN'
-    section?: 'updates' | 'runtime'
+    section?: 'updates' | 'runtime' | 'agent-hooks'
   } = {}) {
     if (desktop) tauriWindow.__TAURI_INTERNALS__ = {}
     else delete tauriWindow.__TAURI_INTERNALS__
@@ -903,6 +903,40 @@ describe('AppPreferences updates and runtime grouping', () => {
     await waitFor(() => expect(coreRuntimeApi.status).toHaveBeenCalled())
     expect(coreRuntimeApi.restartCore).not.toHaveBeenCalled()
     expect(coreRuntimeApi.restartGui).not.toHaveBeenCalled()
+  })
+
+  it('opens the dedicated Hooks category with adapter management and the live view', async () => {
+    const { container, i18n } = await renderHostPage({ section: 'agent-hooks' })
+    const hooks = getSection(container, 'agent-hooks')
+    const hooksLabel = i18n.t('categories.hooks', { ns: 'settings' })
+
+    expect(within(hooks).getByRole('heading', { name: hooksLabel })).toBeInTheDocument()
+    expect(within(hooks).getByText('Agent integrations')).toBeInTheDocument()
+    expect(within(hooks).getByRole('heading', { name: 'Live sessions' })).toBeInTheDocument()
+    // Moved, not duplicated: the AI agents section no longer carries hooks UI.
+    const aiAgents = getSection(container, 'ai-agents')
+    expect(within(aiAgents).queryByText('Agent integrations')).not.toBeInTheDocument()
+    expect(within(aiAgents).queryByText('Live sessions')).not.toBeInTheDocument()
+    expect(scrollIntoView.mock.contexts).toContain(hooks)
+    expect(
+      within(screen.getByRole('navigation')).getByRole('button', {
+        name: hooksLabel,
+        exact: true
+      })
+    ).toHaveAttribute('aria-current', 'true')
+  })
+
+  it('indexes Hooks right after AI agents and finds it by hook/hooks/集成/安装', async () => {
+    const { search } = await renderHostPage()
+    const index = search.mock.calls.at(-1)?.[1] ?? []
+    const categoryIds = index.map((entry) => entry.categoryId)
+    const hooksIndex = categoryIds.indexOf('agent-hooks')
+    expect(hooksIndex).toBeGreaterThan(categoryIds.lastIndexOf('ai-agents'))
+    expect(hooksIndex).toBeLessThan(categoryIds.indexOf('remote-access'))
+
+    for (const query of ['hook', 'hooks', '集成', '安装']) {
+      expect(search(query, index).some((entry) => entry.categoryId === 'agent-hooks')).toBe(true)
+    }
   })
 
   it('keeps the privacy/data group when only data migration is available', async () => {

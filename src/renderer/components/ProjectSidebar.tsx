@@ -30,6 +30,7 @@ import {
   Settings,
   Terminal,
   Trash2,
+  Webhook,
   X
 } from 'lucide-react'
 import { type KeyboardEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -52,6 +53,7 @@ import {
 } from '@/components/ui/context-menu'
 import { MonochromeSpinner } from '@/components/ui/monochrome-spinner'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useProjectsWithActiveAgentChat } from '@/features/agent-session/stores/acp-store'
 import { PluginMenuItems } from '@/features/plugins/PluginMenuItems'
 import { useUpdateAppSetting } from '@/hooks/use-app-settings'
@@ -65,6 +67,7 @@ import { filterProjects, shouldShowProjectSearch } from '@/lib/project-filter'
 import { isManualOrderingEnabled, sortProjects } from '@/lib/project-sort'
 import { getCurrentAppVersion } from '@/lib/tauri-release-notes'
 import { cn } from '@/lib/utils'
+import { countActiveHookSessions, useAgentHookStateStore } from '@/stores/agent-hook-state-store'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { isRejectedMove, useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useProjectActions, useProjectStore } from '@/stores/project-store'
@@ -140,7 +143,11 @@ export function ProjectSidebar({
   activeSSHProfileId
 }: ProjectSidebarProps): React.JSX.Element {
   const { t } = useTranslation('projects')
+  const { t: tSettings } = useTranslation('settings')
   const navigate = useNavigate()
+  const activeHookSessions = useAgentHookStateStore((state) =>
+    countActiveHookSessions(state.states)
+  )
   const {
     selectProject,
     selectGroup,
@@ -1625,8 +1632,38 @@ export function ProjectSidebar({
         activeProfileId={activeSSHProfileId}
       />
 
-      {/* Version - pinned bottom */}
-      <div className="border-t border-sidebar-border/60 px-2 py-1">
+      {/* Hooks shortcut + version - pinned bottom */}
+      <div className="space-y-1 border-t border-sidebar-border/60 px-2 py-1">
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={() => navigate('/preferences?section=agent-hooks')}
+                aria-label={
+                  activeHookSessions > 0
+                    ? `${tSettings('agentHooks.shortcutLabel')} — ${tSettings('agentHooks.shortcutHint')} (${tSettings('agentHooks.activeSessions', { count: activeHookSessions })})`
+                    : `${tSettings('agentHooks.shortcutLabel')} — ${tSettings('agentHooks.shortcutHint')}`
+                }
+                className="inline-flex h-7 w-full items-center gap-2 rounded px-1.5 text-xs text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <Webhook size={14} aria-hidden="true" />
+                <span className="truncate">{tSettings('agentHooks.shortcutLabel')}</span>
+                {activeHookSessions > 0 && (
+                  <span
+                    className="ml-auto rounded-full bg-primary/15 px-1.5 text-3xs font-medium text-primary"
+                    aria-hidden="true"
+                  >
+                    {activeHookSessions}
+                  </span>
+                )}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top" sideOffset={6}>
+              {tSettings('agentHooks.shortcutHint')}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
         <div className="inline-flex h-6 w-full items-center justify-center">
           <span className="text-3xs text-muted-foreground/60">
             {appVersion

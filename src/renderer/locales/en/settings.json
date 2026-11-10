@@ -46,7 +46,41 @@
     "reloadFailed": "Unable to reload adapters",
     "previewFailed": "Unable to preview changes",
     "mutationFailed": "Unable to apply changes",
-    "openFolderFailed": "Unable to open adapters folder"
+    "openFolderFailed": "Unable to open adapters folder",
+    "shortcutLabel": "Hooks",
+    "shortcutHint": "Open Hooks settings",
+    "activeSessions": "Active hook sessions: {{count}}",
+    "sessions": {
+      "title": "Live sessions",
+      "helpLabel": "About live hook sessions",
+      "help": "Live state reported by installed hooks. Read-only.",
+      "empty": "No hook sessions",
+      "terminal": "Terminal",
+      "project": "Project",
+      "ready": "Ready",
+      "restore": "Restore",
+      "updated": "Updated",
+      "yes": "Yes",
+      "no": "No",
+      "justNow": "just now",
+      "states": {
+        "busy": "Busy",
+        "idle": "Idle",
+        "needs_approval": "Needs approval",
+        "blocked": "Blocked",
+        "error": "Error",
+        "ended": "Ended"
+      },
+      "restoreStates": {
+        "pending_confirmation": "Pending confirmation",
+        "confirmed": "Confirmed",
+        "unconfirmed": "Unconfirmed",
+        "stale": "Stale",
+        "interrupted": "Interrupted",
+        "ended": "Ended",
+        "snapshot_missing": "Snapshot missing"
+      }
+    }
   },
   "page": {
     "title": "Application Preferences",
@@ -70,6 +104,7 @@
     "behavior": "Behavior",
     "projectDefaults": "New Project Defaults",
     "aiAgents": "AI Agents",
+    "hooks": "Hooks",
     "mcpServers": "MCP Servers",
     "remoteAccess": "Remote Access",
     "shortcuts": "Keyboard Shortcuts",

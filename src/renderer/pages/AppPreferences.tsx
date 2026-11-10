@@ -18,6 +18,7 @@ import {
   ShieldCheck,
   Sliders,
   Terminal,
+  Webhook,
   X
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
@@ -27,6 +28,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { KeybindingSchemePicker } from '@/components/KeybindingSchemePicker'
 import { ShortcutRecorder } from '@/components/ShortcutRecorder'
 import { AcpAgentsSettings } from '@/components/settings/AcpAgentsSettings'
+import { AgentHookSessionsPanel } from '@/components/settings/AgentHookSessionsPanel'
 import { AgentHooksSettings } from '@/components/settings/AgentHooksSettings'
 import { CliResumeDefaultsSettings } from '@/components/settings/CliResumeDefaultsSettings'
 import { CoreRuntimeSettings } from '@/components/settings/CoreRuntimeSettings'
@@ -150,6 +152,7 @@ const APP_PREF_CATEGORY_DEFS = [
     icon: <Monitor size={16} />
   },
   { id: 'ai-agents', labelKey: 'categories.aiAgents', icon: <Bot size={16} /> },
+  { id: 'agent-hooks', labelKey: 'categories.hooks', icon: <Webhook size={16} /> },
   { id: 'remote-access', labelKey: 'categories.remoteAccess', icon: <Monitor size={16} /> },
   { id: 'shortcuts', labelKey: 'categories.shortcuts', icon: <Keyboard size={16} /> },
   { id: 'updates', labelKey: 'categories.updates', icon: <Download size={16} /> },
@@ -299,6 +302,28 @@ const APP_PREF_SEARCH_DEFS = [
     labelKey: 'aiAgents.turnTimeout',
     descriptionKey: 'aiAgents.turnTimeoutHint',
     keywords: ['acp', 'timeout', 'turn', 'hard cap', 'unlimited', 'wedge']
+  },
+  {
+    categoryId: 'agent-hooks',
+    labelKey: 'agentHooks.title',
+    descriptionKey: 'agentHooks.help',
+    keywords: [
+      'hook',
+      'hooks',
+      'agent hook',
+      'adapter',
+      'install',
+      'uninstall',
+      '集成',
+      '安装',
+      '卸载'
+    ]
+  },
+  {
+    categoryId: 'agent-hooks',
+    labelKey: 'agentHooks.sessions.title',
+    descriptionKey: 'agentHooks.sessions.help',
+    keywords: ['hook', 'hooks', 'live', 'session', 'sessions', '实时', '会话']
   },
   {
     categoryId: 'remote-access',
@@ -1588,7 +1613,6 @@ export default function AppPreferences(): React.JSX.Element {
                 </p>
               </div>
               <div className="w-2/3 space-y-4">
-                <AgentHooksSettings />
                 <AcpAgentsSettings />
                 <CliResumeDefaultsSettings />
                 <div>
@@ -1831,6 +1855,24 @@ export default function AppPreferences(): React.JSX.Element {
                     {tSettings('aiAgents.firstPromptWarmupHint')}
                   </p>
                 </div>
+              </div>
+            </div>
+          </SettingsSection>
+
+          {/* Agent Hooks Section */}
+          <SettingsSection id="agent-hooks">
+            <div className="flex flex-col gap-6 border-b border-border/70 pb-6 lg:flex-row lg:items-start">
+              <div className="w-full pt-1 lg:w-1/3">
+                <div className="flex items-center gap-2">
+                  <Webhook size={16} className="text-primary" />
+                  <h2 className="text-lg font-medium text-foreground">
+                    {tSettings('categories.hooks')}
+                  </h2>
+                </div>
+              </div>
+              <div className="w-full space-y-6 lg:w-2/3">
+                <AgentHooksSettings />
+                <AgentHookSessionsPanel />
               </div>
             </div>
           </SettingsSection>

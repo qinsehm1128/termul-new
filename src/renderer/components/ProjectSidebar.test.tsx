@@ -1,3 +1,4 @@
+import type { HookStateDto } from '@shared/types/agent-hooks.types'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -5,6 +6,7 @@ import { useConversationStore } from '@/features/agent-session/stores/conversati
 import * as toastModule from '@/hooks/use-toast'
 import { dialogApi, worktreeApi } from '@/lib/api'
 import { filesystemApi } from '@/lib/filesystem-api'
+import { useAgentHookStateStore } from '@/stores/agent-hook-state-store'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useProjectStore } from '@/stores/project-store'
@@ -1907,5 +1909,75 @@ describe('ProjectSidebar import existing project', () => {
     expect(mockAddProject).not.toHaveBeenCalled()
     expect(mockMoveProjectToGroup).not.toHaveBeenCalled()
     expect(mockToast).not.toHaveBeenCalled()
+  })
+})
+
+describe('ProjectSidebar hooks shortcut', () => {
+  function LocationUrlProbe(): React.JSX.Element {
+    const location = useLocation()
+    return (
+      <output data-testid="location-url-probe">{`${location.pathname}${location.search}`}</output>
+    )
+  }
+
+  const hookRow = (
+    terminalId: string,
+    state: HookStateDto['state'],
+    revision: number
+  ): HookStateDto => ({
+    instance_id: 'host-1',
+    terminal_id: terminalId,
+    generation: 1,
+    adapter_install_id: 'install-1',
+    agent_session_id: 'agent-session',
+    project_id: 'project-1',
+    state,
+    ready: true,
+    identity: {
+      adapter_id: 'pi',
+      agent_session_id: 'agent-session',
+      transcript_path: null,
+      cwd: null,
+      source: 'hook',
+      descriptor_id: null,
+      resume_argv: null
+    },
+    restore_state: 'confirmed',
+    revision
+  })
+
+  afterEach(() => {
+    useAgentHookStateStore.getState().reset()
+  })
+
+  it('opens the Hooks settings category from the pinned footer', () => {
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <ProjectSidebar {...defaultProps} />
+        <LocationUrlProbe />
+      </MemoryRouter>
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Open Hooks settings/ }))
+
+    expect(screen.getByTestId('location-url-probe')).toHaveTextContent(
+      '/preferences?section=agent-hooks'
+    )
+  })
+
+  it('badges the number of hook sessions that have not ended', () => {
+    useAgentHookStateStore.getState().applySync({
+      kind: 'snapshot',
+      instance_id: 'host-1',
+      current_revision: 1,
+      states: [hookRow('pty-1', 'idle', 1), hookRow('pty-2', 'ended', 1)],
+      tombstones: []
+    })
+
+    renderWithRouter()
+
+    const shortcut = screen.getByRole('button', { name: /Open Hooks settings/ })
+    expect(shortcut).toHaveTextContent('1')
+    expect(shortcut).toHaveAccessibleName(/Active hook sessions: 1/)
   })
 })

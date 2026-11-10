@@ -113,6 +113,11 @@ export const useAgentHookStateStore = create<AgentHookStateStore>((set) => ({
     })
 }))
 
+/** Sessions still reporting evidence; `ended` stays visible in views but is not active. */
+export function countActiveHookSessions(states: Record<string, AgentHookRuntimeState>): number {
+  return Object.values(states).filter((state) => state.state !== 'ended').length
+}
+
 export function getAgentHookRuntimeState(terminalId: string): AgentHookRuntimeState | undefined {
   const store = useAgentHookStateStore.getState()
   return store.instanceId
