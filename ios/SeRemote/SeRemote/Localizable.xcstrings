@@ -11118,6 +11118,116 @@
           }
         }
       }
+    },
+    "Rendered" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "渲染"
+          }
+        }
+      }
+    },
+    "Source" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "源码"
+          }
+        }
+      }
+    },
+    "Preview mode" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "预览方式"
+          }
+        }
+      }
+    },
+    "This file is too large to preview." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件过大，无法预览。"
+          }
+        }
+      }
+    },
+    "Binary files can't be previewed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "二进制文件无法预览。"
+          }
+        }
+      }
+    },
+    "This image format can't be previewed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此图片格式无法预览。"
+          }
+        }
+      }
+    },
+    "This file can't be previewed." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此文件无法预览。"
+          }
+        }
+      }
+    },
+    "Share image" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分享图片"
+          }
+        }
+      }
+    },
+    "Image preview" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "图片预览"
+          }
+        }
+      }
+    },
+    "Pinch to zoom" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "双指缩放"
+          }
+        }
+      }
+    },
+    "Double tap to fit" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "双击适应屏幕"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

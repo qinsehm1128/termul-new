@@ -98,7 +98,7 @@ struct FileBrowserView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(palette.surface)
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                if !split, session.files.preview != nil {
+                if !split, session.files.hasPreview {
                     previewCard
                 }
             }
@@ -128,7 +128,7 @@ struct FileBrowserView: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .disabled(busy || (index == session.files.crumbs.count - 1 && session.files.preview == nil && session.files.errorMessage == nil))
+                        .disabled(busy || (index == session.files.crumbs.count - 1 && !session.files.hasPreview && session.files.errorMessage == nil))
                         .accessibilityHint(Text("Open this folder"))
                     }
                 }
@@ -175,13 +175,16 @@ struct FileBrowserView: View {
 
     @ViewBuilder
     private var previewPane: some View {
-        if let content = session.files.preview {
+        if session.files.hasPreview {
             VStack(spacing: 0) {
                 R2GroupLabel(title: String(localized: "Recently read"), detail: String(localized: "RO"))
                     .padding(.horizontal, 18)
                 WorkspaceFilePreviewView(
                     name: session.files.previewName ?? String(localized: "File preview"),
-                    content: content,
+                    content: session.files.preview,
+                    kind: session.files.previewKind,
+                    imageData: session.files.previewImage,
+                    failure: session.files.previewFailure,
                     isLoading: busy,
                     refresh: { await refresh() }
                 )
@@ -200,10 +203,13 @@ struct FileBrowserView: View {
         VStack(spacing: 0) {
             R2GroupLabel(title: String(localized: "Recently read"), detail: String(localized: "RO"))
                 .padding(.horizontal, 18)
-            if let content = session.files.preview {
+            if session.files.hasPreview {
                 WorkspaceFilePreviewView(
                     name: session.files.previewName ?? String(localized: "File preview"),
-                    content: content,
+                    content: session.files.preview,
+                    kind: session.files.previewKind,
+                    imageData: session.files.previewImage,
+                    failure: session.files.previewFailure,
                     isLoading: busy,
                     refresh: { await refresh() }
                 )
@@ -253,9 +259,9 @@ struct FileBrowserView: View {
 
     private func refresh() async {
         await perform {
-            // FileStore only records a preview path after a successful read. Retain
-            // the attempted entry so an initial read failure retries that exact file.
-            if let retryFile, session.files.preview == nil {
+            // FileStore publishes the preview path before the request. Retain the
+            // attempted entry so an initial failure retries that exact file.
+            if let retryFile, !session.files.hasPreview {
                 await session.files.open(retryFile)
             } else {
                 await session.files.refresh()

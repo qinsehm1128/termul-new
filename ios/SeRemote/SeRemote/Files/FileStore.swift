@@ -8,8 +8,15 @@ final class FileStore {
     var entries: [DirectoryEntry] = []
     var preview: FileContent?
     var previewName: String?
+    var previewKind: FilePreviewKind?
+    var previewImage: Data?
+    var previewFailure: FilePreviewFailure?
     var isLoading = false
     var errorMessage: String?
+
+    /// True from the moment a row is opened, so the preview card can show its
+    /// loading, failure and rich states instead of disappearing on error.
+    var hasPreview: Bool { previewName != nil }
 
     private var previewPath: String?
     private var http: HostHTTP?
@@ -20,9 +27,7 @@ final class FileStore {
 
     func openRoot(_ path: String) async {
         crumbs = [DirectoryEntry(name: rootName(path), path: path, type: "directory")]
-        preview = nil
-        previewName = nil
-        previewPath = nil
+        clearPreview()
         await load(path)
     }
 
@@ -36,9 +41,7 @@ final class FileStore {
     func openReturningSuccess(_ entry: DirectoryEntry) async -> Bool {
         if entry.isDirectory {
             crumbs.append(entry)
-            preview = nil
-            previewName = nil
-            previewPath = nil
+            clearPreview()
             return await load(entry.path)
         } else {
             return await read(entry)
@@ -48,9 +51,7 @@ final class FileStore {
     func popTo(_ entry: DirectoryEntry) async {
         guard let index = crumbs.firstIndex(of: entry) else { return }
         crumbs = Array(crumbs.prefix(through: index))
-        preview = nil
-        previewName = nil
-        previewPath = nil
+        clearPreview()
         await load(entry.path)
     }
 
@@ -96,18 +97,53 @@ final class FileStore {
         guard let http else { return false }
         isLoading = true
         defer { isLoading = false }
+
+        // Publish identity before the request so refresh can retry a failure.
+        previewName = name
+        previewPath = path
+        preview = nil
+        previewImage = nil
+        previewFailure = nil
+        let initialKind = FilePreviewKind.resolve(name: name, encoding: nil)
+        previewKind = initialKind
+
+        if case .unsupportedImage = initialKind {
+            previewFailure = .unsupportedImage
+            return false
+        }
+
+        if initialKind.isImage {
+            do {
+                previewImage = try await http.fileImage(path: path)
+                errorMessage = nil
+                return true
+            } catch {
+                HostLog.session.error("Image preview load failed")
+                previewFailure = FilePreviewFailure.resolve(error) ?? .unavailable
+                return false
+            }
+        }
+
         do {
-            preview = try await http.get("fs/read", query: ["path": path])
-            previewName = name
-            previewPath = path
+            let content: FileContent = try await http.get("fs/read", query: ["path": path])
+            preview = content
+            previewKind = FilePreviewKind.resolve(name: name, encoding: content.encoding)
             errorMessage = nil
             return true
         } catch {
             HostLog.session.error("File preview load failed")
-            errorMessage = error.localizedDescription
-            preview = nil
+            previewFailure = FilePreviewFailure.resolve(error) ?? .unavailable
             return false
         }
+    }
+
+    private func clearPreview() {
+        preview = nil
+        previewName = nil
+        previewPath = nil
+        previewKind = nil
+        previewImage = nil
+        previewFailure = nil
     }
 
     private func rootName(_ path: String) -> String {
