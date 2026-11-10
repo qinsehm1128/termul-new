@@ -22,10 +22,16 @@ nonisolated enum DesktopShotTargetResolver {
     static func resolve(
         activeTerminalID: String?,
         activeConversationID: String?,
-        agentChatTerminalID: String?
+        agentChatTerminalID: String?,
+        terminalTabActive: Bool = false
     ) -> DesktopShotTarget? {
         if let agentChatTerminalID {
             return .agentChat(id: agentChatTerminalID)
+        }
+        // The visible workbench decides: on the terminal tab the shot goes to
+        // the PTY even when the session also has a conversation.
+        if terminalTabActive, let activeTerminalID {
+            return .terminal(id: activeTerminalID)
         }
         if let activeConversationID {
             return .chat(conversationID: activeConversationID)

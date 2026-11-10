@@ -157,6 +157,22 @@ struct DesktopShotTargetTests {
         #expect(target == .chat(conversationID: "conv-1"))
     }
 
+    @Test func terminalTabSendsToTheTerminalEvenWithAConversation() {
+        let target = DesktopShotTargetResolver.resolve(
+            activeTerminalID: "term-1",
+            activeConversationID: "conv-1",
+            agentChatTerminalID: nil,
+            terminalTabActive: true
+        )
+        #expect(target == .terminal(id: "term-1"))
+        #expect(DesktopShotTargetResolver.resolve(
+            activeTerminalID: nil,
+            activeConversationID: "conv-1",
+            agentChatTerminalID: nil,
+            terminalTabActive: true
+        ) == .chat(conversationID: "conv-1"))
+    }
+
     @Test func terminalIsTheFallback() {
         let target = DesktopShotTargetResolver.resolve(
             activeTerminalID: "term-2",

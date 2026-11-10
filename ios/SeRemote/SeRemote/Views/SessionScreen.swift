@@ -67,7 +67,8 @@ struct SessionScreen: View {
                 target: DesktopShotTargetResolver.resolve(
                     activeTerminalID: session.terminals.activeId,
                     activeConversationID: session.conversations.active?.id,
-                    agentChatTerminalID: nil
+                    agentChatTerminalID: nil,
+                    terminalTabActive: session.workspaceTab == .terminal
                 ) ?? .chat(conversationID: session.conversations.active?.id)
             )
         }
