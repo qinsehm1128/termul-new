@@ -20,6 +20,8 @@ struct SessionScreen: View {
     @State private var containerWidth: CGFloat = 0
     @State private var filesVisibility: NavigationSplitViewVisibility = .detailOnly
     @State private var showTools = false
+    @State private var showDesktopSheet = false
+    @State private var desktopSupported: Bool?
     @State private var tabForward = true
 
     private var columns: SeLayout.Columns {
@@ -54,6 +56,27 @@ struct SessionScreen: View {
         }
         .sheet(isPresented: $chat.showAgentSheet) { AgentConfigSheet(session: session) }
         .sheet(isPresented: $showTools) { ToolsView(session: session) }
+        .sheet(isPresented: $showDesktopSheet) {
+            DesktopQuickSheet(
+                hostName: deviceLink?.title ?? String(localized: "Desktop"),
+                socket: session.desktopSocket,
+                sender: DesktopShotSender(
+                    http: session.http,
+                    chat: session.chat,
+                    terminals: session.terminals,
+                    conversation: session.conversations.active
+                ),
+                target: DesktopShotTargetResolver.resolve(
+                    activeTerminalID: session.terminals.activeId,
+                    activeConversationID: session.conversations.active?.id,
+                    agentChatTerminalID: nil
+                ) ?? .chat(conversationID: session.conversations.active?.id)
+            )
+        }
+        .task {
+            guard desktopSupported == nil else { return }
+            desktopSupported = (try? await session.http.desktopInfo())?.supported
+        }
         .task(id: workspaceTaskId) {
             if session.phase == .connected { await session.refreshActiveTerminals() }
             while !Task.isCancelled {
@@ -152,9 +175,7 @@ struct SessionScreen: View {
             Button {
                 if let onBack { onBack() } else { dismiss() }
             } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(palette.inkSecondary)
+                SeIconView(icon: .back, size: 15, stroke: 1.8, color: palette.inkSecondary)
                     .frame(width: 32, height: 32)
                     .background(palette.card, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                     .overlay {
@@ -169,31 +190,48 @@ struct SessionScreen: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(SeNocturneType.font(15, weight: .semibold))
                     .foregroundStyle(palette.ink)
                     .lineLimit(1)
                 Text(headerSubtitle)
-                    .font(.system(size: 10, design: .monospaced))
+                    .font(SeNocturneType.font(10, mono: true))
                     .foregroundStyle(palette.inkTertiary)
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
 
+            if desktopSupported != false {
+                Button {
+                    showDesktopSheet = true
+                } label: {
+                    SeIconView(icon: .desktop, size: 15, stroke: 1.7, color: palette.inkSecondary)
+                        .frame(width: 32, height: 32)
+                        .background(palette.card, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .stroke(palette.stroke, lineWidth: 1)
+                        }
+                        .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("Desktop"))
+                .accessibilityHint(Text("Opens the remote desktop. Long press is not needed here."))
+            }
+
             Menu {
                 if session.workspace == .conversation {
-                    Button("Agent", systemImage: "cpu") { session.chat.showAgentSheet = true }
+                    Button("Agent") { session.chat.showAgentSheet = true }
                         .disabled(!(deviceLink?.allows("agent.run") ?? true))
                 }
-                Button("Tools", systemImage: "wrench.and.screwdriver") { showTools = true }
-                Button("New terminal", systemImage: "plus") {
+                Button("Tools") { showTools = true }
+                Button("New terminal") {
                     Task { await session.spawnTerminal() }
                 }
                 .disabled(!(deviceLink?.allows("terminal.create") ?? true))
             } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(palette.inkSecondary)
+                SeIconView(icon: .more, size: 15, stroke: 1.8, color: palette.inkSecondary)
                     .frame(width: 32, height: 32)
                     .background(palette.card, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                     .overlay {

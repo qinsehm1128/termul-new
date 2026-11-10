@@ -24,6 +24,16 @@ struct TerminalsHubScreen: View {
     @State private var quickConsole: QuickTerminalConsoleRequest?
     @State private var refreshing = false
     @State private var pendingRefresh = false
+    @State private var desktopSheet: HubDesktopRequest?
+    @State private var desktopSupported: Bool?
+
+    private struct HubDesktopRequest: Identifiable {
+        let terminalId: String
+        let title: String
+        let viewfinder: Bool
+
+        var id: String { terminalId + (viewfinder ? ":viewfinder" : ":desktop") }
+    }
 
     private static let refreshInterval: Duration = .seconds(15)
 
@@ -65,6 +75,24 @@ struct TerminalsHubScreen: View {
                 title: request.title,
                 onClose: { quickConsole = nil }
             )
+        }
+        .sheet(item: $desktopSheet) { request in
+            DesktopQuickSheet(
+                hostName: hostName,
+                socket: session.desktopSocket,
+                sender: DesktopShotSender(
+                    http: session.http,
+                    chat: session.chat,
+                    terminals: session.terminals,
+                    conversation: nil
+                ),
+                target: .terminal(id: request.terminalId),
+                startsInViewfinder: request.viewfinder
+            )
+        }
+        .task {
+            guard desktopSupported == nil else { return }
+            desktopSupported = (try? await session.http.desktopInfo())?.supported
         }
     }
 
@@ -183,53 +211,94 @@ struct TerminalsHubScreen: View {
     // MARK: - Rows
 
     private func terminalRow(_ terminal: TerminalsHubTerminal) -> some View {
-        Button {
-            // The workbench terminal stays mounted (opacity 0) behind the hub.
-            // Presenting a full-screen console while it holds first responder
-            // leaves the keyboard attached to an invisible view.
-            session.dismissTerminalKeyboard()
-            console = TerminalsHubConsoleRequest(terminalId: terminal.id, title: terminal.title)
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "terminal")
-                    .font(.system(size: 14, weight: .regular))
-                    .foregroundStyle(palette.inkTertiary)
-                    .frame(width: 22, height: 22)
+        HStack(spacing: 8) {
+            Button {
+                // The workbench terminal stays mounted (opacity 0) behind the hub.
+                // Presenting a full-screen console while it holds first responder
+                // leaves the keyboard attached to an invisible view.
+                session.dismissTerminalKeyboard()
+                console = TerminalsHubConsoleRequest(terminalId: terminal.id, title: terminal.title)
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "terminal")
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundStyle(palette.inkTertiary)
+                        .frame(width: 22, height: 22)
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(verbatim: terminal.title)
-                        .font(SeNocturneType.font(12, weight: .semibold))
-                        .foregroundStyle(palette.ink)
-                        .lineLimit(1)
-                    if let detail = rowDetail(terminal) {
-                        Text(verbatim: detail)
-                            .font(SeNocturneType.font(9, weight: .regular, mono: true))
-                            .foregroundStyle(palette.inkTertiary)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(verbatim: terminal.title)
+                            .font(SeNocturneType.font(12, weight: .semibold))
+                            .foregroundStyle(palette.ink)
                             .lineLimit(1)
+                        if let detail = rowDetail(terminal) {
+                            Text(verbatim: detail)
+                                .font(SeNocturneType.font(9, weight: .regular, mono: true))
+                                .foregroundStyle(palette.inkTertiary)
+                                .lineLimit(1)
+                        }
                     }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                if terminal.hasRunningAgent {
-                    agentBadge
+                    if terminal.hasRunningAgent {
+                        agentBadge
+                    }
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(palette.inkTertiary)
                 }
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(palette.inkTertiary)
+                .contentShape(Rectangle())
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, minHeight: NocturneToolMetrics.minimumTarget, alignment: .leading)
-            .background(palette.card, in: RoundedRectangle(cornerRadius: 12))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(palette.stroke, lineWidth: 1)
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text(terminal.title))
+            .accessibilityValue(Text(terminal.hasRunningAgent ? String(localized: "Agent running") : ""))
+            .accessibilityHint(Text("Opens the running shell. Detaching leaves it running on the host."))
+
+            if desktopSupported != false {
+                Button {
+                    desktopSheet = HubDesktopRequest(
+                        terminalId: terminal.id,
+                        title: terminal.title,
+                        viewfinder: false
+                    )
+                } label: {
+                    viewfinderCapsule
+                }
+                .buttonStyle(.plain)
+                .simultaneousGesture(
+                    LongPressGesture(minimumDuration: 0.4).onEnded { _ in
+                        desktopSheet = HubDesktopRequest(
+                            terminalId: terminal.id,
+                            title: terminal.title,
+                            viewfinder: true
+                        )
+                    }
+                )
+                .accessibilityLabel(Text("Viewfinder"))
+                .accessibilityHint(Text("Opens the desktop. Long press opens the viewfinder."))
             }
-            .contentShape(Rectangle())
         }
-        .buttonStyle(NocturnePressStyle(reduceMotion: reduceMotion))
-        .accessibilityLabel(Text(terminal.title))
-        .accessibilityValue(Text(terminal.hasRunningAgent ? String(localized: "Agent running") : ""))
-        .accessibilityHint(Text("Opens the running shell. Detaching leaves it running on the host."))
+        .padding(12)
+        .frame(maxWidth: .infinity, minHeight: NocturneToolMetrics.minimumTarget, alignment: .leading)
+        .background(palette.card, in: RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(palette.stroke, lineWidth: 1)
+        }
+    }
+
+    private var viewfinderCapsule: some View {
+        Text("Viewfinder")
+            .font(SeNocturneType.font(8.5, weight: .medium, mono: true))
+            .foregroundStyle(palette.inkSecondary)
+            .padding(.horizontal, 8)
+            .frame(height: 26)
+            .background(palette.cardAlt, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(palette.stroke, lineWidth: 1)
+            }
+            .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
+            .contentShape(Rectangle())
     }
 
     private func rowDetail(_ terminal: TerminalsHubTerminal) -> String? {

@@ -94,7 +94,7 @@ struct SessionModeSwitch: View {
                     session.setWorkspaceTab(tab)
                 } label: {
                     Text(tab.title)
-                        .font(.system(size: 12, weight: selected ? .medium : .regular))
+                        .font(SeNocturneType.font(12, weight: selected ? .medium : .regular))
                         .foregroundStyle(selected ? palette.canvas : palette.inkSecondary)
                         .frame(maxWidth: .infinity)
                         .frame(height: 30)
@@ -177,7 +177,7 @@ struct SessionStatusRibbon: View {
                 Spacer(minLength: 0)
             }
         }
-        .font(.system(size: 10, design: .monospaced))
+        .font(SeNocturneType.font(10, mono: true))
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .background(palette.card, in: RoundedRectangle(cornerRadius: 9, style: .continuous))

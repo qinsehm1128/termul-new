@@ -15,6 +15,9 @@ struct TerminalWorkspaceView: View {
     @State private var textScale = TerminalTextScale.current
     @State private var scaleHud: String?
     @State private var controlModifier = TerminalControlModifier()
+    @State private var desktopTerminalId: String?
+    @State private var showDesktop = false
+    @State private var desktopSupported: Bool?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -105,6 +108,28 @@ struct TerminalWorkspaceView: View {
             .accessibilityLabel(Text(session.terminals.displayMode == .phone
                 ? "Switch to desktop fit" : "Fit the phone"))
             .accessibilityValue(Text(session.terminals.displayMode == .phone ? String(localized: "Active") : String(localized: "Idle")))
+            if desktopSupported != false, let terminalId = session.terminals.activeId {
+                Button {
+                    desktopTerminalId = terminalId
+                    showDesktop = true
+                } label: {
+                    Text("Desktop")
+                        .font(SeNocturneType.font(8.5, weight: .medium, mono: true))
+                        .foregroundStyle(palette.inkSecondary)
+                        .padding(.horizontal, 8)
+                        .frame(height: 26)
+                        .background(palette.cardAlt, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .stroke(palette.stroke, lineWidth: 1)
+                        }
+                        .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("Desktop"))
+                .accessibilityHint(Text("Opens the remote desktop for this terminal."))
+            }
             textScaleMenu
         }
         .font(.system(size: 9, design: .monospaced))
@@ -113,6 +138,25 @@ struct TerminalWorkspaceView: View {
         .frame(height: 44)
         .seHaptic(trigger: session.terminals.displayMode) { _, _ in .selection }
         .seHaptic(trigger: textScale) { _, _ in .selection }
+        .sheet(isPresented: $showDesktop) {
+            if let terminalId = desktopTerminalId {
+                DesktopQuickSheet(
+                    hostName: String(localized: "Desktop"),
+                    socket: session.desktopSocket,
+                    sender: DesktopShotSender(
+                        http: session.http,
+                        chat: session.chat,
+                        terminals: session.terminals,
+                        conversation: nil
+                    ),
+                    target: .terminal(id: terminalId)
+                )
+            }
+        }
+        .task {
+            guard desktopSupported == nil else { return }
+            desktopSupported = (try? await session.http.desktopInfo())?.supported
+        }
     }
 
     private var terminalMetaLabel: String {
