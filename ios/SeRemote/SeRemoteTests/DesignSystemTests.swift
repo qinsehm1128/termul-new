@@ -79,4 +79,106 @@ struct DesignSystemTests {
             if let scheme { #expect(SeThemeMode.resolved(colorScheme: scheme) == mode) }
         }
     }
+
+    // MARK: - Icons (Phase 2 lane A)
+
+    @Test("Every icon draws inside the 24pt grid", arguments: SeIcon.allCases)
+    func iconsDraw(icon: SeIcon) {
+        let path = SeIconShape(icon: icon).path(in: CGRect(x: 0, y: 0, width: 24, height: 24))
+        #expect(!path.isEmpty, "\(icon.rawValue)")
+        let bounds = path.boundingRect
+        #expect(bounds.width > 0 && bounds.height > 0, "\(icon.rawValue)")
+        #expect(bounds.minX >= 0 && bounds.minY >= 0, "\(icon.rawValue)")
+        #expect(bounds.maxX <= 24 && bounds.maxY <= 24, "\(icon.rawValue)")
+    }
+
+    @Test("The desktop, capture and preview glyphs exist")
+    func phaseTwoGlyphsExist() {
+        let required: [SeIcon] = [
+            .desktop, .viewfinder, .send, .image, .doc, .code, .markdown,
+            .close, .expand, .keyboard, .pointer, .display, .fit,
+        ]
+        let all = Set(SeIcon.allCases)
+        for icon in required { #expect(all.contains(icon), "\(icon.rawValue)") }
+    }
+
+    @Test("SF Symbol mapping covers the migration list")
+    func symbolMapping() {
+        let expected: [String: SeIcon] = [
+            "chevron.left": .back,
+            "chevron.right": .chevron,
+            "chevron.up.chevron.down": .chevronUpDown,
+            "ellipsis": .more,
+            "gearshape": .gear,
+            "wrench": .gear,
+            "terminal": .terminal,
+            "folder": .folder,
+            "arrow.clockwise": .refresh,
+            "square.and.arrow.up": .up,
+            "arrow.up": .up,
+            "arrow.down": .down,
+            "arrow.right": .arrowRight,
+            "xmark": .close,
+            "xmark.circle.fill": .close,
+            "checkmark": .check,
+            "play": .play,
+            "stop.fill": .stop,
+            "plus": .plus,
+            "magnifyingglass": .search,
+            "info.circle": .info,
+            "lock": .lock,
+            "keyboard": .keyboard,
+            "keyboard.chevron.compact.down": .keyboardDown,
+            "display": .display,
+            "desktopcomputer": .desktop,
+            "server.rack": .server,
+            "bolt.horizontal.circle": .bolt,
+            "rectangle.portrait.and.arrow.right": .detach,
+            "line.3.horizontal.decrease": .filter,
+            "doc.text": .doc,
+            "photo": .image,
+            "paperplane": .send,
+            "chevron.left.forwardslash.chevron.right": .code,
+            "crop": .viewfinder,
+        ]
+        for (symbol, icon) in expected {
+            #expect(SeIcon(systemName: symbol) == icon, "\(symbol)")
+        }
+        // Selection controls and unknown symbols stay unmapped on purpose.
+        #expect(SeIcon(systemName: "circle") == nil)
+        #expect(SeIcon(systemName: "largecircle.fill.circle") == nil)
+        #expect(SeIcon(systemName: "definitely.not.a.symbol") == nil)
+    }
+
+    @Test("Every mapped symbol resolves to a drawable glyph")
+    func mappedGlyphsDraw() {
+        for (symbol, icon) in SeIcon.systemNameMap {
+            let path = SeIconShape(icon: icon).path(in: CGRect(x: 0, y: 0, width: 24, height: 24))
+            #expect(!path.isEmpty, "\(symbol)")
+            #expect(SeIcon(systemName: symbol) == icon, "\(symbol)")
+        }
+    }
+
+    // MARK: - Type scale (Phase 2 lane A)
+
+    @Test("Type scale covers every in-app prototype size")
+    func typeScaleCoversPrototype() {
+        let expected: [CGFloat] = [
+            7, 8, 8.5, 9, 9.5, 10, 10.5, 11, 11.5, 12, 12.5,
+            13, 13.5, 14, 15, 17, 19, 24, 26, 30, 33,
+        ]
+        #expect(SeNocturneType.scale == expected)
+        #expect(Set(SeNocturneType.scale).count == SeNocturneType.scale.count)
+    }
+
+    @Test("Mono tokens cover the console and label sizes")
+    func monoTokens() {
+        #expect(SeNocturneType.monoBodySize == 12)
+        #expect(SeNocturneType.monoSize == 10)
+        #expect(SeNocturneType.monoLabelSize == 9.5)
+        #expect(SeNocturneType.monoSmallSize == 9)
+        #expect(SeNocturneType.monoEyebrowSize == 8.5)
+        #expect(SeNocturneType.microSize == 8)
+        #expect(SeNocturneType.badgeSize == 7)
+    }
 }

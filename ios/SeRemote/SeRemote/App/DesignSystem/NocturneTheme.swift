@@ -188,18 +188,51 @@ extension View {
 
 /// Base sizes from the prototype. Views that need Dynamic Type should wrap
 /// these in `@ScaledMetric(relativeTo:)` and call `font(_:weight:mono:)`.
+///
+/// Every size the prototype uses in-app is represented here (`index.html`);
+/// the 62pt marketing masthead is page chrome outside the app and is not part
+/// of the scale. Sizes are placeholders for Dynamic Type, never fixed layout.
 enum SeNocturneType {
+    // Display and titles
     static let screenTitleSize: CGFloat = 33
+    /// Mobile section display (prototype `h2` at 24px).
+    static let compactDisplaySize: CGFloat = 24
+    /// iPad portrait shell title (prototype `.pad.pt .padtitle` at 30px).
+    static let padDisplaySize: CGFloat = 30
+    static let statSize: CGFloat = 26
     static let sheetTitleSize: CGFloat = 19
+    static let headlineSize: CGFloat = 17
     static let sectionTitleSize: CGFloat = 15
+    /// Navbar title / rail host name (`13.5–14px` in the prototype).
+    static let navbarTitleSize: CGFloat = 14
+    static let cardTitleSize: CGFloat = 13.5
+    static let buttonTitleSize: CGFloat = 13
+
+    // Body
     static let rowTitleSize: CGFloat = 12.5
     static let bodySize: CGFloat = 12.5
+    static let bodyCompactSize: CGFloat = 12
     static let secondarySize: CGFloat = 11.5
+    static let tertiarySize: CGFloat = 11
     static let labelSize: CGFloat = 10.5
+
+    // Mono labels and micro type
     static let eyebrowSize: CGFloat = 10
     static let monoSize: CGFloat = 10
+    static let monoLabelSize: CGFloat = 9.5
     static let monoSmallSize: CGFloat = 9
-    static let statSize: CGFloat = 26
+    static let monoEyebrowSize: CGFloat = 8.5
+    static let microSize: CGFloat = 8
+    /// Collapsed-rail counters (prototype `7px`).
+    static let badgeSize: CGFloat = 7
+    /// Console / terminal meta in mono (`12px`).
+    static let monoBodySize: CGFloat = 12
+
+    /// The in-app scale, smallest to largest, asserted by `DesignSystemTests`.
+    static let scale: [CGFloat] = [
+        7, 8, 8.5, 9, 9.5, 10, 10.5, 11, 11.5, 12, 12.5,
+        13, 13.5, 14, 15, 17, 19, 24, 26, 30, 33,
+    ]
 
     static func font(
         _ size: CGFloat,
@@ -210,15 +243,28 @@ enum SeNocturneType {
     }
 
     static let screenTitle = font(screenTitleSize, weight: .semibold)
+    static let compactDisplay = font(compactDisplaySize, weight: .semibold)
+    static let padDisplay = font(padDisplaySize, weight: .semibold)
     static let sheetTitle = font(sheetTitleSize, weight: .semibold)
+    static let headline = font(headlineSize, weight: .semibold)
     static let sectionTitle = font(sectionTitleSize, weight: .semibold)
+    static let navbarTitle = font(navbarTitleSize, weight: .semibold)
+    static let cardTitle = font(cardTitleSize, weight: .semibold)
+    static let buttonTitle = font(buttonTitleSize, weight: .semibold)
     static let rowTitle = font(rowTitleSize, weight: .semibold)
     static let body = font(bodySize)
+    static let bodyCompact = font(bodyCompactSize)
     static let secondary = font(secondarySize)
+    static let tertiary = font(tertiarySize)
     static let label = font(labelSize, weight: .medium)
     static let eyebrow = font(eyebrowSize, mono: true)
     static let mono = font(monoSize, mono: true)
+    static let monoLabel = font(monoLabelSize, mono: true)
     static let monoSmall = font(monoSmallSize, mono: true)
+    static let monoEyebrow = font(monoEyebrowSize, mono: true)
+    static let monoBody = font(monoBodySize, mono: true)
+    static let micro = font(microSize)
+    static let badge = font(badgeSize, mono: true)
     static let stat = font(statSize, weight: .semibold)
 }
 
