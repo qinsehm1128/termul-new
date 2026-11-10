@@ -213,7 +213,8 @@ struct ConnectedShellScreen: View {
                     showsDrawer = false
                     showsCommand = true
                 },
-                expandedWidth: 288
+                expandedWidth: 288,
+                onClose: { showsDrawer = false }
             )
             .transition(.move(edge: .leading).combined(with: .opacity))
         }

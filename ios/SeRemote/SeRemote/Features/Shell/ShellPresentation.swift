@@ -20,6 +20,24 @@ enum ShellPresentation {
         width <= height
     }
 
+    /// The brand block's subtitle. The prototype hard-codes `iPad · Nocturne`
+    /// in the phone drawer too (U-5); here the form factor comes from the
+    /// layout size class, so a phone never claims to be an iPad.
+    static func railSubtitle(isPad: Bool) -> String {
+        isPad
+            ? String(localized: "iPad · Nocturne")
+            : String(localized: "iPhone · Nocturne")
+    }
+
+    /// The collapsed iPad rail drops the host name for a single initial
+    /// (prototype `index.html:728`, `.rhost .ini`).
+    static func hostInitial(_ name: String) -> String {
+        guard let first = name.trimmingCharacters(in: .whitespacesAndNewlines).first else {
+            return "?"
+        }
+        return String(first).uppercased()
+    }
+
     static func versionLabel(info: [String: Any]) -> String {
         let version = info["CFBundleShortVersionString"] as? String
         let build = info["CFBundleVersion"] as? String

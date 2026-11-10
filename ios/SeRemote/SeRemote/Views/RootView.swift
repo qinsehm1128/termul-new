@@ -38,7 +38,7 @@ struct RootView: View {
                         .font(.title)
                         .accessibilityHidden(true)
                     Text("This device has been removed by the host")
-                        .font(SeNocturneType.font(18, weight: .semibold))
+                        .font(SeNocturneType.sheetTitle)
                         .multilineTextAlignment(.center)
                     SeSolidButton(title: String(localized: "Scan QR code again"), icon: .plus) {
                         deniedCapability = nil
@@ -56,14 +56,16 @@ struct RootView: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             if let capability = deniedCapability, !isRevoked {
                 HStack(spacing: 10) {
-                    Image(systemName: "info.circle").accessibilityHidden(true)
+                    SeIconView(icon: .info, size: 15, stroke: 1.6, color: palette.ink)
                     Text(String(localized: "Permission required: \(DeviceScope.label(for: capability))"))
                         .font(SeNocturneType.font(12))
                     Spacer(minLength: 0)
                     Button { deniedCapability = nil } label: {
-                        Image(systemName: "xmark").frame(width: 44, height: 44)
+                        SeIconView(icon: .close, size: 14, stroke: 1.7, color: palette.inkSecondary)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
-                    .accessibilityLabel("Dismiss")
+                    .accessibilityLabel(String(localized: "Dismiss"))
                 }
                 .padding(.leading, 18)
                 .foregroundStyle(palette.ink)

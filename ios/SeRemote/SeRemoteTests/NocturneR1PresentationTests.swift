@@ -45,6 +45,26 @@ struct NocturneR1ShellPresentationTests {
         #expect(ShellPresentation.versionLabel(info: [:]) == "SeRemote")
         #expect(ShellPresentation.versionLabel(info: ["CFBundleShortVersionString": "27.4"]) == "SeRemote 27.4")
     }
+
+    @Test("Drawer subtitle follows the size class, so a phone never says iPad")
+    func railSubtitlePerSizeClass() {
+        #expect(ShellPresentation.railSubtitle(isPad: true) == L("iPad · Nocturne"))
+        #expect(ShellPresentation.railSubtitle(isPad: false) == L("iPhone · Nocturne"))
+        // U-5: the prototype hard-codes the iPad word in the phone drawer.
+        #expect(!ShellPresentation.railSubtitle(isPad: false).contains("iPad"))
+        #expect(ShellPresentation.railSubtitle(isPad: true) != ShellPresentation.railSubtitle(isPad: false))
+    }
+
+    @Test("The collapsed rail shows one host initial")
+    func railHostInitial() {
+        #expect(ShellPresentation.hostInitial("MacBook Pro") == "M")
+        #expect(ShellPresentation.hostInitial("  studio") == "S")
+        #expect(ShellPresentation.hostInitial("mac-mini") == "M")
+        #expect(ShellPresentation.hostInitial("").isEmpty == false)
+        #expect(ShellPresentation.hostInitial("   ") == "?")
+        // One grapheme only: the 44 pt chip must not need truncation.
+        #expect(ShellPresentation.hostInitial("MacBook Pro").count == 1)
+    }
 }
 
 // MARK: - Live projection

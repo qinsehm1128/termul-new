@@ -43,13 +43,23 @@ struct AdaptiveSidebarShell: View {
     let version: String
     let onOpenCommand: () -> Void
     var expandedWidth: CGFloat = ShellPresentation.railExpandedWidth
+    /// The phone drawer passes this so the header's trailing button closes the
+    /// drawer (prototype `.railclose`) instead of folding a nil-effect rail.
+    var onClose: (() -> Void)? = nil
 
     @Environment(\.sePalette) private var palette
     @Environment(\.seThemeMode) private var mode
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     private var width: CGFloat {
         collapsed ? ShellPresentation.railCollapsedWidth : expandedWidth
+    }
+
+    /// The brand subtitle follows the size class. The prototype hard-codes
+    /// `iPad · Nocturne` in the phone drawer too (U-5) — never copy that.
+    private var subtitle: String {
+        ShellPresentation.railSubtitle(isPad: horizontalSizeClass != .compact)
     }
 
     var body: some View {
@@ -58,6 +68,7 @@ struct AdaptiveSidebarShell: View {
             if !collapsed {
                 search
                     .padding(.top, 4)
+                    .padding(.bottom, 8)
             }
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: collapsed ? .center : .leading, spacing: 0) {
@@ -69,11 +80,11 @@ struct AdaptiveSidebarShell: View {
                     }
                     if !collapsed {
                         groupLabel(String(localized: "Hosts"))
-                        hostRow
                     }
+                    hostRow
                 }
                 .padding(.horizontal, collapsed ? 9 : 10)
-                .padding(.top, collapsed ? 8 : 4)
+                .padding(.top, collapsed ? 8 : 0)
             }
             Spacer(minLength: 0)
             footer
@@ -100,38 +111,58 @@ struct AdaptiveSidebarShell: View {
                             .font(SeNocturneType.font(13.5, weight: .semibold))
                             .tracking(-0.2)
                             .foregroundStyle(palette.ink)
-                        Text("iPad · Nocturne")
+                        Text(subtitle)
                             .font(SeNocturneType.font(8.5, mono: true))
                             .foregroundStyle(palette.inkTertiary)
                     }
                     Spacer(minLength: 0)
-                    collapseButton
+                    headerAction
                 }
             }
             .padding(.horizontal, collapsed ? 0 : 14)
             .padding(.top, 20)
-            .padding(.bottom, 12)
+            .padding(.bottom, collapsed ? 14 : 12)
             if collapsed {
                 collapseButton.padding(.top, 10)
             }
         }
     }
 
+    /// Trailing header button: an X that closes the phone drawer, or the
+    /// fold control for the iPad rail.
+    private var headerAction: some View {
+        Group {
+            if let onClose {
+                Button(action: onClose) {
+                    headerActionLabel(icon: .close, label: String(localized: "Close"))
+                }
+            } else {
+                collapseButton
+            }
+        }
+        .buttonStyle(SePressable())
+    }
+
     private var collapseButton: some View {
         Button {
             collapsed.toggle()
         } label: {
-            SeIconView(icon: collapsed ? .chevron : .sidebar,
-                       size: 13,
-                       stroke: 1.6,
-                       color: palette.inkSecondary)
-                .frame(width: 28, height: 28)
-                .background(mode.insetFill, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .contentShape(Rectangle())
-                .frame(width: 44, height: 44)
+            headerActionLabel(
+                icon: collapsed ? .chevron : .sidebar,
+                label: collapsed ? String(localized: "Expand sidebar") : String(localized: "Collapse sidebar")
+            )
         }
         .buttonStyle(SePressable())
         .accessibilityLabel(collapsed ? String(localized: "Expand sidebar") : String(localized: "Collapse sidebar"))
+    }
+
+    private func headerActionLabel(icon: SeIcon, label: String) -> some View {
+        SeIconView(icon: icon, size: 13, stroke: 1.6, color: palette.inkSecondary)
+            .frame(width: 28, height: 28)
+            .background(mode.insetFill, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .contentShape(Rectangle())
+            .frame(width: 44, height: 44)
+            .accessibilityLabel(label)
     }
 
     private var search: some View {
@@ -208,19 +239,31 @@ struct AdaptiveSidebarShell: View {
         .accessibilityAddTraits(on ? .isSelected : [])
     }
 
+    /// Expanded: live dot + host name. Collapsed (iPad portrait): a 44×34
+    /// chip with the host's initial, no status dot — prototype `index.html:726-728`.
     private var hostRow: some View {
-        HStack(spacing: 8) {
-            SeNeedDot(kind: hostOnline ? .live : .off, size: 5)
-            Text(hostName)
-                .font(SeNocturneType.font(12.5))
-                .foregroundStyle(palette.ink)
-                .lineLimit(1)
-            Spacer(minLength: 0)
+        HStack(spacing: collapsed ? 0 : 8) {
+            if collapsed {
+                Text(ShellPresentation.hostInitial(hostName))
+                    .font(SeNocturneType.font(12.5, weight: .bold))
+                    .foregroundStyle(palette.ink)
+            } else {
+                SeNeedDot(kind: hostOnline ? .live : .off, size: 5)
+                Text(hostName)
+                    .font(SeNocturneType.font(12.5))
+                    .foregroundStyle(palette.ink)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
         }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 8)
+        .padding(.horizontal, collapsed ? 0 : 9)
+        .padding(.vertical, collapsed ? 0 : 9)
+        .frame(width: collapsed ? 44 : nil, height: collapsed ? 34 : nil)
         .background(mode.insetFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .padding(.top, 2)
+        .padding(.top, collapsed ? 6 : 2)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(hostName)
+        .accessibilityValue(hostOnline ? String(localized: "Connected") : String(localized: "Offline"))
     }
 
     private var footer: some View {
@@ -247,11 +290,10 @@ struct AdaptiveSidebarShell: View {
                     .foregroundStyle(palette.inkTertiary.opacity(0.75))
                     .padding(.horizontal, 9)
                     .padding(.top, 8)
-                    .padding(.bottom, 4)
             }
         }
         .padding(.horizontal, collapsed ? 9 : 10)
-        .padding(.top, 10)
+        .padding(.top, collapsed ? 8 : 10)
         .padding(.bottom, 14)
         .frame(maxWidth: .infinity, alignment: collapsed ? .center : .leading)
         .overlay(alignment: .top) {
@@ -265,7 +307,7 @@ struct SeRailLogo: View {
 
     var body: some View {
         Text("S")
-            .font(SeNocturneType.font(15, weight: .bold))
+            .font(SeNocturneType.font(14, weight: .bold))
             .foregroundStyle(palette.canvas)
             .frame(width: 34, height: 34)
             .background(palette.ink, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
