@@ -59,9 +59,9 @@ body{
   background:linear-gradient(155deg,#3A3936 0%,#151614 26%,#0B0C0A 62%,#2A2A26 100%);
   box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.18), inset 0 0 0 5px #0A0A09, inset 0 0 0 6px rgba(255,255,255,.06)}
 .screen{position:relative;width:393px;height:852px;border-radius:52px;overflow:hidden;background:#0B0D12}
-body.solo{background:#0B0D12;display:grid;place-items:center;min-height:100vh;padding:24px}
+body.solo{background:#0B0D12;display:block;min-height:100vh;padding:0}
 body.solo .board{display:none}
-body.solo .solo-stage{display:block}
+body.solo .solo-stage{display:flex;align-items:flex-start;justify-content:flex-start;min-height:100vh}
 .solo-stage{display:none}
 body.solo .phone{zoom:1;filter:drop-shadow(0 30px 60px rgba(0,0,0,.6))}
 
@@ -525,7 +525,10 @@ body.solo .phone{zoom:1;filter:drop-shadow(0 30px 60px rgba(0,0,0,.6))}
 /* sheets */
 .sheet-scene .sheet{z-index:57}
 .sheet.filesheet,.sheet.chatsheet,.sheet.desksheet{display:flex;flex-direction:column}
-.sheet.filesheet{height:664px;padding:10px 16px 20px}
+.sheet.filesheet{height:590px;padding:10px 16px 18px}
+.filesheet .filerows{flex:1;max-height:none;margin-top:12px;display:flex;flex-direction:column}
+.filesheet .filerows .rowitem{flex:1 1 auto;padding:11px 12px;min-height:46px}
+.filesheet .crumbs{padding:2px 0 0}
 .sheet.chatsheet{height:746px;padding:10px 0 0;overflow:hidden}
 .sheet.desksheet{height:568px;padding:10px 16px 20px}
 .sheet.actions{left:8px;right:8px;bottom:8px;padding:8px 10px 12px;border-radius:22px}
@@ -929,23 +932,158 @@ body.solo .board-tools{display:none!important}
 .toast{position:absolute;left:50%;bottom:104px;transform:translate(-50%,8px);background:#F2F0E8;color:#0B0D12;border-radius:9px;padding:8px 12px;font-size:10.5px;opacity:0;pointer-events:none;transition:opacity .25s,transform .35s var(--spring);z-index:80;white-space:nowrap}
 .toast.on{opacity:1;transform:translate(-50%,0)}
 .app .hidden{display:none!important}
+
+/* ============ v2 review: collapsed chrome · keyboard · full-screen files ============ */
+/* T2 without dock: terminal runs to the home indicator, one floating glass cluster */
+.term.t2b{margin-bottom:10px;padding-bottom:54px}
+.term.t2b.kb{margin-bottom:0;padding-bottom:16px}
+.floatcluster{position:absolute;right:14px;bottom:22px;z-index:24;display:flex;align-items:center;gap:2px;padding:4px;border-radius:999px;
+  background:rgba(18,22,31,.60);border:1px solid rgba(255,255,255,.13);
+  -webkit-backdrop-filter:blur(18px) saturate(1.5);backdrop-filter:blur(18px) saturate(1.5);
+  box-shadow:0 12px 28px rgba(0,0,0,.44),inset 0 1px 0 rgba(255,255,255,.10)}
+.floatcluster button{width:34px;height:34px;border:0;border-radius:50%;background:transparent;color:#DDE1EA;display:grid;place-items:center;cursor:pointer;transition:background .18s,transform .18s}
+.floatcluster button:hover{background:rgba(255,255,255,.09)}
+.floatcluster button:active{transform:scale(.9)}
+.floatcluster button svg{width:17px;height:17px}
+.app[data-mode=day] .floatcluster{background:rgba(255,255,255,.74);border-color:rgba(16,21,28,.12);box-shadow:0 12px 28px rgba(20,28,40,.20),inset 0 1px 0 rgba(255,255,255,.8)}
+.app[data-mode=day] .floatcluster button{color:#10151C}
+.app[data-mode=day] .floatcluster button:hover{background:rgba(16,21,28,.06)}
+
+/* keyboard accessory + system keyboard mock */
+.kbdock{flex:0 0 auto;background:#15181F;border-top:1px solid rgba(255,255,255,.10);animation:sheetUp .38s var(--out) both;border-radius:0}
+.kbacc{display:flex;align-items:center;gap:5px;height:42px;padding:0 8px;border-bottom:1px solid rgba(255,255,255,.08)}
+.kbacc .ak{flex:0 0 auto;height:28px;min-width:28px;padding:0 7px;border-radius:6px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.055);
+  font-family:var(--mono);font-size:9.5px;color:#C3C8D4;display:inline-flex;align-items:center;justify-content:center;gap:4px;cursor:pointer;transition:background .16s,transform .16s}
+.kbacc .ak:active{transform:scale(.92);background:#F2F0E8;color:#0B0D12}
+.kbacc .ak svg{width:13px;height:13px}
+.kbacc .ak.hide{margin-left:auto;font-family:var(--sans);font-size:10.5px;padding:0 10px;color:#A9AEBB}
+.kbacc .asp{flex:1;min-width:4px}
+.kbmock{background:#1C1F26;padding:7px 3px 0}
+.kbrow{display:flex;gap:5px;padding:0 3px;margin-bottom:6px}
+.kbkey{flex:1;min-width:0;height:38px;border:0;border-radius:5px;background:#3B3F49;box-shadow:0 1px 0 rgba(0,0,0,.55);
+  color:#F2F0E8;font-family:var(--sans);font-size:15.5px;line-height:1;display:grid;place-items:center}
+.kbkey.mod{flex:1.5;background:#2B2F38;font-size:11px}
+.kbkey.mod svg{width:15px;height:15px}
+.kbkey.wide{flex:3.4;background:#2B2F38;font-size:11.5px}
+.kbhome{height:22px;display:grid;place-items:center}
+.kbhome i{width:122px;height:4px;border-radius:2px;background:rgba(255,255,255,.46)}
+
+/* full-screen files preview / quick look cover */
+.pvpage{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--surface);z-index:30}
+.pvtop{flex:0 0 auto;padding-top:50px}
+.pvgrab{width:36px;height:4px;border-radius:2px;background:rgba(255,255,255,.20);margin:4px auto 2px}
+.pvbar{display:flex;align-items:center;gap:10px;padding:6px 14px 10px}
+.pvbar .iconbtn{width:32px;height:32px;border-radius:50%}
+.pvttl{flex:1;min-width:0;text-align:center}
+.pvttl b{display:block;font-size:13px;font-weight:600;letter-spacing:-.012em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pvttl span{display:block;font-family:var(--mono);font-size:8.5px;color:var(--ink3);margin-top:2px}
+.pvbody{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:6px 18px 118px;scrollbar-width:none;color:var(--ink);text-align:left}
+.pvbody::-webkit-scrollbar{display:none}
+.pvpage .pvfade{position:absolute;left:0;right:0;bottom:0;height:128px;pointer-events:none;z-index:3;
+  background:linear-gradient(to top,var(--surface) 16%,rgba(11,13,18,.86) 54%,transparent)}
+.pvpill{position:absolute;left:50%;bottom:34px;transform:translateX(-50%);z-index:5;display:inline-flex;align-items:center;gap:9px;
+  height:46px;padding:0 22px;border:0;border-radius:999px;background:#F2F0E8;color:#0B0D12;
+  font-family:var(--sans);font-size:13px;font-weight:600;letter-spacing:-.005em;white-space:nowrap;cursor:pointer;
+  box-shadow:0 16px 34px rgba(0,0,0,.52),inset 0 1px 0 rgba(255,255,255,.6);transition:transform .22s var(--spring)}
+.pvpill:active{transform:translateX(-50%) scale(.96)}
+.pvpill svg{width:16px;height:16px}
+.app[data-mode=day] .pvpage{background:#F1F4F8}
+.app[data-mode=day] .pvpage .pvfade{background:linear-gradient(to top,#F1F4F8 16%,rgba(241,244,248,.86) 54%,transparent)}
+.app[data-mode=day] .pvpill{background:#10151C;color:#F1F4F8;box-shadow:0 16px 34px rgba(20,28,40,.26)}
+.app[data-mode=day] .pvgrab{background:rgba(16,21,28,.18)}
+.pvcode{font-family:var(--mono);font-size:10.5px;line-height:2.05;color:#C9CDD8}
+.pvcode .pl{display:flex;gap:12px;min-height:21.5px}
+.pvcode .ln{width:22px;flex:0 0 auto;text-align:right;color:#4E5464}
+.pvcode .lc{white-space:pre-wrap;word-break:break-word;min-width:0}
+.pvcode .k{color:var(--cobalt)}
+.pvcode .s{color:#A8C7A0}
+.pvcode .c{color:#6F7585}
+.app[data-mode=day] .pvcode{color:#1D2530}
+.app[data-mode=day] .pvcode .ln{color:#98A2B3}
+.app[data-mode=day] .pvcode .k{color:#3A50C8}
+.app[data-mode=day] .pvcode .s{color:#2E6B3E}
+.app[data-mode=day] .pvcode .c{color:#77808F}
+.app[data-mode=day] .pvttl span{color:#77808F}
+.md.big h3{font-size:21px;letter-spacing:-.02em;margin:0 0 10px}
+.md.big h4{font-size:13.5px;margin:20px 0 7px}
+.md.big p{font-size:13px;line-height:1.8;margin:0 0 12px;color:var(--ink2)}
+.md.big ul{font-size:13px;line-height:1.9;padding-left:20px;margin:0 0 13px;color:var(--ink2)}
+.md.big code{font-size:11.5px;padding:2px 5px}
+.md.big pre{font-size:11.5px;line-height:1.85;padding:12px 13px;margin:0 0 14px}
+.md.big table{font-size:11.5px}
+.md.big td,.md.big th{padding:8px 0}
+#ex-files-md .ex-tag{color:#8E93A0}
+.pvmenu{position:absolute;top:100px;right:14px;z-index:6;width:184px;padding:5px;border-radius:13px;border:1px solid var(--line2);
+  background:var(--card);box-shadow:0 26px 54px rgba(0,0,0,.58);animation:rise .2s var(--out)}
+.pvmenu button{display:flex;align-items:center;gap:9px;width:100%;height:38px;padding:0 9px;border:0;border-radius:8px;background:transparent;
+  color:var(--ink);font-size:12px;text-align:left;cursor:pointer}
+.pvmenu button:hover{background:rgba(255,255,255,.06)}
+.pvmenu button svg{width:15px;height:15px;color:var(--ink3);flex:0 0 auto}
+.app[data-mode=day] .pvmenu{background:#fff;border-color:rgba(16,21,28,.14);box-shadow:0 26px 54px rgba(20,28,40,.20)}
+.app[data-mode=day] .pvmenu button{color:#10151C}
+.app[data-mode=day] .pvmenu button:hover{background:rgba(16,21,28,.05)}
+
+/* attach action sheet */
+.sheet.attachesheet{height:262px;padding:10px 16px 18px}
+.attachtarget{display:flex;align-items:center;gap:8px;width:100%;height:44px;margin:2px 0 10px;padding:0 12px;
+  border:1px solid var(--line2);border-radius:11px;background:var(--card);font-family:var(--mono);font-size:10px;color:var(--ink3);text-align:left;cursor:pointer}
+.attachtarget .ar{color:var(--ink3);opacity:.7}
+.attachtarget b{font-family:var(--sans);font-size:12px;font-weight:600;color:var(--ink)}
+.attachtarget svg{width:12px;height:12px;color:var(--ink3)}
+.attachtarget .spacer{flex:1}
+.attachtarget .tag{font-family:var(--mono);font-size:8px;color:var(--ink3);border:1px solid var(--line);border-radius:4px;padding:2px 5px}
+.app[data-mode=day] .attachtarget{background:#fff;border-color:rgba(16,21,28,.14)}
+.app[data-mode=day] .attachtarget b{color:#10151C}
+.attachesheet .actitem{height:47px}
+
+/* iPad: no key row / input; cluster on the terminal pane; full cover over the whole pad */
+.padterm{position:relative}
+.padcluster{position:absolute;right:26px;bottom:16px;z-index:6;display:flex;align-items:center;gap:2px;padding:5px;border-radius:999px;
+  background:rgba(18,22,31,.62);border:1px solid rgba(255,255,255,.13);
+  -webkit-backdrop-filter:blur(18px) saturate(1.5);backdrop-filter:blur(18px) saturate(1.5);box-shadow:0 12px 28px rgba(0,0,0,.44)}
+.padcluster button{width:34px;height:34px;border:0;border-radius:50%;background:transparent;color:#DDE1EA;display:grid;place-items:center;cursor:pointer}
+.padcluster button svg{width:17px;height:17px}
+.padhint{display:flex;align-items:center;gap:4px;font-family:var(--mono);font-size:9px;color:#7F8595}
+.padhint svg{width:12px;height:12px}
+.padcover{position:absolute;inset:0;z-index:20;display:flex;flex-direction:column;background:#0B0D12}
+.pcbar{display:flex;align-items:center;gap:16px;padding:24px 28px 14px;border-bottom:1px solid rgba(255,255,255,.08);flex:0 0 auto}
+.pcbar .pcbtn{width:38px;height:38px;border-radius:50%;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);color:#C3C8D4;display:grid;place-items:center;cursor:pointer;flex:0 0 auto}
+.pcbar .pcbtn svg{width:17px;height:17px}
+.pcttl{flex:1;min-width:0;text-align:center}
+.pcttl b{display:block;font-size:16px;font-weight:600;letter-spacing:-.015em;color:#F2F0E8}
+.pcttl span{display:block;font-family:var(--mono);font-size:10px;color:#6F7585;margin-top:3px}
+.pcbody{flex:1;min-height:0;overflow:hidden;padding:18px 34px 90px;font-family:var(--mono);font-size:13px;line-height:2.05;color:#C9CDD8}
+.pcbody .pl{display:flex;gap:16px;min-height:26.6px}
+.pcbody .ln{width:28px;flex:0 0 auto;text-align:right;color:#4E5464}
+.pcbody .k{color:#98A6FF}
+.pcbody .s{color:#A8C7A0}
+.pcbody .c{color:#6F7585}
+.padcover .pvpill{bottom:30px;height:48px;font-size:13.5px;color:#0B0D12}
+.padcover .pcfade{position:absolute;left:0;right:0;bottom:0;height:130px;pointer-events:none;z-index:3;
+  background:linear-gradient(to top,#0B0D12 18%,rgba(11,13,18,.86) 56%,transparent)}
+.padterm .term{padding-bottom:52px}
+.pvpage.imm .pvbody{padding-top:62px;padding-bottom:44px}
+.pvpage.imm .pvfade{height:58px}
+.pline{white-space:pre-wrap;word-break:break-all}
+.typed{color:#DCE6A0}
+.pvpill svg,.pcbtn svg{pointer-events:none}
 </style>
 </head>
 <body>
 <div class="board">
   <header class="mast">
     <div>
-      <div class="brandline"><span class="brandmark">S</span> SeRemote <span class="tagpill">iOS 27</span></div>
+      <div class="brandline"><span class="brandmark">S</span> SeRemote <span class="tagpill">iOS 27</span> <span class="tagpill">v2 review</span></div>
       <div class="kicker">以终端为中心 · 静态原型</div>
       <h1>终端，<br><span class="thin">会话，工具。</span></h1>
     </div>
     <div class="mast-right">
-      <p><b>底栏：终端 · 会话 · 工具。</b>文件、对话、桌面是终端上的 sheet；设置留在抽屉。</p>
-      <p class="mono" style="font-size:10px;letter-spacing:.04em;color:#6E7484;margin-top:10px">393 × 852 · 18 屏 · iPad 两向 · 全部可点</p>
+      <p><b>底栏：终端 · 会话 · 工具。</b>文件是列表 + 整屏预览；对话、桌面是 sheet；设置留在抽屉。</p>
+      <p class="mono" style="font-size:10px;letter-spacing:.04em;color:#6E7484;margin-top:10px">393 × 852 · 23 屏 · iPad 横竖 + 整屏预览 · 全部可点</p>
     </div>
   </header>
 
-  <div class="boardhint"><span class="mono">可点</span> 终端行 → 工作台 · 文件 → 插入路径 · 桌面 → 发送选区 · ⋯ → 菜单 · 会话 → 对话</div>
+  <div class="boardhint"><span class="mono">可点</span> 终端行 → 工作台 · ⌨ → 键盘 · ＋ → 附件 · 文件 → 列表 · 点文件 → 整屏预览 · 插入路径 → 终端</div>
 
   <div class="exhibits">
     <section class="exhibit" id="ex-home">
@@ -963,109 +1101,145 @@ body.solo .board-tools{display:none!important}
     <section class="exhibit" id="ex-wterm">
       <div class="ex-head"><span class="ex-idx">03</span><div class="ex-title">工作台<span>Workbench</span></div><span class="ex-tag">T2 · 核心</span></div>
       <div class="phone" data-app="wterm"><div class="bezel"><div class="screen"></div></div></div>
-      <p class="ex-note">终端吃满高度；文件、桌面、⋯ 在标题栏；hook 会话是一条细带。</p>
+      <p class="ex-note">终端吃满到 home indicator；右下角一颗玻璃胶囊：附件、键盘。</p>
+    </section>
+
+    <section class="exhibit" id="ex-wterm-keyboard">
+      <div class="ex-head"><span class="ex-idx">04</span><div class="ex-title">工作台<span>Keyboard</span></div><span class="ex-tag">T2 · 键盘</span></div>
+      <div class="phone" data-app="wterm-keyboard"><div class="bezel"><div class="screen"></div></div></div>
+      <p class="ex-note">⌨ 直起键盘；按键行是键盘配件，敲键直接进 PTY；收起回到 T2。</p>
     </section>
 
     <section class="exhibit" id="ex-wterm-nohook">
-      <div class="ex-head"><span class="ex-idx">04</span><div class="ex-title">工作台<span>No hook</span></div><span class="ex-tag">无代理</span></div>
+      <div class="ex-head"><span class="ex-idx">05</span><div class="ex-title">工作台<span>No hook</span></div><span class="ex-tag">无代理</span></div>
       <div class="phone" data-app="wterm-nohook"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">同一个工作台，没有 hook 会话时细带消失。</p>
     </section>
 
     <section class="exhibit" id="ex-files">
-      <div class="ex-head"><span class="ex-idx">05</span><div class="ex-title">文件<span>Files</span></div><span class="ex-tag">T3 · Sheet</span></div>
+      <div class="ex-head"><span class="ex-idx">06</span><div class="ex-title">文件<span>Files</span></div><span class="ex-tag">T3 · 列表</span></div>
       <div class="phone" data-app="files"><div class="bezel"><div class="screen"></div></div></div>
-      <p class="ex-note">从终端升起，根是 cwd；四个出口，主操作是插入路径。</p>
+      <p class="ex-note">只有面包屑和列表，列表吃满 sheet；点文件开整屏预览。</p>
+    </section>
+
+    <section class="exhibit" id="ex-files-preview">
+      <div class="ex-head"><span class="ex-idx">07</span><div class="ex-title">预览<span>Preview</span></div><span class="ex-tag">整屏 · Quick Look</span></div>
+      <div class="phone" data-app="files-preview"><div class="bezel"><div class="screen"></div></div></div>
+      <p class="ex-note">盖住整台手机；点内容是收起 chrome，✕ 或下滑关闭。</p>
+    </section>
+
+    <section class="exhibit" id="ex-files-immersive">
+      <div class="ex-head"><span class="ex-idx">08</span><div class="ex-title">预览<span>Immersive</span></div><span class="ex-tag">无 chrome</span></div>
+      <div class="phone" data-app="files-immersive"><div class="bezel"><div class="screen"></div></div></div>
+      <p class="ex-note">chrome 全部隐藏；再点一下内容回到带按钮的预览。</p>
     </section>
 
     <section class="exhibit" id="ex-files-md">
-      <div class="ex-head"><span class="ex-idx">06</span><div class="ex-title">文件<span>Markdown</span></div><span class="ex-tag">预览</span></div>
+      <div class="ex-head"><span class="ex-idx">09</span><div class="ex-title">预览<span>Markdown</span></div><span class="ex-tag">整屏</span></div>
       <div class="phone" data-app="files-md"><div class="bezel"><div class="screen"></div></div></div>
-      <p class="ex-note">Markdown 沿用现有渲染，出口动作不变。</p>
+      <p class="ex-note">Markdown 走同一套整屏预览，底部同样只有插入路径。</p>
+    </section>
+
+    <section class="exhibit" id="ex-attach">
+      <div class="ex-head"><span class="ex-idx">10</span><div class="ex-title">附件<span>Attach</span></div><span class="ex-tag">＋ · 选本地文件</span></div>
+      <div class="phone" data-app="attach"><div class="bezel"><div class="screen"></div></div></div>
+      <p class="ex-note">＋ 打开：照片、拍照、文件；目标行按桌面同一规则。</p>
+    </section>
+
+    <section class="exhibit" id="ex-attach-sent">
+      <div class="ex-head"><span class="ex-idx">11</span><div class="ex-title">附件<span>Sent</span></div><span class="ex-tag">路径已写入</span></div>
+      <div class="phone" data-app="attach-sent"><div class="bezel"><div class="screen"></div></div></div>
+      <p class="ex-note">文件先落到主机的暂存目录，再把路径打进提示符。</p>
     </section>
 
     <section class="exhibit" id="ex-chat">
-      <div class="ex-head"><span class="ex-idx">07</span><div class="ex-title">对话<span>Chat</span></div><span class="ex-tag">T4 · 大 Sheet</span></div>
+      <div class="ex-head"><span class="ex-idx">12</span><div class="ex-title">对话<span>Chat</span></div><span class="ex-tag">T4 · 大 Sheet</span></div>
       <div class="phone" data-app="chat"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">对话是终端的面板；许可卡留在对话里。</p>
     </section>
 
     <section class="exhibit" id="ex-desktop">
-      <div class="ex-head"><span class="ex-idx">08</span><div class="ex-title">桌面<span>Desktop</span></div><span class="ex-tag">T5 · 选区</span></div>
+      <div class="ex-head"><span class="ex-idx">13</span><div class="ex-title">桌面<span>Desktop</span></div><span class="ex-tag">T5 · 选区</span></div>
       <div class="phone" data-app="desktop"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">拖动取景；发送到当前终端，或整屏。</p>
     </section>
 
     <section class="exhibit" id="ex-more">
-      <div class="ex-head"><span class="ex-idx">09</span><div class="ex-title">更多<span>More</span></div><span class="ex-tag">T6 · 动作</span></div>
+      <div class="ex-head"><span class="ex-idx">14</span><div class="ex-title">更多<span>More</span></div><span class="ex-tag">T6 · 动作</span></div>
       <div class="phone" data-app="more"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">七个动作，最后是红色的关闭终端。</p>
     </section>
 
     <section class="exhibit" id="ex-more-confirm">
-      <div class="ex-head"><span class="ex-idx">10</span><div class="ex-title">更多<span>Confirm</span></div><span class="ex-tag">二次确认</span></div>
+      <div class="ex-head"><span class="ex-idx">15</span><div class="ex-title">更多<span>Confirm</span></div><span class="ex-tag">二次确认</span></div>
       <div class="phone" data-app="more-confirm"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">关闭前只说后果：关闭后该 shell 会结束。</p>
     </section>
 
     <section class="exhibit" id="ex-conversations">
-      <div class="ex-head"><span class="ex-idx">11</span><div class="ex-title">会话<span>Conversations</span></div><span class="ex-tag">底栏二</span></div>
+      <div class="ex-head"><span class="ex-idx">16</span><div class="ex-title">会话<span>Conversations</span></div><span class="ex-tag">底栏二</span></div>
       <div class="phone" data-app="conversations"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">只列代理会话；行点击回到终端并打开对话。</p>
     </section>
 
     <section class="exhibit" id="ex-tools">
-      <div class="ex-head"><span class="ex-idx">12</span><div class="ex-title">工具<span>Tools</span></div><span class="ex-tag">底栏三</span></div>
+      <div class="ex-head"><span class="ex-idx">17</span><div class="ex-title">工具<span>Tools</span></div><span class="ex-tag">底栏三</span></div>
       <div class="phone" data-app="tools"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">四格作用域是当前项目；最近项目回到终端分组。</p>
     </section>
 
     <section class="exhibit" id="ex-git">
-      <div class="ex-head"><span class="ex-idx">13</span><div class="ex-title">更改<span>Git</span></div><span class="ex-tag">只读</span></div>
+      <div class="ex-head"><span class="ex-idx">18</span><div class="ex-title">更改<span>Git</span></div><span class="ex-tag">只读</span></div>
       <div class="phone" data-app="git"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">从终端进入，返回终端；不做提交。</p>
     </section>
 
     <section class="exhibit" id="ex-tasks">
-      <div class="ex-head"><span class="ex-idx">14</span><div class="ex-title">定时任务<span>Tasks</span></div><span class="ex-tag">主机</span></div>
+      <div class="ex-head"><span class="ex-idx">19</span><div class="ex-title">定时任务<span>Tasks</span></div><span class="ex-tag">主机</span></div>
       <div class="phone" data-app="tasks"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">任务属于主机；开关就地生效。</p>
     </section>
 
     <section class="exhibit" id="ex-search">
-      <div class="ex-head"><span class="ex-idx">15</span><div class="ex-title">搜索<span>Search</span></div><span class="ex-tag">只读</span></div>
+      <div class="ex-head"><span class="ex-idx">20</span><div class="ex-title">搜索<span>Search</span></div><span class="ex-tag">只读</span></div>
       <div class="phone" data-app="search"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">命令与文件；返回终端。</p>
     </section>
 
     <section class="exhibit" id="ex-screen">
-      <div class="ex-head"><span class="ex-idx">16</span><div class="ex-title">屏幕文本<span>Screen text</span></div><span class="ex-tag">快照</span></div>
+      <div class="ex-head"><span class="ex-idx">21</span><div class="ex-title">屏幕文本<span>Screen text</span></div><span class="ex-tag">快照</span></div>
       <div class="phone" data-app="screen"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">最近一次抓取的文本，可复制。</p>
     </section>
 
     <section class="exhibit" id="ex-settings">
-      <div class="ex-head"><span class="ex-idx">17</span><div class="ex-title">设置<span>Settings</span></div><span class="ex-tag">本机</span></div>
+      <div class="ex-head"><span class="ex-idx">22</span><div class="ex-title">设置<span>Settings</span></div><span class="ex-tag">本机</span></div>
       <div class="phone" data-app="settings"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">设置在抽屉底部，不占底栏。</p>
     </section>
 
     <section class="exhibit" id="ex-drawer">
-      <div class="ex-head"><span class="ex-idx">18</span><div class="ex-title">抽屉<span>Drawer</span></div><span class="ex-tag">全部去处</span></div>
+      <div class="ex-head"><span class="ex-idx">23</span><div class="ex-title">抽屉<span>Drawer</span></div><span class="ex-tag">全部去处</span></div>
       <div class="phone" data-app="drawer"><div class="bezel"><div class="screen"></div></div></div>
       <p class="ex-note">三个去处 + 主机；设置与版本在底部。</p>
     </section>
 
     <section class="exhibit padwrap" id="ex-pad-ls">
-      <div class="ex-head"><span class="ex-idx">19</span><div class="ex-title">iPad<span>Landscape</span></div><span class="ex-tag">1194 × 834 · 侧栏 250 + 检查器 320</span></div>
+      <div class="ex-head"><span class="ex-idx">24</span><div class="ex-title">iPad<span>Landscape</span></div><span class="ex-tag">1194 × 834 · 侧栏 250 + 检查器 320</span></div>
       <div class="pad ls"><div class="screen"></div></div>
-      <p class="ex-note">左：主机与按项目分组的终端；中：T2；右：文件 / 对话检查器。</p>
+      <p class="ex-note">左：主机与终端；中：T2 无按键行，右下胶囊；右：纯文件列表。</p>
     </section>
 
     <section class="exhibit padwrap" id="ex-pad-pt">
-      <div class="ex-head"><span class="ex-idx">20</span><div class="ex-title">iPad<span>Portrait</span></div><span class="ex-tag">834 × 1194 · 76pt 轨道</span></div>
+      <div class="ex-head"><span class="ex-idx">25</span><div class="ex-title">iPad<span>Portrait</span></div><span class="ex-tag">834 × 1194 · 76pt 轨道</span></div>
       <div class="pad pt"><div class="screen"></div></div>
       <p class="ex-note">检查器改为右侧滑入，盖住终端；轨道只留图标。</p>
+    </section>
+
+    <section class="exhibit padwrap" id="ex-pad-preview">
+      <div class="ex-head"><span class="ex-idx">26</span><div class="ex-title">iPad<span>Preview</span></div><span class="ex-tag">整屏 · 盖住整台 iPad</span></div>
+      <div class="pad ls" data-pad="preview"><div class="screen"></div></div>
+      <p class="ex-note">检查器点文件，同一个整屏预览盖住整台 iPad。</p>
     </section>
 
   </div>
@@ -1110,7 +1284,9 @@ const ICONS = {
   link:'<path d="M10.2 13.8a3.6 3.6 0 0 0 5.1 0l2.6-2.6a3.6 3.6 0 0 0-5.1-5.1l-1.4 1.4"/><path d="M13.8 10.2a3.6 3.6 0 0 0-5.1 0l-2.6 2.6a3.6 3.6 0 0 0 5.1 5.1l1.4-1.4"/>',
   detach:'<rect x="4" y="7" width="16" height="12" rx="2"/><path d="M9 4.5h6M12 4.5V7M17 12h4M19 10l2 2-2 2"/>',
   toggle:'<rect x="2.6" y="7" width="18.8" height="10" rx="5"/><circle cx="16.4" cy="12" r="3.2"/>',
-  people:'<circle cx="9" cy="8.4" r="3.3"/><path d="M3.4 19.2a5.7 5.7 0 0 1 11.2 0M16.2 5.6a3.2 3.2 0 0 1 0 6.2M17.4 14.4a5.2 5.2 0 0 1 3.2 4.8"/>'
+  people:'<circle cx="9" cy="8.4" r="3.3"/><path d="M3.4 19.2a5.7 5.7 0 0 1 11.2 0M16.2 5.6a3.2 3.2 0 0 1 0 6.2M17.4 14.4a5.2 5.2 0 0 1 3.2 4.8"/>',
+  photo:'<rect x="3.2" y="5" width="17.6" height="14" rx="2.4"/><circle cx="8.6" cy="9.8" r="1.6"/><path d="m4.8 17.6 4.6-4.3 3.4 3 2.6-2.2 4 3.7"/>',
+  camera:'<rect x="3" y="7.2" width="18" height="12.2" rx="2.4"/><path d="M8.6 7.2 9.9 4.6h4.2l1.3 2.6"/><circle cx="12" cy="13.2" r="3.4"/>'
 };
 function ic(n, s=16){
   return '<svg viewBox="0 0 24 24" width="'+s+'" height="'+s+'" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">'+(ICONS[n]||'')+'</svg>';
@@ -1133,9 +1309,9 @@ function tabbar(group){
 }
 function pageTop(s, headRight){
   return '<div class="pagetop"><div class="row between"><span class="eyebrow">周日 11月9日</span><div class="row" style="gap:6px">'+
-    '<button class="iconbtn" data-act="toast" data-msg="已刷新">'+ic('refresh',15)+'</button>'+
-    '<button class="iconbtn" data-act="theme">'+(s.mode==='night'?ic('moon',15):ic('sun',15))+'</button>'+
-    '<button class="iconbtn" data-act="go" data-to="settings">'+ic('gear',15)+'</button></div></div>'+
+    '<button class="iconbtn" data-act="toast" data-msg="已刷新" aria-label="刷新">'+ic('refresh',15)+'</button>'+
+    '<button class="iconbtn" data-act="theme" aria-label="主题">'+(s.mode==='night'?ic('moon',15):ic('sun',15))+'</button>'+
+    '<button class="iconbtn" data-act="go" data-to="settings" aria-label="设置">'+ic('gear',15)+'</button></div></div>'+
     (headRight||'')+'</div>';
 }
 function convRow(o){
@@ -1201,42 +1377,63 @@ function termMeta(){
 function hookRibbon(){
   return '<button class="ribbonbtn" data-act="go" data-to="chat"><i class="dot live"></i><b>Claude Code</b><span>· 工作中 · 1 个许可</span><span class="spacer"></span><span class="go">对话 ›</span></button>';
 }
-function termText(){
-  return '<div class="dim">Last login: Mon Nov 10 09:32:11 on ttys004</div>'+
-    '<div><span class="mint">➜</span> <span class="path">~/project/termul</span> <span class="blue">git:(main)</span> npm run dev</div>'+
-    '<div class="dim">&nbsp;</div>'+
-    '<div><span class="mint">  VITE</span> v6.0.2  ready in 412 ms</div>'+
-    '<div class="dim">  ➜  Local:   http://localhost:5173/</div>'+
-    '<div class="dim">  ➜  Network: http://192.168.1.24:5173/</div>'+
-    '<div class="dim">  ➜  press h + enter to show help</div>'+
-    '<div class="dim">&nbsp;</div>'+
-    '<div><span class="mint">➜</span> <span class="path">~/project/termul</span> <span class="blue">git:(main)</span> swift test</div>'+
-    '<div class="dim">[1/6] Compiling SeRemoteNetworking</div>'+
-    '<div class="dim">[4/6] Linking SeRemoteTests</div>'+
-    '<div class="mint">✔ Test Suite ReconnectTests passed</div>'+
-    '<div class="dim">  Executed 14 tests, 0 failures · 0.61s</div>'+
-    '<div class="dim">&nbsp;</div>'+
-    '<div><span class="mint">➜</span> <span class="path">~/project/termul</span> <span class="blue">git:(main)</span> git status --short</div>'+
-    '<div class="dim"> M src/net/TerminalSocket.swift</div>'+
-    '<div class="dim"> M src/net/ReconnectPolicy.swift</div>'+
-    '<div><span class="mint">➜</span> <span class="path">~/project/termul</span> <span class="blue">git:(main)</span> claude</div>'+
-    '<div class="amber">✻ Claude Code · 正在读取 3 个文件</div>'+
-    '<div class="dim">&nbsp;</div>'+
-    '<div><span class="mint">➜</span> <span class="path">~/project/termul</span> <span class="blue">git:(main)</span> <span class="caret"></span></div>';
+function termText(staged, trim){
+  const prompt='<span class="mint">➜</span> <span class="path">~/project/termul</span> <span class="blue">git:(main)</span>';
+  const last = staged
+    ? '<div class="pline">'+prompt+' <span class="typed">'+staged+'</span> <span class="caret"></span></div>'
+    : '<div>'+prompt+' <span class="caret"></span></div>';
+  const head=[
+    '<div class="dim">Last login: Mon Nov 10 09:32:11 on ttys004</div>',
+    '<div>'+prompt+' npm run dev</div>',
+    '<div class="dim">&nbsp;</div>',
+    '<div><span class="mint">  VITE</span> v6.0.2  ready in 412 ms</div>',
+    '<div class="dim">  ➜  Local:   http://localhost:5173/</div>',
+    '<div class="dim">  ➜  Network: http://192.168.1.24:5173/</div>',
+    '<div class="dim">  ➜  press h + enter to show help</div>',
+    '<div class="dim">&nbsp;</div>',
+    '<div>'+prompt+' swift test</div>',
+    '<div class="dim">[1/6] Compiling SeRemoteNetworking</div>',
+    '<div class="dim">[4/6] Linking SeRemoteTests</div>',
+    '<div class="mint">✔ Test Suite ReconnectTests passed</div>',
+    '<div class="dim">  Executed 14 tests, 0 failures · 0.61s</div>',
+    '<div class="dim">&nbsp;</div>',
+    '<div>'+prompt+' git status --short</div>',
+    '<div class="dim"> M src/net/TerminalSocket.swift</div>',
+    '<div class="dim"> M src/net/ReconnectPolicy.swift</div>',
+    '<div>'+prompt+' claude</div>',
+    '<div class="amber">✻ Claude Code · 正在读取 3 个文件</div>',
+    '<div class="dim">&nbsp;</div>'
+  ];
+  return (trim?head.slice(2):head).join('')+last;
 }
-function cmdDock(s){
-  const keys=['Esc','Tab','Ctrl','↑','↓','←','→','⌫','回车','Ctrl+C','Ctrl+D'];
-  return '<div class="termdock"><div class="row" style="gap:6px">'+
-    '<div class="keyrow" style="flex:1;min-width:0;padding:0">'+
-    keys.map(function(k){return '<button class="key">'+k+'</button>';}).join('')+'</div>'+
-    '<button class="key icon" style="flex:0 0 auto" data-act="hidekb">'+ic('keyboardDown',12)+'隐藏键盘</button></div>'+
-    '<div class="cmdline" style="margin-top:8px"><span class="p">❯</span><input value="'+(s.cmd||'')+'" placeholder="输入命令" aria-label="命令"><button class="kb" data-act="toast" data-msg="键盘" aria-label="键盘">'+ic('keyboard',15)+'</button><button class="go" data-act="toast" data-msg="已发送" aria-label="发送">'+ic('arrowUp',14)+'</button></div></div>';
+function floatCluster(){
+  return '<div class="floatcluster">'+
+    '<button data-act="go" data-to="attach" aria-label="附件">'+ic('plus',17)+'</button>'+
+    '<button data-act="go" data-to="wterm-keyboard" aria-label="键盘">'+ic('keyboard',17)+'</button></div>';
+}
+function kbDock(s){
+  const acc='<div class="kbacc">'+
+    '<button class="ak" data-act="go" data-to="attach" aria-label="附件">'+ic('plus',13)+'</button>'+
+    ['Esc','Tab','Ctrl','↑','↓','←','→','⌘V'].map(function(k){return '<button class="ak">'+k+'</button>';}).join('')+
+    '<span class="asp"></span><button class="ak hide" data-act="go" data-to="'+(s.nohook?'wterm-nohook':'wterm')+'">收起</button></div>';
+  const row1=['q','w','e','r','t','y','u','i','o','p'].map(function(k){return '<span class="kbkey">'+k+'</span>';}).join('');
+  const row2=['a','s','d','f','g','h','j','k','l'].map(function(k){return '<span class="kbkey">'+k+'</span>';}).join('');
+  const row3=['z','x','c','v','b','n','m'].map(function(k){return '<span class="kbkey">'+k+'</span>';}).join('');
+  const kb='<div class="kbmock">'+
+    '<div class="kbrow">'+row1+'</div>'+
+    '<div class="kbrow" style="padding:0 23px">'+row2+'</div>'+
+    '<div class="kbrow"><span class="kbkey mod">⇧</span>'+row3+'<span class="kbkey mod">⌫</span></div>'+
+    '<div class="kbrow"><span class="kbkey mod" style="flex:1.3">123</span><span class="kbkey wide" style="flex:4.6">空格</span><span class="kbkey mod" style="flex:1.3">换行</span></div>'+
+    '<div class="kbhome"><i></i></div></div>';
+  return '<div class="kbdock">'+acc+kb+'</div>';
 }
 function termPage(s, opts){
   opts=opts||{};
+  const kb=!!opts.keyboard;
   return '<div class="page full">'+termHeader(s, opts.back, opts.nohook)+termTabs(s)+termMeta()+
     (opts.ribbon?hookRibbon():'')+
-    '<div class="term" style="margin-bottom:104px">'+termText()+'</div>'+cmdDock(s)+'</div>';
+    '<div class="term t2b'+(kb?' kb':'')+'">'+termText(kb?null:(s.staged||''), kb)+'</div>'+
+    (kb?kbDock(s):floatCluster())+'</div>';
 }
 function sheetScene(bg, inner){
   return '<div class="sheet-scene"><div class="sheet-bg">'+bg+'</div><div class="scrim on"></div>'+inner+'</div>';
@@ -1303,14 +1500,15 @@ SCREENS.terminals = function(s){
     '<div class="list">'+other+'</div>'+
     '<div class="grouplabel"><span class="l"><span class="t">快捷终端</span><span class="gcap">02</span></span></div>'+
     '<div class="list">'+
-      '<div class="qrow" data-act="go" data-to="wterm"><span class="qi">'+ic('bolt',13)+'</span><span class="qc"><b>zsh — Termul</b><span>主机工作区 · 2 个运行中</span></span><button class="qopen" data-act="go" data-to="wterm">'+ic('open',11)+' 打开</button><button class="qmore" data-act="toast" data-msg="重命名 / 关闭 shell / 删除">'+ic('dots',13)+'</button></div>'+
+      '<div class="qrow" data-act="go" data-to="wterm"><span class="qi">'+ic('bolt',13)+'</span><span class="qc"><b>zsh — Termul</b><span>主机工作区 · 2 个运行中</span></span><button class="qopen" data-act="go" data-to="wterm">'+ic('open',11)+' 打开</button><button class="qmore" data-act="toast" data-msg="重命名 / 关闭 shell / 删除" aria-label="更多">'+ic('dots',13)+'</button></div>'+
     '</div>'+
     '<button class="createrow" style="margin-top:8px" data-act="newterm">'+ic('plus',12)+' 新建终端</button>'+
     '<div style="height:28px"></div></div></div>';
 };
 
-SCREENS.wterm = function(s){ return termPage(s,{back:true,ribbon:true}); };
-SCREENS['wterm-nohook'] = function(s){ return termPage(s,{back:true,nohook:true}); };
+SCREENS.wterm = function(s){ return termPage(s,{back:true,ribbon:!s.nohook,nohook:s.nohook}); };
+SCREENS['wterm-keyboard'] = function(s){ return termPage(s,{back:true,ribbon:!s.nohook,nohook:s.nohook,keyboard:true}); };
+SCREENS['wterm-nohook'] = function(s){ s.nohook=true; return termPage(s,{back:true,nohook:true}); };
 
 SCREENS.tools = function(s){
   const tiles=[
@@ -1340,72 +1538,154 @@ SCREENS.tools = function(s){
 };
 
 
-/* ---------- T3 files ---------- */
-function fileRows(active){
-  const rows=[
-    ['..','目录','',''],
-    ['Sources','目录','','—'],
-    ['Package.swift','文件','2.4 KB','09:12'],
-    ['README.md','文件','8.1 KB','昨天'],
-    ['TerminalSocket.swift','文件','12.6 KB','09:38']
-  ];
-  return '<div class="filerows">'+rows.map(function(r){
-    const on=r[0]===active;
-    return '<button class="rowitem" style="'+(on?'background:rgba(139,155,255,.11)':'')+'" data-act="toast" data-msg="'+(r[1]==='文件'?'预览 '+r[0]:'打开目录')+'"><span class="lead">'+ic(r[1]==='目录'?'folder':'file',13)+'</span><span class="k">'+r[0]+'</span><span class="v">'+(r[2]||'')+'</span><span class="v" style="min-width:36px;text-align:right">'+(r[3]||'')+'</span></button>';
+/* ---------- T3 files: list sheet + full-screen preview ---------- */
+const FILES=[
+  ['..','目录',''],
+  ['Sources','目录',''],
+  ['Tests','目录',''],
+  ['Package.swift','2.4 KB','code'],
+  ['README.md','8.1 KB','md'],
+  ['TerminalSocket.swift','12.6 KB','code'],
+  ['ReconnectPolicy.swift','4.1 KB','code'],
+  ['HostWebSocket.swift','9.7 KB','code'],
+  ['BoardView.swift','18.2 KB','code'],
+  ['Notes.md','1.2 KB','md']
+];
+function fileRows(){
+  return '<div class="filerows">'+FILES.map(function(r){
+    const dir=r[1]==='目录';
+    return '<button class="rowitem"'+(dir
+      ? ' data-act="toast" data-msg="打开 '+r[0]+'"'
+      : ' data-act="openfile" data-file="'+r[0]+'" data-kind="'+r[2]+'"')+'>'+
+      '<span class="lead">'+ic(dir?'folder':'file',13)+'</span>'+
+      '<span class="k">'+r[0]+'</span>'+
+      '<span class="v">'+(dir?'目录':r[1])+'</span></button>';
   }).join('')+'</div>';
 }
-function fileActions(){
-  return '<div class="actrow">'+
-    '<button class="btn btn-primary" data-act="insertpath">'+ic('insert',14)+'插入路径</button>'+
-    '<button class="btn btn-ghost" data-act="toast" data-msg="已发给 Agent">发给 Agent</button>'+
-    '<button class="btn btn-ghost" data-act="toast" data-msg="已复制路径">复制</button>'+
-    '<button class="btn btn-ghost" data-act="toast" data-msg="已分享">分享</button></div>';
+function filesSheet(){
+  return '<div class="sheet filesheet"><div class="grabber"></div>'+
+    '<div class="row between" style="gap:10px"><div class="crumbs"><b>termul</b><span class="s">/</span>src<span class="s">/</span>net</div>'+
+    '<button class="iconbtn" data-act="go" data-to="wterm" aria-label="关闭">'+ic('x',14)+'</button></div>'+
+    fileRows()+
+  '</div>';
 }
 SCREENS.files = function(s){
-  const code='<pre class="code" style="border:0;background:transparent;padding:0;margin:0;font-size:9px;line-height:1.9">'+
-    '<span style="color:#5C6272"> 12</span>  <span class="k">final class</span> TerminalSocket {\n'+
-    '<span style="color:#5C6272"> 13</span>    <span class="k">private var</span> sessionID: String?\n'+
-    '<span style="color:#5C6272"> 14</span>    <span class="k">private var</span> backoff: TimeInterval = 0.5\n'+
-    '<span style="color:#5C6272"> 15</span>\n'+
-    '<span style="color:#5C6272"> 16</span>    <span class="k">func</span> attach() <span class="k">async throws</span> {\n'+
-    '<span style="color:#5C6272"> 17</span>      <span style="color:#6F7585">// 重连成功后沿用原来的 PTY。</span>\n'+
-    '<span style="color:#5C6272"> 18</span>      <span class="k">try await</span> handshake(resume: sessionID)\n'+
-    '<span style="color:#5C6272"> 19</span>    }\n'+
-    '<span style="color:#5C6272"> 20</span>  }\n'+
-    '<span style="color:#5C6272"> 21</span>\n'+
-    '<span style="color:#5C6272"> 22</span>  <span class="k">private func</span> handshake(resume: String?) <span class="k">async throws</span> {\n'+
-    '<span style="color:#5C6272"> 23</span>    <span class="k">var</span> req = URLRequest(url: endpoint)\n'+
-    '<span style="color:#5C6272"> 24</span>    req.setValue(resume, forHTTPHeaderField: <span style="color:#A8C7A0">"X-PTY"</span>)\n'+
-    '<span style="color:#5C6272"> 25</span>    <span class="k">try await</span> send(req)\n'+
-    '<span style="color:#5C6272"> 26</span>  }\n'+
-    '<span style="color:#5C6272"> 27</span>}</pre>';
-  return sheetScene(termPage({...s,switcher:false},{back:true,ribbon:true}),
-    '<div class="sheet filesheet"><div class="grabber"></div>'+
-    '<div class="row between" style="gap:10px"><div class="crumbs"><b>termul</b><span class="s">/</span>src<span class="s">/</span>net</div>'+
-    '<button class="iconbtn" data-act="go" data-to="wterm" aria-label="关闭">'+ic('x',14)+'</button></div>'+
-    fileRows('TerminalSocket.swift')+
-    '<div class="previewcard"><div class="ph">'+ic('file',13)+'<b>TerminalSocket.swift</b><span class="m">342 行 · 只读</span></div>'+
-    '<div class="previewbody">'+code+'</div></div>'+
-    fileActions()+'</div>');
+  return sheetScene(termPage({...s,switcher:false},{back:true,ribbon:!s.nohook,nohook:s.nohook}), filesSheet());
+};
+
+const SWIFT_LINES=[
+  '<span class="c">//  TerminalSocket.swift</span>',
+  '<span class="c">//  SeRemoteNetworking</span>',
+  '',
+  '<span class="k">import</span> Foundation',
+  '<span class="k">import</span> OSLog',
+  '',
+  '<span class="k">final class</span> TerminalSocket: NSObject {',
+  '  <span class="k">private let</span> log: Logger',
+  '  <span class="k">private var</span> task: URLSessionWebSocketTask?',
+  '  <span class="k">private var</span> sessionID: String?',
+  '  <span class="k">private var</span> backoff: TimeInterval = 0.5',
+  '  <span class="k">private var</span> retries = 0',
+  '',
+  '  <span class="k">weak var</span> delegate: TerminalSocketDelegate?',
+  '',
+  '  <span class="k">func</span> attach(to host: Host) <span class="k">async throws</span> {',
+  '    <span class="c">// 重连成功后沿用原来的 PTY</span>',
+  '    <span class="k">try await</span> handshake(resume: sessionID)',
+  '    backoff = 0.5',
+  '    retries = 0',
+  '  }',
+  '',
+  '  <span class="k">private func</span> handshake(resume: String?)',
+  '    <span class="k">async throws</span> {',
+  '    <span class="k">var</span> req = URLRequest(url: endpoint)',
+  '    req.setValue(<span class="s">"websocket"</span>,',
+  '      forHTTPHeaderField: <span class="s">"Upgrade"</span>)',
+  '    <span class="k">if let</span> resume {',
+  '      req.setValue(resume,',
+  '        forHTTPHeaderField: <span class="s">"X-PTY"</span>)',
+  '    }',
+  '    <span class="k">try await</span> send(req)',
+  '    <span class="k">try await</span> waitForOpen()',
+  '  }',
+  '',
+  '  <span class="k">private func</span> scheduleReconnect() {',
+  '    retries += 1',
+  '    <span class="k">let</span> delay = min(backoff * pow(2, retries), 8)',
+  '    Task { <span class="k">try await</span> Task.sleep(for: delay) }',
+  '  }',
+  '}',
+  '',
+  '<span class="c">// 342 行 · 只读预览</span>'
+];
+function codeBody(cls){
+  return '<div class="'+(cls||'pvcode')+'">'+SWIFT_LINES.map(function(l,i){
+    return '<div class="pl"><span class="ln">'+(i+1)+'</span><span class="lc">'+l+'</span></div>';
+  }).join('')+'</div>';
+}
+function mdBody(){
+  return '<div class="md big">'+
+    '<h3>SeRemote</h3>'+
+    '<p>iPhone 与 iPad 上的远程终端。终端是主界面，文件与对话都开在终端上。</p>'+
+    '<h4>结构</h4>'+
+    '<ul><li><code>src/net</code> — WebSocket 与 PTY 桥接</li><li><code>src/ui</code> — 终端、文件、对话</li><li><code>src/hooks</code> — 代理会话探测</li></ul>'+
+    '<h4>运行</h4>'+
+    '<pre>swift test\nswift run SeRemoteHost</pre>'+
+    '<h4>约定</h4>'+
+    '<p>断线时保留 <code>sessionID</code>，指数退避重连，成功后重新 attach 原来的 PTY。</p>'+
+    '<table><tr><th>平台</th><th>最低版本</th></tr><tr><td>iOS</td><td>18.0</td></tr><tr><td>macOS</td><td>15.0</td></tr></table>'+
+    '<p style="margin-top:14px">附件先落到主机的 <code>~/.se-manager/attachments</code>，再把路径写进终端。</p>'+
+    '</div>';
+}
+function pvMenu(path){
+  return '<div class="pvmenu">'+
+    '<button data-act="insertpath" data-path="'+path+'">'+ic('insert',15)+'插入路径</button>'+
+    '<button data-act="pvact" data-msg="已发给 Agent">'+ic('chat',15)+'发给 Agent</button>'+
+    '<button data-act="pvact" data-msg="已复制路径">'+ic('copy',15)+'复制</button>'+
+    '<button data-act="pvact" data-msg="已分享">'+ic('share',15)+'分享</button></div>';
+}
+function pvScreen(o){
+  const imm=!!o.immersive;
+  const head=imm?'':'<div class="pvtop"><div class="pvgrab"></div><div class="pvbar">'+
+    '<button class="iconbtn" data-act="go" data-to="files" aria-label="关闭">'+ic('x',14)+'</button>'+
+    '<div class="pvttl"><b>'+o.name+'</b><span>'+o.meta+'</span></div>'+
+    '<button class="iconbtn" data-act="pvmenu" aria-label="更多">'+ic('dots',15)+'</button></div></div>';
+  return '<div class="page full pvpage'+(imm?' imm':'')+'">'+head+
+    '<div class="pvbody" data-act="'+(imm?'pvchrome':'pvimm')+'">'+o.body+'</div>'+
+    '<div class="pvfade"></div>'+
+    (imm?'':'<button class="pvpill" data-act="insertpath" data-path="'+o.path+'">'+ic('insert',16)+'插入路径</button>'+
+      (o.menu?pvMenu(o.path):''))+
+  '</div>';
+}
+SCREENS['files-preview'] = function(s){
+  return pvScreen({name:'TerminalSocket.swift',meta:'342 行 · 只读',body:codeBody(),path:'src/net/TerminalSocket.swift',menu:s.menu});
+};
+SCREENS['files-immersive'] = function(s){
+  return pvScreen({name:'TerminalSocket.swift',meta:'342 行 · 只读',body:codeBody(),path:'src/net/TerminalSocket.swift',immersive:true});
 };
 SCREENS['files-md'] = function(s){
-  const md='<div class="md">'+
-    '<h3>SeRemote</h3>'+
-    '<p>iPhone 与 iPad 上的远程终端。</p>'+
-    '<h4>结构</h4>'+
-    '<ul><li><code>src/net</code> — WebSocket 与 PTY 桥接</li><li><code>src/ui</code> — 终端、文件、对话</li></ul>'+
-    '<h4>运行</h4>'+
-    '<pre>swift test</pre>'+
-    '<table><tr><th>平台</th><th>最低版本</th></tr><tr><td>iOS</td><td>18.0</td></tr><tr><td>macOS</td><td>15.0</td></tr></table>'+
-    '</div>';
-  return sheetScene(termPage({...s,switcher:false},{back:true,ribbon:true}),
-    '<div class="sheet filesheet"><div class="grabber"></div>'+
-    '<div class="row between" style="gap:10px"><div class="crumbs"><b>termul</b><span class="s">/</span>src<span class="s">/</span>net</div>'+
-    '<button class="iconbtn" data-act="go" data-to="wterm" aria-label="关闭">'+ic('x',14)+'</button></div>'+
-    fileRows('README.md')+
-    '<div class="previewcard"><div class="ph">'+ic('file',13)+'<b>README.md</b><span class="m">Markdown · 只读</span></div>'+
-    '<div class="previewbody">'+md+'</div></div>'+
-    fileActions()+'</div>');
+  return pvScreen({name:'README.md',meta:'8.1 KB · Markdown',body:mdBody(),path:'README.md',menu:s.menu});
+};
+
+/* ---------- attach: local picker ---------- */
+const ATTACH_PATH='~/.se-manager/attachments/2026-11-10/report.pdf';
+function attachSheet(s){
+  const agent=!!s.targetAgent;
+  return '<div class="sheet attachesheet"><div class="grabber"></div>'+
+    '<button class="attachtarget" data-act="toast" data-msg="选择发送目标">'+
+      '<span>发送到</span><span class="ar">→</span><b>'+(agent?'Claude Code':'zsh — Termul')+'</b>'+ic('chevD',12)+
+      '<span class="spacer"></span><span class="tag">'+(agent?'Agent':'当前终端')+'</span></button>'+
+    '<div class="actgroup">'+
+      '<button class="actitem" data-act="toast" data-msg="从照片图库选择">'+ic('photo',15)+'照片</button>'+
+      '<button class="actitem" data-act="toast" data-msg="打开相机">'+ic('camera',15)+'拍照</button>'+
+      '<button class="actitem" data-act="pickfile">'+ic('folder',15)+'文件<span class="r">iCloud · 本机</span></button>'+
+    '</div></div>';
+}
+SCREENS.attach = function(s){
+  return sheetScene(termPage({...s,switcher:false},{back:true,ribbon:!s.nohook,nohook:s.nohook}), attachSheet(s));
+};
+SCREENS['attach-sent'] = function(s){
+  return termPage({...s,staged:s.staged||ATTACH_PATH},{back:true,ribbon:!s.nohook,nohook:s.nohook});
 };
 
 /* ---------- T4 chat ---------- */
@@ -1432,7 +1712,7 @@ SCREENS.chat = function(s){
         '</div>'+perm+'</div>'+
     '</div>'+
     '<div class="composer"><div class="quickrow"><button class="quick">继续修复</button><button class="quick">运行测试</button><button class="quick">查看差异</button><button class="quick">换个角度</button></div>'+
-      '<div class="composerbox"><textarea placeholder="继续这个会话…" rows="1"></textarea><div class="composerbot"><span class="modelchip"><i class="dot"></i>Claude Code · Sonnet 4.5</span><span class="spacer"></span><button class="send" data-act="toast" data-msg="已发送">'+ic('arrowUp',15)+'</button></div></div>'+
+      '<div class="composerbox"><textarea placeholder="继续这个会话…" rows="1"></textarea><div class="composerbot"><span class="modelchip"><i class="dot"></i>Claude Code · Sonnet 4.5</span><span class="spacer"></span><button class="send" data-act="toast" data-msg="已发送" aria-label="发送">'+ic('arrowUp',15)+'</button></div></div>'+
       '<div class="composerfoot">'+tip('只发送文本。运行命令仍需你的许可。')+'</div></div>'+
     '</div>');
 };
@@ -1549,7 +1829,7 @@ SCREENS.git = function(s){
     return '<button class="scard" data-act="toast" data-msg="显示差异"><span class="spine live"></span><span class="st"><b style="font-family:var(--mono);font-size:11px">'+r[0]+'</b><span>'+r[1]+'</span></span><span class="stat">'+r[2]+'</span></button>';
   }).join('');
   return '<div class="page"><div class="viewport">'+
-    navBar('wterm','更改','MacBook Pro · Termul · main','<button class="iconbtn" data-act="toast" data-msg="已刷新">'+ic('refresh',15)+'</button>')+
+    navBar('wterm','更改','MacBook Pro · Termul · main','<button class="iconbtn" data-act="toast" data-msg="已刷新" aria-label="刷新">'+ic('refresh',15)+'</button>')+
     '<div class="hosthead"><h2>Termul</h2><div class="m"><i class="dot live"></i><span>main · 领先 2 · 落后 0</span></div></div>'+
     '<div class="segwide" style="margin-top:14px"><button class="on">状态 <span class="cnt">02</span></button><button data-act="toast" data-msg="差异">差异 <span class="cnt">01</span></button></div>'+
     groupLabel('未提交','02')+'<div class="list">'+rows+'</div>'+
@@ -1575,7 +1855,7 @@ SCREENS.tasks = function(s){
       '<span class="toggle '+(on?'on':'')+'" data-act="toggle" role="switch" aria-checked="'+(on?'true':'false')+'"></span></div>';
   };
   return '<div class="page"><div class="viewport">'+
-    navBar('wterm','定时任务','MacBook Pro · 4 个任务','<button class="iconbtn" data-act="toast" data-msg="已刷新">'+ic('refresh',15)+'</button>')+
+    navBar('wterm','定时任务','MacBook Pro · 4 个任务','<button class="iconbtn" data-act="toast" data-msg="已刷新" aria-label="刷新">'+ic('refresh',15)+'</button>')+
     '<div class="segwide" style="margin-top:14px"><button class="on">全部 <span class="cnt">04</span></button><button data-act="toast" data-msg="已启用">已启用 <span class="cnt">03</span></button><button data-act="toast" data-msg="已暂停">已暂停 <span class="cnt">01</span></button></div>'+
     groupLabel('今天 · 周日','02')+'<div class="list">'+
       task('夜间冒烟测试','每天 02:00 · 已启用',true)+
@@ -1641,11 +1921,10 @@ function rail(s){
 }
 
 /* ---------- iPad T2 + inspector ---------- */
-function padHTML(){
+function padHTML(variant){
   const rr=function(name,meta,on){
     return '<button class="railrow'+(on?' on':'')+'">'+ic('terminal',13)+'<span>'+name+'</span><span class="r">'+(meta||'')+'</span></button>';
   };
-  const keys=['Esc','Tab','Ctrl','↑','↓','←','→','回车','⌫','Ctrl+C'];
   const tabs=[['zsh','1',1],['dev','2',0],['test','3',0]].map(function(t){
     return '<button class="tab'+(t[2]?' on':'')+'"><span class="idx">'+t[1]+'</span>'+t[0]+'</button>';
   }).join('');
@@ -1664,36 +1943,38 @@ function padHTML(){
   const main='<div class="padmain"><div class="padterm">'+
     '<div class="padtop"><button class="hostpill">'+ic('terminal',13)+'zsh — Termul '+ic('chevD',10)+'</button>'+
       '<span class="meta">MacBook Pro · termul · main</span><span class="spacer"></span>'+
-      '<button class="iconbtn">'+ic('file',15)+'</button><button class="iconbtn">'+ic('hosts',15)+'</button><button class="iconbtn">'+ic('dots',15)+'</button></div>'+
-    '<div class="tabstrip">'+tabs+'<button class="tabadd">'+ic('plus',13)+'</button></div>'+
-    '<div class="termmeta"><i class="dot live"></i><span>PTY · Ready</span><span>80 × 24</span><span class="spacer"></span><button class="fitchip">FIT</button><button class="fitchip">A+</button></div>'+
+      '<button class="iconbtn" aria-label="文件">'+ic('file',15)+'</button><button class="iconbtn" aria-label="桌面">'+ic('hosts',15)+'</button><button class="iconbtn" aria-label="更多">'+ic('dots',15)+'</button></div>'+
+    '<div class="tabstrip">'+tabs+'<button class="tabadd" aria-label="新建终端">'+ic('plus',13)+'</button></div>'+
+    '<div class="termmeta"><i class="dot live"></i><span>PTY · Ready</span><span>80 × 24</span><span class="spacer"></span>'+
+      '<span class="padhint">'+ic('keyboard',12)+' 硬件键盘</span>'+tip('连接硬件键盘时自动收起屏幕键盘；屏幕上的附件与键盘入口仍在右下角。')+
+      '<button class="fitchip">FIT</button><button class="fitchip">A+</button></div>'+
     '<button class="ribbonbtn"><i class="dot live"></i><b>Claude Code</b><span>· 工作中 · 1 个许可</span><span class="spacer"></span><span class="go">对话 ›</span></button>'+
     '<div class="term">'+termText()+'</div>'+
-    '<div class="keyrow">'+keys.map(function(k){return '<button class="key">'+k+'</button>';}).join('')+'<button class="key icon">'+ic('keyboardDown',12)+'隐藏键盘</button></div>'+
-    '<div class="cmdrow"><div class="cmdline"><span class="p">❯</span><input placeholder="输入命令" aria-label="命令"><button class="go">'+ic('arrowUp',14)+'</button></div></div>'+
+    '<div class="floatcluster padcluster">'+
+      '<button aria-label="附件">'+ic('plus',17)+'</button>'+
+      '<button aria-label="键盘">'+ic('keyboard',17)+'</button></div>'+
   '</div></div>';
   const frows=[
-    ['..','目录'],['Sources','目录'],['Package.swift','2.4 KB'],['README.md','8.1 KB'],['TerminalSocket.swift','12.6 KB']
+    ['..','目录'],['Sources','目录'],['Tests','目录'],['Package.swift','2.4 KB'],['README.md','8.1 KB'],
+    ['TerminalSocket.swift','12.6 KB'],['ReconnectPolicy.swift','4.1 KB'],['HostWebSocket.swift','9.7 KB'],['BoardView.swift','18.2 KB']
   ].map(function(r){
-    return '<button class="rowitem"><span class="lead">'+ic(r[0]==='目录'?'folder':'file',12)+'</span><span class="k">'+r[0]+'</span><span class="v">'+(r[1]||'')+'</span></button>';
+    return '<button class="rowitem"><span class="lead">'+ic(r[1]==='目录'?'folder':'file',12)+'</span><span class="k">'+r[0]+'</span><span class="v">'+(r[1]||'')+'</span></button>';
   }).join('');
   const inspect='<aside class="padinspect">'+
     '<div class="ph"><b>文件</b><span class="m">Termul · main</span></div>'+
     '<div class="seg"><button class="on">文件</button><button>对话</button></div>'+
     '<div class="crumbs"><b>termul</b><span class="s">/</span>src<span class="s">/</span>net</div>'+
     '<div class="filerows">'+frows+'</div>'+
-    '<div class="previewcard"><div class="ph">'+ic('file',12)+'<b>TerminalSocket.swift</b><span class="m">342 行</span></div>'+
-      '<div class="previewbody"><pre class="code" style="border:0;background:transparent;padding:0;margin:0;font-size:9px;line-height:1.9">'+
-      '<span style="color:#5C6272"> 12</span>  <span class="k">final class</span> TerminalSocket {\n'+
-      '<span style="color:#5C6272"> 13</span>    <span class="k">private var</span> sessionID: String?\n'+
-      '<span style="color:#5C6272"> 14</span>    <span class="k">private var</span> backoff: TimeInterval = 0.5\n'+
-      '<span style="color:#5C6272"> 16</span>    <span class="k">func</span> attach() <span class="k">async throws</span> {\n'+
-      '<span style="color:#5C6272"> 17</span>      <span style="color:#6F7585">// 重连成功后沿用原来的 PTY。</span>\n'+
-      '<span style="color:#5C6272"> 18</span>      <span class="k">try await</span> handshake(resume: sessionID)\n'+
-      '<span style="color:#5C6272"> 19</span>    }\n'+
-      '<span style="color:#5C6272"> 20</span>  }</pre></div></div>'+
   '</aside>';
-  return '<div class="padapp">'+rail+main+inspect+'<div class="padscrim"></div></div>';
+  const cover=variant==='preview'
+    ? '<div class="padcover"><div class="pcbar">'+
+        '<button class="pcbtn" aria-label="关闭">'+ic('x',17)+'</button>'+
+        '<div class="pcttl"><b>TerminalSocket.swift</b><span>342 行 · 只读</span></div>'+
+        '<button class="pcbtn" aria-label="更多">'+ic('dots',17)+'</button></div>'+
+        codeBody('pcbody')+'<div class="pcfade"></div>'+
+        '<button class="pvpill">'+ic('insert',16)+'插入路径</button></div>'
+    : '';
+  return '<div class="padapp">'+rail+main+inspect+'<div class="padscrim"></div>'+cover+'</div>';
 }
 
 const TAB_GROUP={terminals:'terminals',conversations:'conversations',drawer:'terminals',tools:'tools',git:'tools',tasks:'tools',search:'tools',screen:'tools'};
@@ -1723,6 +2004,14 @@ class App{
     this.screenEl.innerHTML=statusbar()+SCREENS[s.screen](s)+(s.rail?rail(s):'')+'<div class="toast"></div>';
     const tg=TAB_GROUP[s.screen];
     if(tg) this.screenEl.insertAdjacentHTML('beforeend',tabbar(tg));
+    if(s.screen==='attach-sent'){
+      const t=this.screenEl.querySelector('.toast');
+      if(t){ t.textContent='已上传 report.pdf · 路径已写入终端'; t.classList.add('on'); }
+    }
+    if(s.screen==='attach-sent'||s.screen==='wterm-keyboard'){
+      const tm=this.screenEl.querySelector('.term');
+      if(tm) tm.scrollTop=tm.scrollHeight;
+    }
   }
   onClick(e){
     const b=e.target.closest('[data-act]');
@@ -1730,13 +2019,28 @@ class App{
     const act=b.dataset.act;
     if(act==='go'){
       this.s.screen=b.dataset.to; this.s.rail=(b.dataset.to==='drawer'); this.s.decided=false; this.s.switcher=false;
+      this.s.menu=false;
+      if(b.dataset.to!=='attach-sent') this.s.staged='';
       if(b.dataset.nohook) this.s.nohook=true;
       this.render(); e.preventDefault(); return;
     }
     if(act==='switcher'){ this.s.switcher=!this.s.switcher; this.render(); return; }
     if(act==='term'){ this.s.term=b.dataset.term||'zsh'; this.s.switcher=false; this.render(); return; }
+    if(act==='openfile'){
+      this.s.file=b.dataset.file; this.s.staged=''; this.s.menu=false;
+      this.s.screen=b.dataset.kind==='md'?'files-md':'files-preview';
+      this.render(); return;
+    }
+    if(act==='pvmenu'){ this.s.menu=!this.s.menu; this.render(); return; }
+    if(act==='pvimm'){ this.s.menu=false; this.s.screen='files-immersive'; this.render(); return; }
+    if(act==='pvchrome'){ this.s.screen='files-preview'; this.render(); return; }
+    if(act==='pvact'){ this.s.menu=false; this.render(); this.toast(b.dataset.msg||'已处理'); return; }
+    if(act==='pickfile'){
+      this.s.staged=ATTACH_PATH; this.s.screen='attach-sent'; this.s.menu=false;
+      this.render(); return;
+    }
     if(act==='insertpath'){
-      this.s.cmd='src/net/TerminalSocket.swift'; this.s.screen='wterm'; this.s.switcher=false;
+      this.s.staged=b.dataset.path||'src/net/TerminalSocket.swift'; this.s.screen='wterm'; this.s.switcher=false; this.s.menu=false;
       this.render(); this.toast('已插入路径'); return;
     }
     if(act==='sendSel'){
@@ -1747,7 +2051,7 @@ class App{
     }
     if(act==='closeterm'){ this.s.screen='terminals'; this.s.switcher=false; this.render(); this.toast('已关闭 shell'); return; }
     if(act==='newterm'){ this.toast('新建终端'); return; }
-    if(act==='hidekb'){ this.toast('键盘已收起'); return; }
+    if(act==='hidekb'){ this.s.screen='wterm'; this.render(); return; }
     if(act==='openrail'){ this.s.rail=true; this.render(); return; }
     if(act==='closerail'){ this.s.rail=false; this.render(); return; }
     if(act==='theme'||act==='day'||act==='night'){
@@ -1786,7 +2090,10 @@ class App{
 })();
 
 const apps=[];
-document.querySelectorAll('.pad .screen').forEach(function(el){ el.innerHTML=padHTML(); });
+document.querySelectorAll('.pad .screen').forEach(function(el){
+  const pad=el.closest('.pad');
+  el.innerHTML=padHTML(pad&&pad.dataset.pad==='preview'?'preview':'');
+});
 document.querySelectorAll('[data-app]').forEach(function(el){
   const app=new App(el);
   el._app=app; apps.push(app);
@@ -1798,12 +2105,13 @@ document.querySelectorAll('[data-app]').forEach(function(el){
   if(!solo) return;
   document.body.classList.add('solo');
   const stage=document.getElementById('solo');
-  if(solo==='pad'||solo==='ipad'){
-    const src=document.querySelector('.pad');
+  if(solo==='pad'||solo==='ipad'||solo==='pad-preview'){
+    const o=solo==='pad-preview'?'preview':(URLP.get('o')||'ls');
+    const src=document.querySelector(o==='preview'?'.pad[data-pad="preview"]':'.pad.ls');
     const pad=src.cloneNode(true);
     pad.classList.remove('ls','pt');
-    pad.classList.add(URLP.get('o')==='pt'?'pt':'ls');
-    pad.style.zoom=URLP.get('o')==='pt'?'.62':'.78';
+    pad.classList.add(o==='pt'?'pt':'ls');
+    pad.style.zoom=o==='pt'?'.62':'.78';
     stage.appendChild(pad);
     return;
   }
