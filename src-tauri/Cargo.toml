@@ -296,6 +296,12 @@ ssh2 = { version = "0.9", features = ["vendored-openssl"] }
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSBundle", "NSString", "NSURL"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSPasteboard", "NSPasteboardItem"] }
+# H.264 remote-desktop encoding (`screen/h264.rs`). The framework bindings are
+# MIT/Apache-2.0; the VideoToolbox calls themselves are declared locally because
+# no `objc2-video-toolbox` release is available in this build environment.
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFArray", "CFDictionary", "CFNumber", "CFString"] }
+objc2-core-media = { version = "0.3", default-features = false, features = ["std", "CMBase", "CMBlockBuffer", "CMFormatDescription", "CMSampleBuffer"] }
+objc2-core-video = { version = "0.3", default-features = false, features = ["std", "CVBase", "CVBuffer", "CVImageBuffer", "CVReturn", "CVPixelBuffer"] }
 
 # Preserve the existing system/default SSH native dependency behavior outside
 # macOS. Global vendoring breaks common Windows/MSYS development environments.

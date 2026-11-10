@@ -7,7 +7,11 @@
 //! The internal bounded queue repairs its own drops by replacing the backlog
 //! with a full keyframe, never a delta whose baseline has been discarded.
 
-use super::codec::{self, Frame, FrameHeader, FrameType, Tile, TILE_SIZE};
+use super::codec::{
+    self, Frame, FrameHeader, FrameType, H264Frame, H264FrameType, H264Header, StreamCodec, Tile,
+    TILE_SIZE,
+};
+use super::h264::{self, H264Encoder};
 use super::{capture_raw, supported, ScreenError};
 use image::{codecs::jpeg::JpegEncoder, Rgb, RgbImage, RgbaImage};
 use std::{
@@ -20,8 +24,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub const DEFAULT_FPS: u32 = 3;
-pub const MAX_FPS: u32 = 5;
+/// JPEG defaults stay identical to the pre-P1 transport.
+pub const DEFAULT_FPS: u32 = codec::DEFAULT_FPS_JPEG;
+pub const MAX_FPS: u32 = codec::MAX_FPS_JPEG;
 
 fn capture_error(message: impl ToString) -> ScreenError {
     ScreenError::CaptureFailed(message.to_string())
@@ -157,13 +162,18 @@ fn tile_equal(a: &RgbaImage, b: &RgbaImage, x: u32, y: u32, w: u32, h: u32) -> b
 #[derive(Debug, Clone)]
 pub struct StreamConfig {
     pub display: String,
-    /// Clamped to 1..=5. A value of zero selects the default, 3fps.
+    /// Clamped per negotiated codec: 1..=5 for JPEG, 1..=30 for H.264.
+    /// A value of zero selects the codec default (3fps / 30fps).
     pub fps: u32,
     /// Capture width, clamped to 1..=1920; zero selects 1920.
     pub max_width: u32,
     pub quality: u8,
     /// Clamped to 1..=4. No unbounded frame backlog is allowed.
     pub queue_capacity: usize,
+    /// Requested transport codec; falls back to JPEG when H.264 is unavailable.
+    pub codec: StreamCodec,
+    /// H.264 average bitrate in kbps, clamped to 500..=20000.
+    pub bitrate_kbps: u32,
 }
 
 impl Default for StreamConfig {
@@ -174,6 +184,8 @@ impl Default for StreamConfig {
             max_width: 1920,
             quality: 75,
             queue_capacity: 2,
+            codec: StreamCodec::Jpeg,
+            bitrate_kbps: codec::DEFAULT_BITRATE_KBPS,
         }
     }
 }
@@ -274,6 +286,8 @@ impl Drop for StreamReceiver {
 pub struct StreamSession {
     shared: Arc<Shared>,
     worker: Option<JoinHandle<()>>,
+    /// Codec negotiated at start; reported by `meta` so clients never guess.
+    codec: StreamCodec,
 }
 
 impl StreamSession {
@@ -294,17 +308,29 @@ impl StreamSession {
         if config.display.trim().is_empty() || config.display.len() > 256 {
             return Err(ScreenError::DisplayNotFound);
         }
-        config.fps = if config.fps == 0 {
-            DEFAULT_FPS
-        } else {
-            config.fps.min(MAX_FPS)
-        };
+        // H.264 is only advertised when a VideoToolbox session can be created;
+        // a request for it on Windows/Linux or a broken host falls back to JPEG.
+        let requested_codec = config.codec;
+        if requested_codec == StreamCodec::H264 && !h264::available() {
+            config.codec = StreamCodec::Jpeg;
+            log::warn!("desktop_h264_fallback requested=h264 codec=jpeg reason=unavailable");
+        }
+        config.fps = codec::clamp_fps(config.codec, Some(config.fps));
+        config.bitrate_kbps = codec::clamp_bitrate_kbps(Some(config.bitrate_kbps));
         config.max_width = if config.max_width == 0 {
             1920
         } else {
             config.max_width.min(1920)
         };
         config.quality = config.quality.clamp(1, 100);
+        let effective_codec = config.codec;
+        if requested_codec != effective_codec {
+            log::info!(
+                "desktop_codec_negotiated requested={} codec={}",
+                requested_codec.as_str(),
+                effective_codec.as_str()
+            );
+        }
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 queue: VecDeque::new(),
@@ -336,9 +362,15 @@ impl StreamSession {
             Self {
                 shared: shared.clone(),
                 worker: Some(worker),
+                codec: effective_codec,
             },
             StreamReceiver { shared },
         ))
+    }
+
+    /// Codec actually negotiated for this session (JPEG after any fallback).
+    pub fn codec(&self) -> StreamCodec {
+        self.codec
     }
 
     pub fn request_keyframe(&self) {
@@ -394,6 +426,7 @@ where
     let interval = Duration::from_secs_f64(1.0 / f64::from(config.fps));
     let mut next_capture = Instant::now();
     let mut differ = FrameDiffer::new(config.quality);
+    let mut h264_state = H264State::default();
     let mut seq = 0u64;
     loop {
         let (display, generation, force_keyframe) = {
@@ -424,13 +457,33 @@ where
         let capture_started = Instant::now();
         let result: Result<(), ScreenError> = (|| {
             let image = capture(&display, config.max_width)?;
-            let Some(frame) = differ.diff(&display, seq, &image, force_keyframe)? else {
-                return Ok(());
+            let published = match config.codec {
+                StreamCodec::H264 => capture_h264(
+                    shared,
+                    generation,
+                    &display,
+                    seq,
+                    &image,
+                    force_keyframe,
+                    &mut h264_state,
+                    config.bitrate_kbps,
+                    config.fps,
+                )?,
+                StreamCodec::Jpeg => {
+                    match differ.diff(&display, seq, &image, force_keyframe)? {
+                        Some(frame) => {
+                            publish_frame(shared, generation, frame, &image, &mut differ)?;
+                            true
+                        }
+                        None => false,
+                    }
+                }
             };
-            publish_frame(shared, generation, frame, &image, &mut differ)?;
-            seq = seq
-                .checked_add(1)
-                .ok_or_else(|| capture_error("frame sequence exhausted"))?;
+            if published {
+                seq = seq
+                    .checked_add(1)
+                    .ok_or_else(|| capture_error("frame sequence exhausted"))?;
+            }
             Ok(())
         })();
         log::info!(
@@ -493,11 +546,163 @@ fn publish_frame(
     Ok(())
 }
 
+#[derive(Default)]
+struct H264State {
+    encoder: Option<H264Encoder>,
+    /// Last encoded canvas: identical frames are skipped entirely.
+    last_frame: Option<(u32, u32, Vec<u8>)>,
+    /// Set after a dropped frame or queue overflow: the next frame must be an IDR.
+    force_keyframe: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum H264Publish {
+    Sent,
+    /// The queue overflowed and this delta lost its baseline: wait for an IDR.
+    DroppedNeedsKeyframe,
+    /// A display switch or stop superseded this frame.
+    Stale,
+}
+
+/// Single producer only, like `publish_frame`. On overflow the whole backlog is
+/// discarded; a delta frame is never published after its baseline was dropped.
+fn publish_h264_packet(
+    shared: &Shared,
+    generation: u64,
+    keyframe: bool,
+    packet: Vec<u8>,
+) -> Result<H264Publish, ScreenError> {
+    let mut state = shared.lock();
+    if state.stopped || !state.receiver_alive || state.generation != generation {
+        return Ok(H264Publish::Stale);
+    }
+    let overflow = state.queue.len() >= shared.capacity;
+    if overflow {
+        state.queue.clear();
+        if !keyframe {
+            return Ok(H264Publish::DroppedNeedsKeyframe);
+        }
+    }
+    state.queue.push_back(StreamEvent::Frame(packet));
+    shared.changed.notify_all();
+    Ok(H264Publish::Sent)
+}
+
+/// One H.264 tick: skip unchanged frames, encode, then publish under the same
+/// bounded-queue and keyframe rules as the JPEG path.
+#[allow(clippy::too_many_arguments)]
+fn capture_h264(
+    shared: &Shared,
+    generation: u64,
+    display: &str,
+    seq: u64,
+    image: &RgbaImage,
+    requested_keyframe: bool,
+    state: &mut H264State,
+    bitrate_kbps: u32,
+    fps: u32,
+) -> Result<bool, ScreenError> {
+    let (width, height) = image.dimensions();
+    if width == 0
+        || height == 0
+        || width > codec::MAX_DIMENSION
+        || height > codec::MAX_DIMENSION
+        || u64::from(width) * u64::from(height) > codec::MAX_PIXELS
+        || display.trim().is_empty()
+        || display.len() > 256
+    {
+        return Err(capture_error("invalid capture dimensions or display id"));
+    }
+    let (even_width, even_height) = (h264::even_dimension(width), h264::even_dimension(height));
+    if !h264::can_encode(even_width, even_height) {
+        return Err(capture_error("capture too small for h264"));
+    }
+    let mut force_keyframe = requested_keyframe || state.force_keyframe;
+    // Unchanged screen: the client already holds a decodable frame.
+    if !force_keyframe
+        && state.last_frame.as_ref().is_some_and(|(w, h, bytes)| {
+            *w == width && *h == height && bytes.as_slice() == image.as_raw()
+        })
+    {
+        return Ok(false);
+    }
+    // A new session starts with an IDR, which also covers display switches and
+    // resolution changes (both recreate the encoder).
+    if state
+        .encoder
+        .as_ref()
+        .map(H264Encoder::dimensions)
+        != Some((even_width, even_height))
+    {
+        state.encoder = None;
+        force_keyframe = true;
+        match H264Encoder::new(even_width, even_height, bitrate_kbps, fps) {
+            Ok(encoder) => {
+                log::info!(
+                    "desktop_h264_encoder_ready width={even_width} height={even_height} \
+                     bitrate_kbps={bitrate_kbps} fps={fps}"
+                );
+                state.encoder = Some(encoder);
+            }
+            Err(error) => {
+                log::warn!("desktop_h264_encoder_failed reason={}", error.reason());
+                return Err(capture_error("h264 encoder unavailable"));
+            }
+        }
+    }
+    let encode_result = match state.encoder.as_mut() {
+        Some(encoder) => encoder.encode(image, force_keyframe),
+        None => return Err(capture_error("h264 encoder unavailable")),
+    };
+    let encoded = match encode_result {
+        Ok(Some(encoded)) => encoded,
+        Ok(None) => return Ok(false),
+        Err(error) => {
+            log::warn!("desktop_h264_encode_failed reason={}", error.reason());
+            state.encoder = None;
+            state.force_keyframe = true;
+            return Err(capture_error("h264 encoding failed"));
+        }
+    };
+    let header = H264Header {
+        r#type: H264FrameType::H264,
+        display: display.to_owned(),
+        seq,
+        w: encoded.width,
+        h: encoded.height,
+        key: encoded.keyframe,
+        ps: if encoded.keyframe {
+            vec![encoded.sps.len() as u32, encoded.pps.len() as u32]
+        } else {
+            Vec::new()
+        },
+        len: encoded.sample.len() as u32,
+    };
+    let packet = codec::encode_h264_frame(&H264Frame {
+        header,
+        payload: encoded.payload(),
+    })
+    .map_err(capture_error)?;
+    let outcome = publish_h264_packet(shared, generation, encoded.keyframe, packet)?;
+    state.last_frame = Some((width, height, image.as_raw().clone()));
+    match outcome {
+        H264Publish::Sent => {
+            state.force_keyframe = false;
+            Ok(true)
+        }
+        H264Publish::DroppedNeedsKeyframe => {
+            state.force_keyframe = true;
+            Ok(false)
+        }
+        H264Publish::Stale => Ok(false),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use image::Rgba;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
     fn canvas() -> RgbaImage {
         RgbaImage::from_pixel(256, 256, Rgba([0, 0, 0, 255]))
@@ -639,6 +844,113 @@ mod tests {
         let frame = differ.diff("1", 0, &image, false).unwrap().unwrap();
         publish_frame(&shared, 0, frame, &image, &mut differ).unwrap();
         assert!(shared.lock().queue.is_empty());
+    }
+
+    #[test]
+    fn h264_overflow_drops_deltas_until_an_idr() {
+        let stream = shared(1);
+        assert_eq!(
+            publish_h264_packet(&stream, 0, true, vec![1]).unwrap(),
+            H264Publish::Sent
+        );
+        // Queue full: the delta's baseline would be gone, so it is dropped and
+        // the backlog cleared instead of forwarding later deltas.
+        assert_eq!(
+            publish_h264_packet(&stream, 0, false, vec![2]).unwrap(),
+            H264Publish::DroppedNeedsKeyframe
+        );
+        assert!(stream.lock().queue.is_empty());
+        // An IDR is self-contained and always recoverable, even into a full queue.
+        assert_eq!(
+            publish_h264_packet(&stream, 0, true, vec![3]).unwrap(),
+            H264Publish::Sent
+        );
+        assert_eq!(
+            publish_h264_packet(&stream, 0, true, vec![4]).unwrap(),
+            H264Publish::Sent
+        );
+        // Frames from a superseded display generation are never published.
+        assert_eq!(
+            publish_h264_packet(&stream, 7, true, vec![5]).unwrap(),
+            H264Publish::Stale
+        );
+    }
+
+    #[test]
+    fn h264_unchanged_frames_and_invalid_geometry_are_skipped() {
+        let stream = shared(2);
+        let mut state = H264State::default();
+        let image = canvas();
+        // A tiny canvas has no even dimensions to encode at.
+        assert!(capture_h264(
+            &stream, 0, "1", 0, &RgbaImage::from_pixel(1, 1, Rgba([0, 0, 0, 255])), true,
+            &mut state, 4000, 30
+        )
+        .is_err());
+        // Pretend a frame was already encoded and is identical: no packet.
+        state.last_frame = Some((256, 256, image.as_raw().clone()));
+        assert!(!capture_h264(&stream, 0, "1", 0, &image, false, &mut state, 4000, 30).unwrap());
+        assert!(stream.lock().queue.is_empty());
+        // Odd geometry is cropped, and h264::even_dimension is the single rule.
+        assert_eq!(h264::even_dimension(1919), 1918);
+        assert_eq!(h264::even_dimension(1080), 1080);
+    }
+
+    /// Full H.264 session over synthetic frames: negotiation, IDR first, then
+    /// deltas, all through the frozen wire framing. Needs no screen permission.
+    #[test]
+    fn h264_session_emits_idr_then_deltas() {
+        if !h264::available() {
+            eprintln!("skipping: VideoToolbox unavailable on this host");
+            return;
+        }
+        let tick = Arc::new(AtomicU64::new(0));
+        let counter = tick.clone();
+        let config = StreamConfig {
+            display: "1".into(),
+            fps: 30,
+            max_width: 256,
+            quality: 80,
+            queue_capacity: 4,
+            codec: StreamCodec::H264,
+            bitrate_kbps: 4_000,
+        };
+        let (mut session, receiver) = StreamSession::start_with_capture(config, move |_, _| {
+            let n = counter.fetch_add(1, Ordering::SeqCst) as u32;
+            Ok(RgbaImage::from_fn(256, 256, |x, y| {
+                Rgba([
+                    (x as u8).wrapping_add(n as u8),
+                    y as u8,
+                    (n & 0xff) as u8,
+                    255,
+                ])
+            }))
+        })
+        .unwrap();
+        assert_eq!(session.codec(), StreamCodec::H264);
+        let first = match receiver.recv_timeout(Duration::from_secs(5)).unwrap() {
+            StreamEvent::Frame(packet) => codec::decode_h264_frame(&packet).unwrap(),
+            StreamEvent::Error(error) => panic!("unexpected stream error: {error:?}"),
+        };
+        assert!(first.header.key, "the first frame must be an IDR");
+        assert_eq!(first.header.ps.len(), 2);
+        assert_eq!(first.sps()[0] & 0x1f, 7);
+        assert_eq!(first.pps()[0] & 0x1f, 8);
+        assert_eq!((first.header.w, first.header.h), (256, 256));
+        let mut deltas = 0;
+        for _ in 0..6 {
+            let frame = match receiver.recv_timeout(Duration::from_secs(5)) {
+                Ok(StreamEvent::Frame(packet)) => codec::decode_h264_frame(&packet).unwrap(),
+                Ok(StreamEvent::Error(error)) => panic!("unexpected stream error: {error:?}"),
+                Err(error) => panic!("missing frame: {error:?}"),
+            };
+            if !frame.header.key {
+                deltas += 1;
+                assert!(frame.header.ps.is_empty());
+            }
+        }
+        assert!(deltas > 0, "later frames must be deltas");
+        session.stop();
     }
 
     #[test]

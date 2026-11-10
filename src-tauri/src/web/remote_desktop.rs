@@ -30,8 +30,8 @@ use super::{
 use crate::{
     remote::desktop::DesktopService,
     screen::{
-        self, CaptureOptions, ImageFormat, InputController, Modifiers, MouseButton, StreamConfig,
-        StreamEvent, StreamReceiver, StreamSession,
+        self, CaptureOptions, ImageFormat, InputController, Modifiers, MouseButton, StreamCodec,
+        StreamConfig, StreamEvent, StreamReceiver, StreamSession,
     },
 };
 
@@ -149,6 +149,9 @@ pub async fn info(
         vec![]
     };
     value["displays"] = json!(displays);
+    // `codecs` is additive: old clients ignore it, new clients only send
+    // `codec`/`bitrate` when `h264` is listed. Probed once and cached.
+    value["codecs"] = json!(screen::available_codecs());
     Json(value).into_response()
 }
 
@@ -335,6 +338,10 @@ enum ClientMessage {
         #[serde(rename = "maxWidth")]
         max_width: Option<u32>,
         quality: Option<u8>,
+        /// Frozen P1 protocol: `"h264"` or `"jpeg"`, default JPEG.
+        codec: Option<StreamCodec>,
+        /// H.264 average bitrate in kbps (500..=20000, default 4000).
+        bitrate: Option<u32>,
     },
     SwitchDisplay {
         display: String,
@@ -394,6 +401,7 @@ struct LiveStream {
     receiver: StreamReceiver,
     display: String,
     fps: u32,
+    codec: StreamCodec,
 }
 impl Drop for LiveStream {
     fn drop(&mut self) {
@@ -658,21 +666,43 @@ async fn run_with_input(
                 }
                 let is_input=msg.input();
                 let result: DesktopResult<()> = match msg {
-                    ClientMessage::Start {display,fps,max_width,quality} => {
-                        let fps = fps.unwrap_or(3).clamp(1,5);
+                    ClientMessage::Start {display,fps,max_width,quality,codec,bitrate} => {
+                        let requested_codec = codec.unwrap_or(StreamCodec::Jpeg);
+                        let requested_bitrate = bitrate.unwrap_or(0);
                         match screen::list_displays_async().await {
                             Err(e) => Err(e.code()),
                             Ok(displays) if !displays.iter().any(|d|d.id==display) => Err("DISPLAY_NOT_FOUND"),
                             Ok(displays) => {
                                 drop_controller(&mut input,&mut control_active,&service,id);
                                 stop_stream(&mut stream,&service,id,&principal,"OK");
-                                match StreamSession::start(StreamConfig {display:display.clone(),fps,max_width:max_width.unwrap_or(1920),quality:quality.unwrap_or(80),queue_capacity:2}) {
+                                match StreamSession::start(StreamConfig {
+                                    display:display.clone(),
+                                    fps:fps.unwrap_or(0),
+                                    max_width:max_width.unwrap_or(1920),
+                                    quality:quality.unwrap_or(80),
+                                    queue_capacity:2,
+                                    codec:requested_codec,
+                                    bitrate_kbps:requested_bitrate,
+                                }) {
                                     Err(e) => Err(e.code()),
                                     Ok((session,receiver)) => {
+                                        // The session reports the codec it actually negotiated.
+                                        let codec = session.codec();
+                                        let fps = screen::clamp_fps(codec, Some(fps.unwrap_or(0)));
+                                        let bitrate_kbps = screen::clamp_bitrate_kbps(Some(requested_bitrate));
                                         service.viewer_started(id,display.clone());
-                                        log::info!("desktop_stream_start device_id={} display={} stable_code=OK",p.device_id(),display);
-                                        stream=Some(LiveStream{session,receiver,display:display.clone(),fps});
-                                        if !send_json(&tx,json!({"type":"meta","displays":displays,"display":display,"fps":fps})) {break}
+                                        log::info!(
+                                            "desktop_stream_start device_id={} display={} stable_code=OK codec={} requested_codec={} fps={} bitrate_kbps={}",
+                                            p.device_id(),display,codec.as_str(),requested_codec.as_str(),fps,bitrate_kbps
+                                        );
+                                        if requested_codec != codec {
+                                            log::warn!(
+                                                "desktop_h264_fallback device_id={} requested={} codec={}",
+                                                p.device_id(),requested_codec.as_str(),codec.as_str()
+                                            );
+                                        }
+                                        stream=Some(LiveStream{session,receiver,display:display.clone(),fps,codec});
+                                        if !send_json(&tx,json!({"type":"meta","displays":displays,"display":display,"fps":fps,"codec":codec.as_str()})) {break}
                                         if !send_json(&tx,json!({"type":"control_state","enabled":service.control_enabled(),"active":false})) {break}
                                         Ok(())
                                     }
@@ -691,7 +721,7 @@ async fn run_with_input(
                                         live.display=display.clone();
                                         service.set_viewer_display(id,display.clone());
                                         if !send_json(&tx,json!({"type":"control_state","enabled":service.control_enabled() && authority.require_scope(p,"screen.control").is_ok(),"active":false})){break}
-                                        if !send_json(&tx,json!({"type":"meta","displays":displays,"display":display,"fps":live.fps})){break}
+                                        if !send_json(&tx,json!({"type":"meta","displays":displays,"display":display,"fps":live.fps,"codec":live.codec.as_str()})){break}
                                         Ok(())
                                     }
                                 }

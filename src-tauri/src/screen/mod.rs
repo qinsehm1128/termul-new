@@ -6,10 +6,12 @@
 #![allow(dead_code, unused_imports)] // Consumed by the separately delivered host adapters.
 
 mod codec;
+mod h264;
 mod input;
 mod stream;
 
 pub use codec::*;
+pub use h264::*;
 pub use input::*;
 pub use stream::*;
 
