@@ -285,40 +285,44 @@ struct TerminalLandingScreen: View {
     }
 
     private func quickRow(_ row: TerminalLandingModel.QuickRow) -> some View {
-        HStack(spacing: 10) {
-            SeIconView(icon: .bolt, size: 14, stroke: 1.6, color: palette.inkTertiary)
-                .frame(width: 22, height: 22)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(verbatim: row.title)
-                    .font(SeNocturneType.font(11, weight: .regular, mono: true))
-                    .foregroundStyle(palette.ink)
-                    .lineLimit(1)
-                Text(verbatim: quickMeta(row))
-                    .font(SeNocturneType.font(9, mono: true))
-                    .foregroundStyle(palette.inkTertiary)
-                    .lineLimit(1)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
+        HStack(spacing: 4) {
             Button {
                 onOpenQuick(row)
             } label: {
-                Text("Open")
-                    .font(SeNocturneType.font(10, weight: .medium))
-                    .foregroundStyle(row.canOpen ? palette.accent : palette.inkTertiary)
-                    .padding(.horizontal, 10)
-                    .frame(minHeight: SeSpace.hitTarget)
-                    .background(palette.cardAlt, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .strokeBorder(palette.strokeStrong, lineWidth: 1)
+                HStack(spacing: 12) {
+                    SeIconView(icon: .bolt, size: 14, stroke: 1.6, color: palette.inkTertiary)
+                        .frame(width: 22, height: 22)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(verbatim: row.title)
+                            .font(SeNocturneType.font(12, weight: .semibold))
+                            .foregroundStyle(palette.ink)
+                            .lineLimit(1)
+                        Text(verbatim: quickMeta(row))
+                            .font(SeNocturneType.font(9, mono: true))
+                            .foregroundStyle(palette.inkTertiary)
+                            .lineLimit(1)
                     }
-                    .contentShape(Rectangle())
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .layoutPriority(1)
+
+                    SeIconView(
+                        icon: .arrowRight,
+                        size: 11,
+                        stroke: 1.7,
+                        color: row.canOpen ? palette.inkTertiary : palette.inkTertiary.opacity(0.4)
+                    )
+                    .fixedSize()
+                }
+                .padding(.vertical, 12)
+                .padding(.leading, 12)
+                .frame(maxWidth: .infinity, minHeight: NocturneToolMetrics.minimumTarget, alignment: .leading)
+                .contentShape(Rectangle())
             }
             .buttonStyle(SePressable())
-            .accessibilityLabel(String(localized: "Open \(row.title)"))
             .disabled(!row.canOpen)
+            .accessibilityLabel(String(localized: "Open \(row.title)"))
+            .accessibilityValue(Text(verbatim: quickMeta(row)))
 
             Menu {
                 Button(String(localized: "Rename"), systemImage: "pencil") { onRenameQuick(row) }
@@ -326,18 +330,13 @@ struct TerminalLandingScreen: View {
                 Button(String(localized: "Delete"), systemImage: "trash", role: .destructive) { onDeleteQuick(row) }
             } label: {
                 SeIconView(icon: .more, size: 14, stroke: 1.7, color: palette.inkSecondary)
-                    .frame(width: 38, height: 28)
-                    .background(palette.cardAlt, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .strokeBorder(palette.strokeStrong, lineWidth: 1)
-                    }
                     .frame(width: SeSpace.hitTarget, height: SeSpace.hitTarget)
                     .contentShape(Rectangle())
             }
+            .fixedSize()
+            .padding(.trailing, 4)
             .accessibilityLabel(String(localized: "More actions"))
         }
-        .padding(12)
         .frame(maxWidth: .infinity, minHeight: NocturneToolMetrics.minimumTarget, alignment: .leading)
         .background(palette.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
