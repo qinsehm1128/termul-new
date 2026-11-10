@@ -5,7 +5,7 @@ import {
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { logFrontendError } from '@/lib/log-api'
-import { readTerminalScreenStatus } from '@/lib/terminal-api'
+import { readTerminalScreenStatus, supportsTerminalInputModes } from '@/lib/terminal-api'
 import { type InputModeResyncResult, resyncRendererInputModes } from '@/lib/terminal-input-resync'
 import { useScreenObservationStore } from '@/stores/screen-observation-store'
 import { useTerminalStore } from '@/stores/terminal-store'
@@ -23,6 +23,7 @@ export function TerminalScreenObservationStatus({ terminalId }: { terminalId?: s
   const [resyncBusy, setResyncBusy] = useState(false)
   const [resync, setResync] = useState<InputModeResyncResult | null>(null)
   const request = useRef(0)
+  const resyncRequest = useRef(0)
   // A different PTY owns a different observation state entirely.
   // biome-ignore lint/correctness/useExhaustiveDependencies: the dependency is the invalidation trigger; the body only resets state.
   useEffect(() => {
@@ -97,20 +98,25 @@ export function TerminalScreenObservationStatus({ terminalId }: { terminalId?: s
         ? useTerminalStore.getState().terminals.find((item) => item.id === recordId)?.ptyId ===
           ptyId
         : true
+    const serial = ++resyncRequest.current
+    const stillCurrent = (): boolean => serial === resyncRequest.current && recordStillMounted()
     setResyncBusy(true)
     try {
       const result = await resyncRendererInputModes(ptyId, { recoverClaim: true })
       // The claim changes as part of a successful takeover, so identity — not
       // the claim generation — decides whether this reply still applies.
-      if (recordStillMounted()) setResync(result)
+      if (stillCurrent()) setResync(result)
     } catch {
-      if (recordStillMounted()) setResync({ status: 'unavailable', reason: 'host-denied' })
+      if (stillCurrent()) setResync({ status: 'unavailable', reason: 'host-denied' })
     } finally {
-      setResyncBusy(false)
+      if (serial === resyncRequest.current) setResyncBusy(false)
     }
   }
 
   if (!ptyId) return null
+  // Browser/se-server transports cannot read host input modes, so the button
+  // would always end in "unavailable" there.
+  const inputModesSupported = supportsTerminalInputModes()
   return (
     <details className="absolute bottom-1 right-2 z-30 max-w-xs rounded border border-border/60 bg-background/95 px-2 py-1 text-2xs text-muted-foreground shadow-sm">
       <summary className="cursor-pointer select-none">
@@ -169,16 +175,18 @@ export function TerminalScreenObservationStatus({ terminalId }: { terminalId?: s
               {t(`screenObservation.inputTakeover.unavailable.${resync.reason}`)}
             </p>
           )}
-          <button
-            type="button"
-            disabled={resyncBusy}
-            onClick={() => void resyncInput()}
-            className="mt-1 rounded border border-border px-2 py-1 disabled:opacity-50"
-          >
-            {resyncBusy
-              ? t('screenObservation.inputTakeover.resyncing')
-              : t('screenObservation.inputTakeover.resync')}
-          </button>
+          {inputModesSupported && (
+            <button
+              type="button"
+              disabled={resyncBusy}
+              onClick={() => void resyncInput()}
+              className="mt-1 rounded border border-border px-2 py-1 disabled:opacity-50"
+            >
+              {resyncBusy
+                ? t('screenObservation.inputTakeover.resyncing')
+                : t('screenObservation.inputTakeover.resync')}
+            </button>
+          )}
         </div>
       </div>
     </details>

@@ -6,8 +6,16 @@ import { useTerminalStore } from '@/stores/terminal-store'
 import type { Terminal } from '@/types/project'
 import { TerminalScreenObservationStatus } from './TerminalScreenObservationStatus'
 
-const mocks = vi.hoisted(() => ({ status: vi.fn(), log: vi.fn(), resync: vi.fn() }))
-vi.mock('@/lib/terminal-api', () => ({ readTerminalScreenStatus: mocks.status }))
+const mocks = vi.hoisted(() => ({
+  status: vi.fn(),
+  log: vi.fn(),
+  resync: vi.fn(),
+  inputModes: vi.fn(() => true)
+}))
+vi.mock('@/lib/terminal-api', () => ({
+  readTerminalScreenStatus: mocks.status,
+  supportsTerminalInputModes: mocks.inputModes
+}))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: mocks.log }))
 vi.mock('@/lib/terminal-input-resync', () => ({ resyncRendererInputModes: mocks.resync }))
 const ready: ScreenObservationStatus = {
@@ -180,5 +188,28 @@ describe('read-only host screen status surface', () => {
     })
     expect(screen.queryByText('Observation: Ready')).not.toBeInTheDocument()
     expect(useScreenObservationStore.getState().byPtyId.pty).toBeUndefined()
+  })
+
+  it('hides the takeover resync where the transport cannot read input modes', () => {
+    mocks.inputModes.mockReturnValueOnce(false)
+    render(<TerminalScreenObservationStatus terminalId="tab" />)
+    expect(screen.queryByText('Resync mouse/keyboard takeover')).not.toBeInTheDocument()
+  })
+
+  it('drops a takeover reply once the tab is bound to another PTY', async () => {
+    let resolve!: (value: unknown) => void
+    mocks.resync.mockImplementation(
+      () =>
+        new Promise((done) => {
+          resolve = done
+        })
+    )
+    render(<TerminalScreenObservationStatus terminalId="tab" />)
+    fireEvent.click(screen.getByText('Resync mouse/keyboard takeover'))
+    act(() => useTerminalStore.setState({ terminals: [{ ...terminal, ptyId: 'other' }] }))
+    await act(async () => {
+      resolve({ status: 'unavailable', reason: 'no-claim' })
+    })
+    expect(screen.queryByTestId('input-resync-result')).not.toBeInTheDocument()
   })
 })

@@ -831,9 +831,12 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
           terminalId: ptyId,
           // Live-only. This PTY is already painting through the claim-less
           // watch forwarder; replaying from `resumeCursor` would duplicate
-          // every chunk watch delivered after that snapshot. The host
-          // subscribes before replacing the old forwarder, so later output is
-          // still streamed exactly once.
+          // every chunk watch delivered after that snapshot. The host aborts the
+          // old forwarder, then subscribes from its latest seq under the log
+          // lock (`subscribe_from`), so later output is streamed exactly once.
+          //
+          // Rotating the claim ends any other claim-bearing desktop stream for
+          // this PTY, which is why only an explicit user takeover calls this.
           lastSeq: LIVE_ONLY_LAST_SEQ
         })
       } catch {
