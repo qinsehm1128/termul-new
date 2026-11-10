@@ -100,6 +100,7 @@ final class AgentChatStore {
         client: AgentChatClient,
         canView: Bool = true,
         canInput: Bool = true,
+        conversationVisible: Bool = true,
         logUnavailable: @escaping (String) -> Void = { message in
             HostLog.ui.info("\(message, privacy: .public)")
         }
@@ -108,6 +109,7 @@ final class AgentChatStore {
         self.client = client
         self.canView = canView
         self.canInput = canInput
+        self.isConversationVisible = conversationVisible
         self.logUnavailable = logUnavailable
     }
 
@@ -129,12 +131,16 @@ final class AgentChatStore {
         HostLog.ui.info("agent_chat follow started")
         defer { HostLog.ui.info("agent_chat follow ended") }
         while !Task.isCancelled {
+            let clock = ContinuousClock()
+            let started = clock.now
             await refresh()
-            var waited = 0
-            let interval = backoff.intervalMilliseconds(visible: isConversationVisible)
-            while !Task.isCancelled && !refreshRequested && waited < interval {
-                do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
-                waited += 250
+            // The cadence counts from the start of the request, so a slow round-trip
+            // never shortens or stacks the next wait.
+            while !Task.isCancelled && !refreshRequested {
+                let interval = backoff.intervalMilliseconds(visible: isConversationVisible)
+                let remaining = started.advanced(by: .milliseconds(interval)) - clock.now
+                guard remaining > .zero else { break }
+                do { try await Task.sleep(for: min(remaining, .milliseconds(250))) } catch { return }
             }
             refreshRequested = false
         }

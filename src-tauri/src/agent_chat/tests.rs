@@ -840,6 +840,23 @@ fn expected_absence_has_stable_codes_and_generic_messages() {
 }
 
 #[test]
+fn logged_failure_reasons_withhold_paths_and_ids() {
+    assert_eq!(super::loggable_reason("chat worker busy"), "chat worker busy");
+    assert_eq!(
+        super::loggable_reason("chat worker timeout; delivery must not be retried automatically"),
+        "chat worker timeout; delivery must not be retried automatically"
+    );
+    for leaky in [
+        "write failed: /Users/me/project/secret.txt",
+        "terminal pty:abc/1 closed",
+        "token=abc",
+        &"x".repeat(200),
+    ] {
+        assert_eq!(super::loggable_reason(leaky), "detail withheld");
+    }
+}
+
+#[test]
 fn adapter_classification_separates_absence_from_unsupported_readers() {
     for supported in ["claude-code", "pi", "qin-code"] {
         assert_eq!(classify_adapter(Some(supported)), ChatError::NoHook);

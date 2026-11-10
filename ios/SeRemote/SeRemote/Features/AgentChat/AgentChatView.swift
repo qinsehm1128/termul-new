@@ -128,7 +128,7 @@ struct AgentChatView: View {
             } else {
                 Text("Conversation unavailable").font(.headline)
                 Text("Start a supported agent with hooks enabled, or return to the terminal.")
-                if store.absence != nil {
+                if store.errorMessage == nil {
                     Button("Retry") { Task { await store.retry() } }
                         .frame(minWidth: 44, minHeight: 44)
                         .accessibilityIdentifier("agent-chat-retry")

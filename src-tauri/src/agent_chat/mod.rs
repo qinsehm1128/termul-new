@@ -71,11 +71,24 @@ impl ChatError {
         !matches!(self, Self::Failed(_))
     }
     /// Server-side detail for real failures only; expected states stay silent.
-    /// These reasons are static strings, never terminal ids or payloads.
+    /// Writer errors are forwarded verbatim, so anything that could carry a
+    /// path, id or payload (a separator, or an unusually long reason) is withheld.
     pub fn log_detail(&self) {
         if let Self::Failed(reason) = self {
-            log::debug!("agent chat request failed: {reason}");
+            log::debug!("agent chat request failed: {}", loggable_reason(reason));
         }
+    }
+}
+
+fn loggable_reason(reason: &str) -> &str {
+    let safe = reason.len() <= 96
+        && reason
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '.' | ';' | ',' | '-' | '_'));
+    if safe {
+        reason
+    } else {
+        "detail withheld"
     }
 }
 

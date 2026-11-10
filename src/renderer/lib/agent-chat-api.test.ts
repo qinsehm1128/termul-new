@@ -193,6 +193,15 @@ describe('terminal agent chat facade parity', () => {
     await expect(agentChatApi.snapshot('pty')).rejects.toThrow()
     expect(fetcher).toHaveBeenCalledTimes(2)
   })
+
+  it('never retries an unconfirmed desktop send and keeps the stable error code', async () => {
+    mocks.desktop = true
+    mocks.invoke.mockRejectedValue('AGENT_CHAT_ERROR')
+    await expect(agentChatApi.send('pty/a', 'hello')).rejects.toMatchObject({
+      code: 'AGENT_CHAT_ERROR'
+    })
+    expect(mocks.invoke).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('expected chat absence codes', () => {

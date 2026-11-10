@@ -84,9 +84,9 @@ struct TerminalAgentChatContainer<Terminal: View>: View {
         .task(id: "\(http.origin.absoluteString)|\(terminalID)") {
             let current = AgentChatStore(
                 terminalID: terminalID, client: AgentChatClient(http: http),
-                canView: canView, canInput: canInput
+                canView: canView, canInput: canInput,
+                conversationVisible: showConversation
             )
-            current.setConversationVisible(showConversation)
             store = current
             await current.follow()
         }

@@ -496,6 +496,27 @@ struct AgentChatTests {
         )
     }
 
+    @Test("A store mounted on the Terminal segment polls at the slow hidden cadence")
+    func hiddenMountPollsSlowly() async {
+        let fake = AgentChatFake(value: snapshot())
+        await fake.setReadError(HostError.ipc("Chat snapshot unavailable", "AGENT_CHAT_NO_HOOK"))
+        let store = AgentChatStore(
+            terminalID: "pty-1",
+            client: AgentChatClient(
+                snapshot: { terminal, cursor, before in try await fake.snapshot(terminal, cursor, before) },
+                send: { terminal, text, options in try await fake.send(terminal, text, options) },
+                control: { terminal, action in await fake.control(terminal, action) }
+            ),
+            conversationVisible: false,
+            logUnavailable: { _ in }
+        )
+        #expect(!store.isConversationVisible)
+        await store.refresh()
+        #expect(store.pollIntervalMilliseconds == 10_000)
+        store.setConversationVisible(true)
+        #expect(store.pollIntervalMilliseconds == 1_000)
+    }
+
     @Test("Backoff doubles from 1s to the 10s ceiling and resets")
     func backoffPolicySequence() {
         var policy = AgentChatBackoffPolicy()
