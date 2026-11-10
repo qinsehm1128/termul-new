@@ -17,6 +17,17 @@ actor DesktopFrameWorker {
         let sequence: UInt64?
         let image: CGImage?
         let needsKeyframe: Bool
+        let restartWithJPEG: Bool
+
+        init(generation: Int, display: String, sequence: UInt64?, image: CGImage?,
+             needsKeyframe: Bool, restartWithJPEG: Bool = false) {
+            self.generation = generation
+            self.display = display
+            self.sequence = sequence
+            self.image = image
+            self.needsKeyframe = needsKeyframe
+            self.restartWithJPEG = restartWithJPEG
+        }
     }
 
     // Only admission metadata crosses executors. The actor is its sole writer;
@@ -45,9 +56,11 @@ actor DesktopFrameWorker {
     private let packets: AsyncStream<Job>
     private nonisolated let continuation: AsyncStream<Job>.Continuation
     private let compositor: DesktopFrameCompositor
+    private let h264Decoder = DesktopH264Decoder()
     private var generation = 0
     private var selectedDisplay: String?
     private var displayFence = DesktopDisplayFence()
+    private var forceJPEG = false
     private var running = false
 
     init(imageByteBudget: Int = 96 * 1024 * 1024) {
@@ -70,9 +83,16 @@ actor DesktopFrameWorker {
     /// queued old packet cannot seed a new stream even when sequence numbers reset.
     func configure(generation: Int, display: String?, newStream: Bool) -> CGImage? {
         guard generation >= self.generation else { return nil }
+        let previousDisplay = selectedDisplay
         self.generation = generation
         admission.set(generation: generation, ready: false)
         selectedDisplay = display
+        if newStream {
+            forceJPEG = false
+            h264Decoder.reset()
+        } else if display != previousDisplay {
+            h264Decoder.reset()
+        }
         if newStream || display == nil {
             displayFence.reset()
             compositor.beginStream()
@@ -90,6 +110,8 @@ actor DesktopFrameWorker {
         // Cached previews remain useful until this stream's first keyframe.
         // Reset sequence ancestry, but do not synchronously decode on MainActor.
         compositor.beginStream()
+        // A new meta can also restart sequence numbers; wait for the new key.
+        h264Decoder.reset()
         admission.set(generation: generation, ready: true)
     }
 
@@ -101,13 +123,11 @@ actor DesktopFrameWorker {
             guard !Task.isCancelled else { return }
             guard job.generation == generation, let display = selectedDisplay else { continue }
             let update: Update
-            do {
-                let packet = try DesktopPacket.decode(job.data)
-                guard packet.display == display, displayFence.accepts(packet.display) else { continue }
-                guard try compositor.apply(packet) else { continue }
-                update = Update(generation: generation, display: display, sequence: packet.seq,
-                                image: compositor.image(for: display), needsKeyframe: false)
-            } catch {
+            if let packet = try? DesktopPacket.decode(job.data) {
+                update = applyJPEG(packet, display: display)
+            } else if let packet = try? DesktopH264Packet.decode(job.data) {
+                update = applyH264(packet, display: display)
+            } else {
                 update = Update(generation: generation, display: display, sequence: nil,
                                 image: nil, needsKeyframe: true)
             }
@@ -115,5 +135,61 @@ actor DesktopFrameWorker {
             // compare the token: selection may change while this hop is queued.
             await publish(update)
         }
+    }
+
+    private func applyJPEG(_ packet: DesktopPacket, display: String) -> Update {
+        guard packet.display == display, displayFence.accepts(packet.display) else {
+            return updateWithoutFrame(display: display)
+        }
+        do {
+            guard try compositor.apply(packet) else {
+                return updateWithoutFrame(display: display)
+            }
+            return Update(generation: generation, display: display, sequence: packet.seq,
+                          image: compositor.image(for: display), needsKeyframe: false)
+        } catch {
+            return Update(generation: generation, display: display, sequence: nil,
+                          image: nil, needsKeyframe: true)
+        }
+    }
+
+    private func applyH264(_ packet: DesktopH264Packet, display: String) -> Update {
+        guard !forceJPEG, packet.display == display,
+              displayFence.accepts(packet.display) else {
+            return updateWithoutFrame(display: display)
+        }
+        let outcome = h264Decoder.decode(packet)
+        if let image = outcome.image {
+            do {
+                guard try compositor.applyDecodedFrame(
+                    display: display, sequence: packet.seq, width: packet.width,
+                    height: packet.height, image: image) else {
+                    return updateWithoutFrame(display: display)
+                }
+                return Update(generation: generation, display: display, sequence: packet.seq,
+                              image: compositor.image(for: display), needsKeyframe: false)
+            } catch {
+                return Update(generation: generation, display: display, sequence: nil,
+                              image: nil, needsKeyframe: true)
+            }
+        }
+        if outcome.fallbackToJPEG {
+            // Silent negotiation fallback: keep the last canvas visible, reset
+            // ancestry (JPEG may restart seq) and ask the socket to restart.
+            h264Decoder.disable()
+            forceJPEG = true
+            compositor.beginStream()
+            return Update(generation: generation, display: display, sequence: nil,
+                          image: compositor.image(for: display), needsKeyframe: false,
+                          restartWithJPEG: true)
+        }
+        return Update(generation: generation, display: display, sequence: nil,
+                      image: nil, needsKeyframe: outcome.requestKeyframe)
+    }
+
+    /// Fenced, stale or repeated frame: nothing to publish to the canvas.
+    private func updateWithoutFrame(display: String) -> Update {
+        Update(generation: generation, display: display, sequence: nil,
+               image: nil, needsKeyframe: false)
     }
 }

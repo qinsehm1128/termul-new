@@ -28,6 +28,10 @@ nonisolated struct DesktopInfo: Decodable, Equatable, Sendable {
     let controlEnabled: Bool
     let permissions: Permissions
     let displays: [DesktopDisplay]
+    /// Optional transport codecs advertised by the host. Missing means legacy JPEG.
+    let codecs: [String]?
+
+    var supportedCodecs: [String] { codecs ?? ["jpeg"] }
 }
 
 nonisolated enum DesktopProtocolError: Error, Equatable {

@@ -116,4 +116,22 @@ nonisolated final class DesktopFrameCompositor {
         evictImages()
         return true
     }
+
+    /// H.264 frames are already complete; only ordering and canvas bounds remain.
+    @discardableResult
+    func applyDecodedFrame(display: String, sequence: UInt64, width: Int, height: Int,
+                           image: CGImage) throws -> Bool {
+        if let previous = frames[display]?.sequence, sequence <= previous { return false }
+        guard width > 0, height > 0,
+              width <= DesktopPacket.maxDimension, height <= DesktopPacket.maxDimension,
+              width * height <= DesktopPacket.maxPixels,
+              image.width == width, image.height == height else {
+            throw DesktopProtocolError.invalidPacket
+        }
+        frames[display] = Frame(image: image, sequence: sequence, synchronized: true)
+        if selectedDisplay == nil { selectedDisplay = display }
+        touch(display)
+        evictImages()
+        return true
+    }
 }

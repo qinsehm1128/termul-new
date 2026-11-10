@@ -33,6 +33,8 @@ final class DesktopSocket {
     private(set) var displays: [DesktopDisplay] = []
     private(set) var selectedDisplay: String?
     private(set) var image: CGImage?
+    /// Codec requested by the latest `start` / confirmed by `meta`.
+    private(set) var activeCodec: DesktopCodec = .jpeg
     private(set) var issue: DesktopIssue?
     private(set) var controlEnabled = false
     private(set) var controlActive = false
@@ -53,6 +55,7 @@ final class DesktopSocket {
     @ObservationIgnored private var heldKeys: [String: DesktopModifiers] = [:]
     @ObservationIgnored private var heldButtons: Set<String> = []
     @ObservationIgnored private var authenticated = false
+    @ObservationIgnored private var h264Disabled = false
     @ObservationIgnored private var lastServerError: (code: String, capability: String?)?
     private var visible = false
     private var backgrounded = false
@@ -69,7 +72,9 @@ final class DesktopSocket {
                 await worker.run { [weak self] update in
                     guard let self, self.frameGeneration == update.generation,
                           self.selectedDisplay == update.display, self.authenticated else { return }
-                    if update.needsKeyframe {
+                    if update.restartWithJPEG {
+                        self.restartWithJPEG()
+                    } else if update.needsKeyframe {
                         self.enqueue(["type": "keyframe"])
                     } else if let image = update.image {
                         self.image = image
@@ -333,10 +338,30 @@ final class DesktopSocket {
         guard generation == epoch else { throw CancellationError() }
         authenticated = true
         // Startup joins the same ordered queue as subsequent display switches and inputs.
-        enqueue(["type": "start", "display": activeDisplay, "fps": 3, "maxWidth": 1920, "quality": 80])
-        enqueue(["type": "keyframe"])
+        h264Disabled = false
+        startStream(display: activeDisplay)
         startHeartbeat(socket: socket, epoch: epoch)
         issue = nil
+    }
+
+    /// Sends `start` plus the first keyframe request. H.264 fields are only
+    /// present when the host advertises the codec and this device can decode it;
+    /// otherwise the payload is byte-for-byte the legacy JPEG request.
+    private func startStream(display: String) {
+        let codecs = info?.supportedCodecs ?? ["jpeg"]
+        let h264 = !h264Disabled && codecs.contains(DesktopCodec.h264.rawValue)
+            && DesktopH264Decoder.isHardwareDecodeSupported
+        activeCodec = h264 ? .h264 : .jpeg
+        enqueue(DesktopStartRequest.message(display: display, codecs: codecs, h264Available: h264))
+        enqueue(["type": "keyframe"])
+    }
+
+    /// Decode failed three times in a row: silently resume the same display with
+    /// the legacy JPEG stream instead of surfacing an error.
+    private func restartWithJPEG() {
+        guard authenticated, state != .revoked, let display = selectedDisplay else { return }
+        h264Disabled = true
+        startStream(display: display)
     }
 
     private func startHeartbeat(socket: URLSessionWebSocketTask, epoch: Int) {
@@ -395,6 +420,12 @@ final class DesktopSocket {
             case "meta":
                 if let list = object["displays"], let bytes = try? JSONSerialization.data(withJSONObject: list),
                    let parsed = try? JSONDecoder().decode([DesktopDisplay].self, from: bytes) { displays = parsed }
+                // Old hosts omit codec; their stream is always JPEG.
+                let metaCodec = DesktopCodec(wire: object["codec"] as? String)
+                if metaCodec != activeCodec {
+                    activeCodec = metaCodec
+                    if metaCodec == .jpeg { h264Disabled = true }
+                }
                 if let display = object["display"] as? String {
                     await frameWorker.acknowledge(display, generation: frameGeneration)
                 }
