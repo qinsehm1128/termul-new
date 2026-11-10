@@ -4,8 +4,6 @@ import Foundation
 enum CommandPaletteTarget: Hashable {
     case conversation(String)
     case project(String)
-    case file(String)
-    case quickTerminal(String)
     case tool(ToolDestination)
 }
 
@@ -15,10 +13,13 @@ struct CommandPaletteEntry: Identifiable {
     var id: String { item.id }
 }
 
+/// The palette only offers what has a destination of its own: ACP
+/// conversations, projects, and tools. Files belong to the terminal's file
+/// panel, quick terminals to the terminal landing, and the desktop to the
+/// terminal panel and the screen page.
 enum CommandPaletteMapping {
     static func entries(
-        conversations: [HostConversation], projects: [HostProject],
-        quickTerminals: [QuickTerminalRecordWire], files: [FileSearchResult], query: String
+        conversations: [HostConversation], projects: [HostProject], query: String
     ) -> [CommandPaletteEntry] {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         func matches(_ values: String...) -> Bool {
@@ -39,28 +40,10 @@ enum CommandPaletteMapping {
                 detail: project.path ?? String(localized: "Project"), shortcut: String(localized: "Project")),
                 target: .project(project.id)))
         }
-        for record in quickTerminals {
-            let title = record.title.flatMap { $0.isEmpty ? nil : $0 } ?? record.cwd
-            guard matches(title, record.cwd, record.id) else { continue }
-            entries.append(CommandPaletteEntry(item: .init(
-                id: "quick-terminal:\(record.id)", kind: .command, title: title, detail: record.cwd,
-                shortcut: String(localized: "Details")),
-                target: .quickTerminal(record.id)))
-        }
-        // SearchStore already matched file CONTENT. Do not require the query in
-        // the path, nor show duplicate rows if a host repeats a result path.
-        var seenPaths = Set<String>()
-        if !query.isEmpty {
-            for file in files where seenPaths.insert(file.filePath).inserted {
-                entries.append(CommandPaletteEntry(item: .init(
-                    id: "file:\(file.filePath)", kind: .file, title: URL(fileURLWithPath: file.filePath).lastPathComponent,
-                    detail: file.filePath, shortcut: file.matches.first.map { "L\($0.lineNumber)" } ?? ""),
-                    target: .file(file.filePath)))
-            }
-        }
         for tool in ToolDestination.allCases where matches(tool.title, tool.detail, tool.rawValue) {
             entries.append(CommandPaletteEntry(item: .init(
-                id: "tool:\(tool.rawValue)", kind: .command, title: tool.title, detail: tool.detail, shortcut: ""), target: .tool(tool)))
+                id: "tool:\(tool.rawValue)", kind: .command, title: tool.title, detail: tool.detail, shortcut: ""),
+                target: .tool(tool)))
         }
         return entries
     }

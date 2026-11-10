@@ -9,6 +9,9 @@ struct WorkspaceHubScreen: View {
     var onOpenDrawer: () -> Void = {}
     var onSelectHost: () -> Void = {}
     var onOpenSettings: () -> Void = {}
+    /// The shell wires this to T1's project grouping. When it is absent (the
+    /// old call sites, previews) the hub falls back to selecting the project.
+    var onOpenProject: ((String) -> Void)?
 
     @Environment(ConnectionStore.self) private var connections
     @Environment(\.sePalette) private var palette
@@ -16,19 +19,23 @@ struct WorkspaceHubScreen: View {
     @State private var selectionTask: Task<Void, Never>?
     @State private var selectingProject = false
 
+    private var scope: ToolScope { ToolScopePresentation.scope(for: session) }
+
+    private var scopedProject: HostProject? {
+        guard let id = scope.projectID else { return nil }
+        return session.projects.projects.first(where: { $0.id == id })
+    }
+
     private var snapshot: NocturneWorkspaceSnapshot {
         let git = session.git
         let gitReady = git.state == .loaded || git.state == .empty
         let tasks = session.scheduledTasks
         let tasksReady = (tasks.state == .loaded || tasks.state == .empty) && tasks.projectId == nil
-        let quick = session.quickTerminals
-        let quickReady = quick.state == .loaded || quick.state == .empty
         return NocturneWorkspaceSnapshot(
             gitCwd: gitReady ? git.cwd : nil,
             gitBranch: gitReady ? git.context?.branch : nil,
             gitChangedFileCount: gitReady ? Set(git.status.map(\.path)).count : nil,
             scheduledTaskCount: tasksReady ? tasks.tasks.count : nil,
-            quickTerminalCount: quickReady ? quick.records.count : nil,
             liveAgentSessionCounts: session.liveAgents.countsByProject)
     }
 
@@ -37,17 +44,24 @@ struct WorkspaceHubScreen: View {
         return session.origin.host() ?? String(localized: "Host")
     }
 
+    private var branch: String {
+        guard let project = scopedProject else { return "" }
+        return NocturneWorkspacePresentation.project(project, snapshot: snapshot).branch
+    }
+
     var body: some View {
         NavigationStack(path: $path) {
             WorkspaceHubView(
                 host: hostName,
                 latency: "", // The host protocol does not report latency.
-                project: session.projects.active?.name ?? String(localized: "Project"),
-                branch: session.projects.active.map { NocturneWorkspacePresentation.project($0, snapshot: snapshot).branch } ?? "",
+                project: scope.projectLabel,
+                branch: branch,
                 tools: ToolDestination.hubCases.map { NocturneWorkspacePresentation.tool($0, snapshot: snapshot) },
                 projects: session.projects.projects.map { NocturneWorkspacePresentation.project($0, snapshot: snapshot) },
+                toolScope: scope,
                 onOpenTool: { tool in
-                    if let destination = ToolDestination(rawValue: tool.id) { path.append(destination) }
+                    guard scope.isEnabled, let destination = ToolDestination(rawValue: tool.id) else { return }
+                    path.append(destination)
                 },
                 onOpenProject: openProject,
                 onSelectHost: onSelectHost,
@@ -65,17 +79,16 @@ struct WorkspaceHubScreen: View {
                 toolDestination(destination)
             }
             .toolbar(.hidden, for: .navigationBar)
-            .task {
+            .task(id: scope.cwd) {
                 // These stores retain their own results and cancel stale requests.
                 await session.projects.refresh()
                 guard !Task.isCancelled else { return }
                 await session.liveAgents.refresh()
                 guard !Task.isCancelled else { return }
-                if let cwd = session.workspaceRoot { await session.git.refresh(cwd: cwd) }
+                // Git is read-only and scoped to the terminal's own directory.
+                if let cwd = scope.scopeDetail { await session.git.refresh(cwd: cwd) }
                 guard !Task.isCancelled else { return }
                 await session.scheduledTasks.refresh()
-                guard !Task.isCancelled else { return }
-                await session.quickTerminals.refresh()
             }
             .onDisappear {
                 selectionTask?.cancel()
@@ -93,8 +106,6 @@ struct WorkspaceHubScreen: View {
             GitFeatureView(session: session)
         case .scheduledTasks:
             ScheduledTasksFeatureView(session: session)
-        case .quickTerminals:
-            QuickTerminalsFeatureView(session: session)
         case .search:
             SearchFeatureView(session: session, onOpenFile: {
                 path.removeAll()
@@ -102,12 +113,15 @@ struct WorkspaceHubScreen: View {
             })
         case .screenText:
             ScreenFeatureView(session: session)
-        case .desktop:
-            DesktopFeatureView(session: session)
         }
     }
 
     private func openProject(_ row: WorkspaceProject) {
+        if let onOpenProject {
+            onOpenProject(row.id)
+            return
+        }
+        // Legacy fallback: the old shell has no landing grouping to route to.
         guard !selectingProject,
               let project = session.projects.projects.first(where: { $0.id == row.id }) else { return }
         selectingProject = true

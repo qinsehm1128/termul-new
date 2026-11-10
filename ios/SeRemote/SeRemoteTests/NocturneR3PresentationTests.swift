@@ -10,12 +10,12 @@ struct NocturneR3PresentationTests {
         let empty = NocturneWorkspaceSnapshot()
         #expect(NocturneWorkspacePresentation.tool(.git, snapshot: empty).metricIsLoaded == false)
         #expect(NocturneWorkspacePresentation.tool(.scheduledTasks, snapshot: empty).metricIsLoaded == false)
-        #expect(NocturneWorkspacePresentation.tool(.quickTerminals, snapshot: empty).metricIsLoaded == false)
+        // Quick terminals are no longer a hub tile, so they report no metric.
+        #expect(ToolDestination.allCases.count == 4)
 
-        let loaded = NocturneWorkspaceSnapshot(gitChangedFileCount: 0, scheduledTaskCount: 4, quickTerminalCount: 2)
+        let loaded = NocturneWorkspaceSnapshot(gitChangedFileCount: 0, scheduledTaskCount: 4)
         #expect(NocturneWorkspacePresentation.tool(.git, snapshot: loaded).metricIsLoaded)
         #expect(NocturneWorkspacePresentation.tool(.scheduledTasks, snapshot: loaded).metricIsLoaded)
-        #expect(NocturneWorkspacePresentation.tool(.quickTerminals, snapshot: loaded).metricIsLoaded)
     }
 
     @Test func genuineZeroIsStillAHostMetric() {

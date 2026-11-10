@@ -6,7 +6,6 @@ struct NocturneWorkspaceSnapshot: Equatable, Sendable {
     var gitBranch: String?
     var gitChangedFileCount: Int?
     var scheduledTaskCount: Int?
-    var quickTerminalCount: Int?
     /// Host-detected agent processes per project id. Absent means the store has
     /// not refreshed yet, never zero.
     var liveAgentSessionCounts: [String: Int] = [:]
@@ -26,22 +25,13 @@ enum NocturneWorkspacePresentation {
             detail = snapshot.scheduledTaskCount.map { String(localized: "\($0) tasks") } ?? destination.detail
             note = String(localized: "Host schedules")
             metricIsLoaded = snapshot.scheduledTaskCount != nil
-        case .quickTerminals:
-            detail = snapshot.quickTerminalCount.map { String(localized: "\($0) terminals") } ?? destination.detail
-            note = String(localized: "Persistent host terminals")
-            metricIsLoaded = snapshot.quickTerminalCount != nil
         case .search:
             detail = destination.detail
             note = String(localized: "Read only")
         case .screenText:
             detail = destination.detail
-            // The hub snapshot carries no screen or desktop state. An empty note
-            // hides the line entirely instead of claiming "view only".
-            note = ""
-        case .desktop:
-            detail = destination.detail
-            // Control permission is decided by the host once the sheet connects;
-            // nothing here can truthfully summarize it.
+            // The hub snapshot carries no screen state. An empty note hides the
+            // line entirely instead of claiming "view only".
             note = ""
         }
         return WorkspaceTool(id: destination.rawValue, title: destination.title,

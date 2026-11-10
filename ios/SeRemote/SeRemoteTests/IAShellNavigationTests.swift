@@ -9,10 +9,11 @@ private func L(_ key: String) -> String {
 
 @Suite("IA shell navigation")
 struct IAShellNavigationTests {
-    @Test func primarySectionsAreConversationsTerminalsTools() {
-        #expect(SidebarDestination.primary.map(\.rawValue) == ["conversations", "terminals", "tools"])
-        #expect(SidebarDestination.primary.map(\.title) == [L("Conversations"), L("Terminals"), L("Tools")])
-        #expect(SidebarDestination.primary.map(\.icon.rawValue) == ["chat", "terminal", "folder"])
+    @Test func primarySectionsAreTerminalsConversationsTools() {
+        // Terminal first: connecting lands on the terminal surface.
+        #expect(SidebarDestination.primary.map(\.rawValue) == ["terminals", "conversations", "tools"])
+        #expect(SidebarDestination.primary.map(\.title) == [L("Terminals"), L("Conversations"), L("Tools")])
+        #expect(SidebarDestination.primary.map(\.icon.rawValue) == ["terminal", "chat", "folder"])
         #expect(SidebarDestination.settings.title == L("Settings"))
         #expect(!SidebarDestination.primary.contains(.settings))
     }
@@ -22,19 +23,17 @@ struct IAShellNavigationTests {
         // 更改 / 定时任务 / 搜索 / 屏幕, in that order.
         #expect(hub.map(\.rawValue) == ["git", "scheduledTasks", "search", "screenText"])
         #expect(hub.count == 4)
-        // Quick terminals live in 终端, and the desktop now lives under 屏幕.
-        #expect(!hub.contains(.quickTerminals))
-        #expect(!hub.contains(.desktop))
+        // The grid is the whole destination list now.
+        #expect(hub == ToolDestination.allCases)
         #expect(hub.map(\.title).allSatisfy { !$0.isEmpty })
-        // Both remain addressable for the palette and for the screen segments.
-        #expect(ToolDestination.allCases.contains(.quickTerminals))
-        #expect(ToolDestination.allCases.contains(.desktop))
+        // Quick terminals merged into 终端 and the desktop is reached from the
+        // screen page and the terminal panel, so neither is a tool.
+        #expect(!hub.map(\.rawValue).contains("quickTerminals"))
+        #expect(!hub.map(\.rawValue).contains("desktop"))
     }
 
     @Test func toolHubUsesNocturneGlyphs() {
         #expect(ToolDestination.hubCases.map(\.icon) == [.git, .clock, .search, .textview])
-        #expect(ToolDestination.desktop.icon == .desktop)
-        #expect(ToolDestination.quickTerminals.icon == .terminal)
     }
 
     @Test func screenPageSegmentsAreSnapshotThenDesktop() {

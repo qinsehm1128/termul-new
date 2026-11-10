@@ -12,8 +12,9 @@ struct NocturneWorkspacePresentationTests {
             #expect(tile.title == destination.title)
             #expect(tile.detail == destination.detail)
             #expect(tile.icon == destination.icon)
-            // Only screens the host cannot describe may leave the note blank.
-            #expect(tile.note.isEmpty == (destination == .screenText || destination == .desktop))
+            // Only the screen tool may leave the note blank: the hub snapshot
+            // carries no screen state to summarize.
+            #expect(tile.note.isEmpty == (destination == .screenText))
         }
     }
 
@@ -27,10 +28,9 @@ struct NocturneWorkspacePresentationTests {
     }
 
     @Test func loadedCountsIncludeGenuineZero() {
-        let snapshot = NocturneWorkspaceSnapshot(gitChangedFileCount: 0, scheduledTaskCount: 4, quickTerminalCount: 2)
+        let snapshot = NocturneWorkspaceSnapshot(gitChangedFileCount: 0, scheduledTaskCount: 4)
         #expect(NocturneWorkspacePresentation.tool(.git, snapshot: snapshot).detail == String(localized: "\(0) changed files"))
         #expect(NocturneWorkspacePresentation.tool(.scheduledTasks, snapshot: snapshot).detail == String(localized: "\(4) tasks"))
-        #expect(NocturneWorkspacePresentation.tool(.quickTerminals, snapshot: snapshot).detail == String(localized: "\(2) terminals"))
     }
 
     @Test func projectUsesReportedNamePathAndLiveCount() throws {

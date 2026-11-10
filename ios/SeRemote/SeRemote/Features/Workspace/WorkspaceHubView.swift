@@ -58,6 +58,10 @@ struct WorkspaceHubView: View {
     var branch: String
     var tools: [WorkspaceTool]
     var projects: [WorkspaceProject]
+    /// Terminal scope. Nil keeps the hub usable for previews and for shells
+    /// that have not wired a terminal yet; the connected hub always passes the
+    /// live scope, which disables the tiles when no terminal is open.
+    var toolScope: ToolScope? = nil
 
     var onOpenTool: (WorkspaceTool) -> Void = { _ in }
     var onOpenProject: (WorkspaceProject) -> Void = { _ in }
@@ -153,10 +157,17 @@ struct WorkspaceHubView: View {
 
     private var title: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text("Tools")
-                .font(SeNocturneType.font(33, weight: .semibold))
-                .tracking(-1.4)
-                .foregroundStyle(palette.ink)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("Tools")
+                    .font(SeNocturneType.font(33, weight: .semibold))
+                    .tracking(-1.4)
+                    .foregroundStyle(palette.ink)
+                if let toolScope, !toolScope.isEnabled {
+                    SeInfoTip(text: toolScope.disabledReason,
+                              accessibilityLabel: String(localized: "Tools unavailable"))
+                }
+                Spacer(minLength: 0)
+            }
             Text(verbatim: lede)
                 .font(SeNocturneType.font(12, weight: .regular))
                 .foregroundStyle(palette.inkSecondary)
@@ -164,17 +175,26 @@ struct WorkspaceHubView: View {
         }
     }
 
-    /// Real scope only: project name, branch, and a changed-file count that the
-    /// host actually reported for this workspace.
+    /// Real scope only: the terminal's project and directory, the branch, and a
+    /// changed-file count the host actually reported for this scope.
     private var lede: String {
         var parts: [String] = []
-        if !project.isEmpty { parts.append(project) }
+        if let toolScope, toolScope.isEnabled {
+            parts.append(toolScope.projectLabel)
+            if let detail = toolScope.scopeDetail, detail != toolScope.projectLabel {
+                parts.append(detail)
+            }
+        } else if !project.isEmpty {
+            parts.append(project)
+        }
         if !branch.isEmpty { parts.append(branch) }
         if let git = tools.first(where: { $0.id == ToolDestination.git.rawValue }), git.metricIsLoaded {
             parts.append(git.detail)
         }
         return parts.joined(separator: " · ")
     }
+
+    private var tilesEnabled: Bool { toolScope?.isEnabled ?? true }
 
     // MARK: Section switch
 
@@ -239,7 +259,10 @@ struct WorkspaceHubView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(NocturnePressStyle(reduceMotion: reduceMotion))
+        .disabled(!tilesEnabled)
+        .opacity(tilesEnabled ? 1 : 0.55)
         .accessibilityElement(children: .combine)
+        .accessibilityHint(tilesEnabled ? "" : (toolScope?.disabledReason ?? ""))
     }
 
     private func shortTitle(_ tool: WorkspaceTool) -> String {

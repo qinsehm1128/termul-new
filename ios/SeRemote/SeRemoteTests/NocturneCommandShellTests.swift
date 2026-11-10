@@ -10,38 +10,46 @@ struct NocturneCommandShellTests {
         let project: HostProject = try decode("""
         {"id":"p","name":"Project","path":"/project"}
         """)
-        let quick: QuickTerminalRecordWire = try decode("""
-        {"schemaVersion":1,"id":"q","target":{"kind":"workspace"},"cwd":"/quick","createdAtUtc":"now","updatedAtUtc":"now","origin":"created"}
-        """)
-        let entries = CommandPaletteMapping.entries(conversations: [conversation], projects: [project], quickTerminals: [quick], files: [], query: "")
-        #expect(Array(entries.prefix(3)).map(\.id) == ["conversation:c", "project:p", "quick-terminal:q"])
-        #expect(Array(entries.prefix(3)).map(\.target) == [.conversation("c"), .project("p"), .quickTerminal("q")])
+        let entries = CommandPaletteMapping.entries(conversations: [conversation], projects: [project], query: "")
+        // Conversations and projects come first; the four tools always follow.
+        #expect(entries.count == 2 + ToolDestination.allCases.count)
+        #expect(Array(entries.prefix(2)).map(\.id) == ["conversation:c", "project:p"])
+        #expect(Array(entries.prefix(2)).map(\.target) == [.conversation("c"), .project("p")])
+        #expect(entries.dropFirst(2).map(\.target) == ToolDestination.allCases.map { .tool($0) })
         #expect(entries[0].item.shortcut == conversation.statusLabel)
-        #expect(entries[2].item.title == "/quick")
+        #expect(entries[1].item.detail == "/project")
+        #expect(entries[1].item.shortcut == String(localized: "Project"))
     }
 
-    @Test func contentSearchHitKeepsPathAndLineEvenWhenPathDoesNotMatchQuery() {
-        let files: [FileSearchResult] = [
-            .init(filePath: "/work/source.swift", matches: [.init(lineNumber: 12, lineText: "needle")]),
-            .init(filePath: "/work/source.swift", matches: []),
-            .init(filePath: "/work/empty.swift", matches: [])
-        ]
-        let entries = CommandPaletteMapping.entries(conversations: [], projects: [], quickTerminals: [], files: files, query: "needle")
-        #expect(entries.map(\.target) == [.file("/work/source.swift"), .file("/work/empty.swift")])
-        #expect(entries[0].item.title == "source.swift")
-        #expect(entries[0].item.shortcut == "L12")
-        #expect(entries[1].item.shortcut.isEmpty)
-        #expect(CommandPaletteMapping.entries(conversations: [], projects: [], quickTerminals: [], files: files, query: "").allSatisfy { $0.item.kind != .file })
+    @Test func queryMatchesTheConversationPathAndToolDetail() throws {
+        let conversation: HostConversation = try decode("""
+        {"conversationId":"c","workspaceCwd":"/work/needle","lifecycleState":"ready","title":"Chat"}
+        """)
+        let byPath = CommandPaletteMapping.entries(
+            conversations: [conversation], projects: [], query: "needle")
+        #expect(byPath.map(\.target) == [.conversation("c")])
+        // Tool details stay searchable: the palette still reaches them by what
+        // they do, not only by their title. The detail is localized, so query
+        // with the same value the mapping sees.
+        let byDetail = CommandPaletteMapping.entries(
+            conversations: [], projects: [], query: ToolDestination.git.detail)
+        #expect(byDetail.map(\.target) == [.tool(.git)])
+        // No palette row can be a file: file search belongs to the terminal's
+        // file panel.
+        #expect(byPath.allSatisfy { $0.item.kind != .file })
+        #expect(byDetail.allSatisfy { $0.item.kind != .file })
     }
 
     @Test func allToolsHaveDistinctActualDestinations() {
-        let entries = CommandPaletteMapping.entries(conversations: [], projects: [], quickTerminals: [], files: [], query: "")
+        let entries = CommandPaletteMapping.entries(conversations: [], projects: [], query: "")
         #expect(entries.count == ToolDestination.allCases.count)
         #expect(Set(entries.map(\.id)).count == entries.count)
         #expect(entries.map(\.target) == ToolDestination.allCases.map { .tool($0) })
-        // 桌面 left the 工具 grid but must stay reachable from the palette.
-        #expect(entries.contains { $0.target == .tool(.desktop) })
-        #expect(entries.contains { $0.target == .tool(.quickTerminals) })
+        #expect(entries.map(\.id) == ["tool:git", "tool:scheduledTasks", "tool:search", "tool:screenText"])
+        #expect(entries.allSatisfy { $0.item.kind == .command })
+        // The merged quick-terminal and desktop destinations are gone.
+        #expect(!entries.map(\.id).contains("tool:quickTerminals"))
+        #expect(!entries.map(\.id).contains("tool:desktop"))
     }
 
     @Test func archivedDeletedAndNonmatchingEntriesAreExcluded() throws {
@@ -52,7 +60,7 @@ struct NocturneCommandShellTests {
         let projects: [HostProject] = try decode("""
         [{"id":"p","name":"Keep","isArchived":true},{"id":"q","name":"Other"}]
         """)
-        let entries = CommandPaletteMapping.entries(conversations: conversations, projects: projects, quickTerminals: [], files: [], query: "  KEEP  ")
+        let entries = CommandPaletteMapping.entries(conversations: conversations, projects: projects, query: "  KEEP  ")
         #expect(entries.map(\.target) == [.conversation("a")])
     }
 
