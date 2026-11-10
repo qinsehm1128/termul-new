@@ -503,6 +503,23 @@ pub fn shutdown() {
 extern "C" fn cleanup_at_exit() {
     shutdown();
 }
+/// `libc` is a Unix-only dependency; on Windows the always-linked C runtime
+/// exports the same `atexit`.
+fn register_exit_cleanup() {
+    #[cfg(unix)]
+    unsafe {
+        libc::atexit(cleanup_at_exit);
+    }
+    #[cfg(windows)]
+    {
+        extern "C" {
+            fn atexit(callback: extern "C" fn()) -> i32;
+        }
+        unsafe {
+            atexit(cleanup_at_exit);
+        }
+    }
+}
 fn bind_loopback() -> std::io::Result<std::net::TcpListener> {
     std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
 }
@@ -541,9 +558,7 @@ pub fn start() -> Result<(), String> {
             ]));
             se_pty::manager::configure_agent_hook_environment(receiver_environment());
             let _ = ENDPOINT_FILE.set(path);
-            unsafe {
-                libc::atexit(cleanup_at_exit);
-            }
+            register_exit_cleanup();
             std::thread::Builder::new()
                 .name("agent-hook-receiver".into())
                 .spawn(move || {
