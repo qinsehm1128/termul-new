@@ -13,6 +13,7 @@ struct TerminalAgentChatContainer<Terminal: View>: View {
     private let canInput: Bool
     private let desktopSupported: Bool?
     private let dismissTerminalKeyboard: () -> Void
+    private let writeTerminal: (String) async -> Void
     private let terminal: Terminal
 
     init(
@@ -22,6 +23,7 @@ struct TerminalAgentChatContainer<Terminal: View>: View {
         canInput: Bool,
         desktopSupported: Bool? = nil,
         dismissTerminalKeyboard: @escaping () -> Void,
+        writeTerminal: @escaping (String) async -> Void,
         @ViewBuilder terminal: () -> Terminal
     ) {
         _store = State(initialValue: AgentChatStore(
@@ -35,6 +37,7 @@ struct TerminalAgentChatContainer<Terminal: View>: View {
         self.canInput = canInput
         self.desktopSupported = desktopSupported
         self.dismissTerminalKeyboard = dismissTerminalKeyboard
+        self.writeTerminal = writeTerminal
         self.terminal = terminal()
     }
 
@@ -98,11 +101,19 @@ struct TerminalAgentChatContainer<Terminal: View>: View {
                 hostName: String(localized: "Desktop"),
                 sender: DesktopShotSender(
                     http: http,
+                    writeTerminal: { text in
+                        await writeTerminal(text)
+                        showConversation = false
+                    },
                     draftAgentChat: { terminalID, text in
                         AgentChatDraftInbox.offer(text, terminalID: terminalID)
                     }
                 ),
-                target: .agentChat(id: terminalID)
+                target: DesktopShotTargetResolver.terminalWorkbench(
+                    terminalID: terminalID,
+                    conversationShowing: showConversation,
+                    conversationReady: store.isReady
+                )
             )
         }
         .onReceive(NotificationCenter.default.publisher(for: .agentChatDraft)) { note in

@@ -157,6 +157,18 @@ struct DesktopShotTargetTests {
         #expect(target == .chat(conversationID: "conv-1"))
     }
 
+    @Test func terminalWorkbenchUsesTheConversationOnlyWhenShowingAndReady() {
+        #expect(DesktopShotTargetResolver.terminalWorkbench(
+            terminalID: "t", conversationShowing: true, conversationReady: true
+        ) == .agentChat(id: "t"))
+        #expect(DesktopShotTargetResolver.terminalWorkbench(
+            terminalID: "t", conversationShowing: true, conversationReady: false
+        ) == .terminal(id: "t"))
+        #expect(DesktopShotTargetResolver.terminalWorkbench(
+            terminalID: "t", conversationShowing: false, conversationReady: true
+        ) == .terminal(id: "t"))
+    }
+
     @Test func terminalTabSendsToTheTerminalEvenWithAConversation() {
         let target = DesktopShotTargetResolver.resolve(
             activeTerminalID: "term-1",

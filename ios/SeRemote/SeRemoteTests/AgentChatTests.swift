@@ -182,7 +182,8 @@ struct AgentChatTests {
         let counter = AgentChatMountCounter()
         let container = TerminalAgentChatContainer(
             terminalID: terminalID, http: HostHTTP(origin: origin, credentials: HostCredentials(accessURL: origin, bearer: "test")),
-            canView: false, canInput: false, dismissTerminalKeyboard: { counter.presentationChanges += 1 }
+            canView: false, canInput: false, dismissTerminalKeyboard: { counter.presentationChanges += 1 },
+            writeTerminal: { _ in }
         ) {
             AgentChatMountedTerminal(counter: counter)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

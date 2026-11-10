@@ -29,7 +29,8 @@ struct TerminalWorkspaceView: View {
                     terminalID: id, http: session.http,
                     canView: deviceLink?.allows("view") ?? true, canInput: allowsInput,
                     desktopSupported: session.desktopSupported,
-                    dismissTerminalKeyboard: { session.dismissTerminalKeyboard() }
+                    dismissTerminalKeyboard: { session.dismissTerminalKeyboard() },
+                    writeTerminal: { text in await session.terminals.write(text) }
                 ) {
                     terminalCanvas(id: id)
                     if allowsInput {

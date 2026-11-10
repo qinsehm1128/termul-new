@@ -19,6 +19,19 @@ nonisolated enum DesktopShotTarget: Equatable, Sendable {
 /// Resolves the send target from the workspace surface. The sheet entries pass
 /// explicit targets, but the mapping is kept pure and testable.
 nonisolated enum DesktopShotTargetResolver {
+    /// The terminal workbench's own desktop button: the agent conversation
+    /// draft only when that view is showing and can accept input; otherwise
+    /// the path is typed into the PTY the user is looking at.
+    static func terminalWorkbench(
+        terminalID: String,
+        conversationShowing: Bool,
+        conversationReady: Bool
+    ) -> DesktopShotTarget {
+        conversationShowing && conversationReady
+            ? .agentChat(id: terminalID)
+            : .terminal(id: terminalID)
+    }
+
     static func resolve(
         activeTerminalID: String?,
         activeConversationID: String?,
@@ -63,6 +76,9 @@ struct DesktopShotSender {
     var chat: ChatStore? = nil
     var terminals: TerminalStore? = nil
     var conversation: HostConversation? = nil
+    /// Writes straight to the PTY the caller already shows (workbench store or
+    /// a quick console's own viewer). Preferred over `terminals` when set.
+    var writeTerminal: ((String) async -> Void)? = nil
     /// Injected by `TerminalAgentChatContainer` to place the staged path into
     /// the agent-chat composer draft instead of the PTY.
     var draftAgentChat: ((String, String) -> Void)?
@@ -79,6 +95,11 @@ struct DesktopShotSender {
                 throw DesktopShotSendError.chat(failure)
             }
         case let .terminal(id):
+            if let writeTerminal {
+                let staged = try await http.stageAttachment(shot)
+                await writeTerminal(DesktopShellPath.stagedArgument(staged.path))
+                return
+            }
             guard let terminals else { throw DesktopShotSendError.noTerminal }
             let staged = try await http.stageAttachment(shot)
             await terminals.open(id)

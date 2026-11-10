@@ -69,7 +69,8 @@ struct QuickTerminalConsoleView: View {
                 terminalID: terminalId, http: session.http,
                 canView: deviceLink?.allows("view") ?? true, canInput: allowsInput,
                 desktopSupported: session.desktopSupported,
-                dismissTerminalKeyboard: { session.dismissTerminalKeyboard() }
+                dismissTerminalKeyboard: { session.dismissTerminalKeyboard() },
+                writeTerminal: { text in viewer?.send(text) }
             ) {
                 terminalBody
             }
