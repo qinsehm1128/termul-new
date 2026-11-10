@@ -79,8 +79,8 @@ struct DesktopShotSender {
     /// Writes straight to the PTY the caller already shows (workbench store or
     /// a quick console's own viewer). Preferred over `terminals` when set.
     var writeTerminal: ((String) async -> Void)? = nil
-    /// Injected by `TerminalAgentChatContainer` to place the staged path into
-    /// the agent-chat composer draft instead of the PTY.
+    /// Injected by the workbench to place the staged path into the agent-chat
+    /// composer draft instead of the PTY.
     var draftAgentChat: ((String, String) -> Void)?
 
     func send(_ shot: ShotAttachment, to target: DesktopShotTarget) async throws {

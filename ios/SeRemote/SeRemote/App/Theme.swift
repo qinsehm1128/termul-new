@@ -54,30 +54,6 @@ enum HostRowStatus: Equatable {
     }
 }
 
-enum WorkspaceTab: String, CaseIterable, Identifiable {
-    case chat
-    case terminal
-    case files
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .chat: String(localized: "Chat")
-        case .terminal: String(localized: "Terminal")
-        case .files: String(localized: "Files")
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .chat: "bubble.left.and.bubble.right"
-        case .terminal: "apple.terminal"
-        case .files: "folder"
-        }
-    }
-}
-
 extension Color {
     init(light: Color, dark: Color) {
         // UIKit resolves dynamic providers on arbitrary threads (SwiftUI's

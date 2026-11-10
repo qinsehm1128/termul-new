@@ -16,7 +16,12 @@ struct WorkspaceView: View {
         self.store = store
         self.settings = settings
         self.link = link
-        _session = State(initialValue: WorkspaceSession(accessURL: link.accessURL, bearer: link.pairingToken, settings: settings))
+        _session = State(initialValue: WorkspaceSession(
+            accessURL: link.accessURL,
+            bearer: link.pairingToken,
+            settings: settings,
+            hostID: link.stableHostID
+        ))
     }
 
     var body: some View {

@@ -431,19 +431,9 @@ extension SeIcon {
     /// Selection controls (`circle`, `largecircle.fill.circle`) are intentionally
     /// absent — they are state, not iconography.
     ///
-    /// Call sites still to migrate (owned by other lanes, not edited here):
-    /// - tools IA: `Features/Tools/ToolsView.swift:35`, `Features/Terminals/TerminalsHubScreen.swift:194,216`,
-    ///   `Features/Terminals/TerminalsHubQuickSection.swift:135,169,200`,
-    ///   `Features/Workspace/WorkspaceHubView.swift:105,291,298`, `Features/Search/SearchFeatureView.swift:82,97`,
-    ///   `Features/ScreenText/ScreenTextFeatureView.swift:113,138,147`, `Views/SessionScreen.swift:155,194`
-    /// - workbench chrome: `Features/Workspace/NocturneToolChrome.swift:72`, `Views/RootView.swift:37,59,64`,
-    ///   `Files/WorkspaceFileListView.swift:77,92,139`, `Files/FileBrowserView.swift:139`
-    /// - desktop sheet + viewfinder: `Features/Desktop/DesktopFeatureView.swift:233,253`,
-    ///   `Features/QuickTerminals/QuickTerminalConsoleView.swift:147`
-    /// - design system internals: `App/DesignSystem/SeNocturneKit.swift:901` (`info.circle` → `.info`),
-    ///   `Chat/ChatTimelineRows.swift:309`, `Chat/ChatView.swift:238,485,502`,
-    ///   `Features/AgentChat/AgentChatView.swift:161,181`, `Terminal/TerminalInputDock.swift:252`,
-    ///   `Terminal/TerminalTabStrip.swift:58`, `Features/QuickTerminals/QuickTerminalsFeatureView.swift:188,222,252`
+    /// Remaining `systemImage:` call sites are state controls and tool pages
+    /// that predate the glyph table; each one keeps its SF Symbol rather than
+    /// borrowing a metaphor the Nocturne set does not draw yet.
     init?(systemName: String) {
         guard let icon = Self.systemNameMap[systemName] else { return nil }
         self = icon

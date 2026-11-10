@@ -845,8 +845,8 @@ struct SeThemePick: View {
 
 struct SeBottomBar: View {
     let selection: SidebarDestination
-    var onConversations: () -> Void
     var onTerminals: () -> Void
+    var onConversations: () -> Void
     var onTools: () -> Void
 
     @Environment(\.sePalette) private var palette
@@ -854,8 +854,8 @@ struct SeBottomBar: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            tab(icon: .chat, title: String(localized: "Conversations"), on: selection == .conversations, action: onConversations)
             tab(icon: .terminal, title: String(localized: "Terminals"), on: selection == .terminals, action: onTerminals)
+            tab(icon: .chat, title: String(localized: "Conversations"), on: selection == .conversations, action: onConversations)
             tab(icon: .folder, title: String(localized: "Tools"), on: selection == .tools, action: onTools)
         }
         .padding(.horizontal, 14)

@@ -111,12 +111,7 @@ nonisolated struct TerminalPanelPresentation: Equatable, Sendable {
             Tab(id: item.id, title: item.title, index: index)
         }
 
-        let dimensions: String
-        if let cols, let rows, cols > 1, rows > 1 {
-            dimensions = "\(cols) × \(rows)"
-        } else {
-            dimensions = "—"
-        }
+        let dimensions = TerminalPanelPresentation.dimensions(cols: cols, rows: rows) ?? "—"
 
         let pty = PTYRow(
             status: dimensions == "—" ? String(localized: "Connecting…") : String(localized: "Ready"),
@@ -150,5 +145,14 @@ nonisolated struct TerminalPanelPresentation: Equatable, Sendable {
             close: isStandalone ? .closeShell : .disconnect,
             isStandalone: isStandalone
         )
+    }
+}
+
+/// Display values are host snapshots; missing dimensions are never fabricated.
+extension TerminalPanelPresentation {
+
+    nonisolated static func dimensions(cols: Int?, rows: Int?) -> String? {
+        guard let cols, let rows, cols > 0, rows > 0 else { return nil }
+        return "\(cols) × \(rows)"
     }
 }

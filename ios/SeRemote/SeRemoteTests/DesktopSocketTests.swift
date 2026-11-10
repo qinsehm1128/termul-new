@@ -129,7 +129,7 @@ struct DesktopSocketTests {
 
     @Test func workspaceRevocationLatchesDesktopWithoutChangingTerminalGeometryOrPty() async {
         let session = WorkspaceSession(accessURL: URL(string: "http://localhost:53239")!, bearer: "fixture")
-        session.workspaceTab = .terminal
+        session.terminalSurfaceVisible = true
         session.terminals.geometryActive = true
         let pty = LiveTerminal(id: "desktop-existing-pty", claim: "existing-claim", lastSeq: 17,
                                cols: 83, rows: 25, title: "running", owned: true)
@@ -143,7 +143,7 @@ struct DesktopSocketTests {
         session.handleScene(isBackground: false)
         await session.desktopSocket.open()
         #expect(session.desktopSocket.state == .revoked)
-        #expect(session.workspaceTab == .terminal)
+        #expect(session.terminalSurfaceVisible)
         #expect(session.terminals.geometryActive)
         #expect(session.terminals.terminals == [pty])
         #expect(session.terminals.activeId == pty.id)

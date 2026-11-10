@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct SeRemoteApp: App {
+    @UIApplicationDelegateAdaptor(SeAppDelegate.self) private var appDelegate
     @State private var store = ConnectionStore()
     @State private var settings = AppSettings()
     @StateObject private var shortcutAvailability = ShortcutAvailability.shared

@@ -28,11 +28,20 @@ enum SeNotifications {
         }
     }
 
-    static func post(title: String, body: String) async {
+    static func post(
+        title: String,
+        body: String,
+        hostID: String? = nil,
+        terminalID: String? = nil
+    ) async {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.sound = .default
+        var info: [String: String] = [:]
+        if let hostID, !hostID.isEmpty { info[SeNotificationKey.hostID] = hostID }
+        if let terminalID, !terminalID.isEmpty { info[SeNotificationKey.terminalID] = terminalID }
+        content.userInfo = info
         let request = UNNotificationRequest(
             identifier: "se.event.\(UUID().uuidString)",
             content: content,

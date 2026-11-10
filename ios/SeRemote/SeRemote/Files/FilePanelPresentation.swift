@@ -118,3 +118,24 @@ nonisolated enum FilePanelPresentation {
         }
     }
 }
+
+// MARK: - Listing values
+
+/// Pure mappings of host listing metadata. Do not invent branch, age, size or
+/// preview text.
+extension FilePanelPresentation {
+    nonisolated static func byteCount(_ size: Int?) -> String? {
+        guard let size, size >= 0 else { return nil }
+        return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
+    }
+
+    nonisolated static func modificationDate(_ timestamp: Double?) -> Date? {
+        guard let timestamp, timestamp.isFinite, timestamp > 0 else { return nil }
+        return Date(timeIntervalSince1970: timestamp / 1_000)
+    }
+
+    nonisolated static func supportsTextPreview(encoding: String?) -> Bool {
+        guard let encoding else { return true }
+        return ["utf-8", "utf8"].contains(encoding.lowercased())
+    }
+}

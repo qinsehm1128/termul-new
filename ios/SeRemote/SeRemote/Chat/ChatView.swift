@@ -86,11 +86,6 @@ struct ChatView: View {
         .onChange(of: session.chat.permissions, initial: true) { _, _ in
             updatePermissions()
         }
-        .onChange(of: session.workspaceTab) { _, tab in
-            if tab != .chat {
-                composerFocused = false
-            }
-        }
         .onChange(of: composerFocused) { _, focused in
             session.chat.composerActive = focused
         }

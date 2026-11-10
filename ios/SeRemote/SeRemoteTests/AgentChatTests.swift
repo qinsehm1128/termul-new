@@ -172,41 +172,6 @@ struct AgentChatTests {
         }
     }
 
-    @Test("Toggle retains the same mounted terminal view without teardown")
-    func stableTerminalMountContract() async throws {
-        let origin = URL(string: "http://127.0.0.1:1")!
-        let terminalID = "mount-test-\(UUID().uuidString)"
-        let key = "agent-chat.presentation.\(origin.absoluteString).\(terminalID)"
-        UserDefaults.standard.set(false, forKey: key)
-        defer { UserDefaults.standard.removeObject(forKey: key) }
-        let counter = AgentChatMountCounter()
-        let container = TerminalAgentChatContainer(
-            terminalID: terminalID, http: HostHTTP(origin: origin, credentials: HostCredentials(accessURL: origin, bearer: "test")),
-            canView: false, canInput: false, dismissTerminalKeyboard: { counter.presentationChanges += 1 },
-            writeTerminal: { _ in }
-        ) {
-            AgentChatMountedTerminal(counter: counter)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        let scene = try #require(
-            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
-        )
-        let window = UIWindow(windowScene: scene)
-        window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
-        window.rootViewController = UIHostingController(rootView: container)
-        window.isHidden = false
-        defer { window.isHidden = true; window.rootViewController = nil }
-        try await Task.sleep(for: .milliseconds(100))
-        #expect(counter.mounts == 1)
-        for selection in [true, false, true, false] {
-            UserDefaults.standard.set(selection, forKey: key)
-            try await Task.sleep(for: .milliseconds(60))
-        }
-        #expect(counter.mounts == 1)
-        #expect(counter.unmounts == 0)
-        #expect(counter.presentationChanges == 4)
-    }
-
     @Test("Unknown delivery states never claim successful delivery")
     func deliveryStates() {
         for status in ["queued", "pending", "delivered", "unconfirmed", "future_state"] {
@@ -692,27 +657,6 @@ struct AgentChatTests {
         await store.refresh()
         #expect(store.messages.isEmpty)
         #expect(!store.isReady)
-    }
-}
-
-@MainActor
-private final class AgentChatMountCounter {
-    var mounts = 0
-    var unmounts = 0
-    var presentationChanges = 0
-}
-
-private struct AgentChatMountedTerminal: UIViewRepresentable {
-    let counter: AgentChatMountCounter
-
-    func makeCoordinator() -> AgentChatMountCounter { counter }
-    func makeUIView(context: Context) -> UIView {
-        counter.mounts += 1
-        return UIView()
-    }
-    func updateUIView(_ uiView: UIView, context: Context) {}
-    static func dismantleUIView(_ uiView: UIView, coordinator: AgentChatMountCounter) {
-        coordinator.unmounts += 1
     }
 }
 

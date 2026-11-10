@@ -77,6 +77,12 @@ struct RootView: View {
             guard let origin = note.object as? String else { return }
             store.revoke(origin: origin)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .seOpenTerminal)) { note in
+            store.openNotificationDestination(
+                hostID: note.userInfo?[SeNotificationKey.hostID] as? String,
+                terminalID: note.userInfo?[SeNotificationKey.terminalID] as? String
+            )
+        }
         .onReceive(NotificationCenter.default.publisher(for: .hostCapabilityDenied)) { note in
             guard let capability = note.object as? String,
                   note.userInfo?["origin"] as? String == store.activeLink?.originURL.absoluteString else { return }

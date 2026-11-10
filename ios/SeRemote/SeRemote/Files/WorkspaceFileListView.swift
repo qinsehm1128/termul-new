@@ -123,10 +123,10 @@ struct WorkspaceFileListView: View {
                     HStack(spacing: 6) {
                         if entry.isDirectory {
                             Text("Folder")
-                        } else if let size = SessionFilesPresentation.byteCount(entry.size) {
+                        } else if let size = FilePanelPresentation.byteCount(entry.size) {
                             Text(size)
                         }
-                        if let modified = SessionFilesPresentation.modificationDate(entry.modifiedAt) {
+                        if let modified = FilePanelPresentation.modificationDate(entry.modifiedAt) {
                             Text("Modified")
                             Text(modified, style: .relative)
                         }

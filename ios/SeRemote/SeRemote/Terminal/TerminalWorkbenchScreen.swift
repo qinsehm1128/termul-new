@@ -12,6 +12,9 @@ struct TerminalWorkbenchScreen: View {
     var isActive = true
     var onBack: () -> Void
     var onExternalAction: (TerminalPanelAction) -> Void
+    /// A tool screen asked for a full-screen file preview. The shell owns the
+    /// cover, so the workbench hands the path out after the tool cover closes.
+    var onOpenPreview: ((String) -> Void)? = nil
 
     @Environment(\.remoteDeviceLink) private var deviceLink
     @Environment(\.sePalette) private var palette
@@ -275,7 +278,11 @@ struct TerminalWorkbenchScreen: View {
             case .screenText:
                 ScreenFeatureView(session: session)
             case .search:
-                SearchFeatureView(session: session, onOpenFile: { toolCover = nil })
+                SearchFeatureView(session: session, onOpenFile: {
+                    let path = session.files.currentPreviewPath
+                    toolCover = nil
+                    if let path { onOpenPreview?(path) }
+                })
             case .scheduledTasks:
                 ScheduledTasksFeatureView(session: session)
             }

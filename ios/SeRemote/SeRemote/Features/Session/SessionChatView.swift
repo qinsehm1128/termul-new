@@ -1,29 +1,5 @@
 import SwiftUI
 
-/// The Nocturne chat surface is the live timeline, not a second conversation model.
-struct SessionChatView: View {
-    private let session: WorkspaceSession?
-    private let agentChat: AgentChatStore?
-
-    init(session: WorkspaceSession) {
-        self.session = session
-        self.agentChat = nil
-    }
-
-    init(agentChat: AgentChatStore) {
-        self.session = nil
-        self.agentChat = agentChat
-    }
-
-    var body: some View {
-        if let session {
-            ChatView(session: session, embedded: true)
-        } else if let agentChat {
-            AgentChatView(store: agentChat)
-        }
-    }
-}
-
 /// Value-only presentation rules. No clocks, sample metrics or store mutations.
 enum NocturneSessionPresentation {
     enum Tone: Equatable { case live, attention, quiet, failed }
@@ -66,58 +42,11 @@ enum NocturneSessionPresentation {
         isActive && enabled
     }
 
-    static func modeAvailable(_ tab: WorkspaceTab, workspace: WorkspaceKind) -> Bool {
-        tab != .chat || workspace == .conversation
-    }
-
     static func subtitle(host: String, agent: String?, model: String?) -> String {
         [host, agent, model]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .joined(separator: " · ")
-    }
-}
-
-/// Prototype `.sessionmode` segmented mode bar. Visual height stays 30pt; the
-/// button frame keeps a 44pt hit target.
-struct SessionModeSwitch: View {
-    @Bindable var session: WorkspaceSession
-    @Environment(\.sePalette) private var palette
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        HStack(spacing: 0) {
-            ForEach(WorkspaceTab.allCases) { tab in
-                let selected = session.workspaceTab == tab
-                Button {
-                    // This method owns the geometry lease ordering; never write workspaceTab.
-                    session.setWorkspaceTab(tab)
-                } label: {
-                    Text(tab.title)
-                        .font(SeNocturneType.font(12, weight: selected ? .medium : .regular))
-                        .foregroundStyle(selected ? palette.canvas : palette.inkSecondary)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 30)
-                        .background(
-                            selected ? palette.ink : .clear,
-                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        )
-                        .frame(height: SeSpace.hitTarget)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(!NocturneSessionPresentation.modeAvailable(tab, workspace: session.workspace))
-                .opacity(NocturneSessionPresentation.modeAvailable(tab, workspace: session.workspace) ? 1 : 0.35)
-                .accessibilityAddTraits(selected ? .isSelected : [])
-            }
-        }
-        .padding(3)
-        .background(palette.cardAlt.opacity(0.65), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .stroke(palette.strokeStrong, lineWidth: 1)
-        }
-        .animation(SeNocturneMotion.resolved(SeNocturneMotion.quick, reduceMotion: reduceMotion), value: session.workspaceTab)
     }
 }
 

@@ -52,15 +52,6 @@ struct NocturneSessionPresentationTests {
         }
     }
 
-    @Test("Unavailable chat cannot be selected in project-only workspaces")
-    func modeAvailability() {
-        for tab in WorkspaceTab.allCases {
-            #expect(NocturneSessionPresentation.modeAvailable(tab, workspace: .conversation))
-            #expect(NocturneSessionPresentation.modeAvailable(tab, workspace: .project) == (tab != .chat))
-            #expect(NocturneSessionPresentation.modeAvailable(tab, workspace: .home) == (tab != .chat))
-        }
-    }
-
     @Test("Unknown metadata is omitted, never replaced by preview agent or model")
     func honestMetadata() {
         #expect(NocturneSessionPresentation.subtitle(host: "Mac", agent: nil, model: nil) == "Mac")

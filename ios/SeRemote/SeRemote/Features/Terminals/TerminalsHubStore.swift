@@ -29,6 +29,12 @@ final class TerminalsHubStore {
         return nil
     }
 
+    /// The host-reported row for one terminal. Used to resolve a deep link or
+    /// the last-open terminal; `nil` means the host no longer reports it.
+    func summary(for terminalID: String) -> LiveTerminalSummary? {
+        summaries.first(where: { $0.id == terminalID })
+    }
+
     @ObservationIgnored private var socket: TerminalSocket?
     @ObservationIgnored private var ensureConnection: (@MainActor () async throws -> Void)?
     @ObservationIgnored private var requestID = UUID()

@@ -67,7 +67,7 @@ nonisolated enum FilePreviewKind: Equatable, Sendable {
     }
 
     private nonisolated static func isSupportedText(_ encoding: String?) -> Bool {
-        SessionFilesPresentation.supportsTextPreview(encoding: encoding)
+        FilePanelPresentation.supportsTextPreview(encoding: encoding)
     }
 
     private nonisolated static func textKind(encoding: String?) -> FilePreviewKind? {

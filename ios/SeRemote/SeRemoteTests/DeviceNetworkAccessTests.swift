@@ -89,8 +89,7 @@ struct DeviceNetworkAccessTests {
     @Test func revocationNotificationLatchesWorkspaceWithoutUnmountingOrChangingGeometry() async {
         let session = WorkspaceSession(accessURL: URL(string: "http://localhost:53233")!, bearer: "test")
         session.workspace = .project
-        session.workspaceTab = .terminal
-        session.isWideLayout = true
+        session.terminalSurfaceVisible = true
         session.terminals.geometryActive = true
         let pty = LiveTerminal(id: "existing-pty", claim: "existing-claim", lastSeq: 12,
                                cols: 83, rows: 25, title: "running", owned: true)
@@ -107,8 +106,7 @@ struct DeviceNetworkAccessTests {
         #expect(session.acp.state == .revoked)
         #expect(session.terminalSocket.isRevoked)
         #expect(session.workspace == .project)
-        #expect(session.workspaceTab == .terminal)
-        #expect(session.isWideLayout)
+        #expect(session.terminalSurfaceVisible)
         #expect(session.terminals.geometryActive)
         #expect(session.terminals.terminals == [pty])
         #expect(session.terminals.activeId == pty.id)

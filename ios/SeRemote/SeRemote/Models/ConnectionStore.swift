@@ -37,6 +37,9 @@ final class ConnectionStore {
     /// credential can no longer open the host). Transient: the home screen
     /// consumes it by presenting the pairing sheet.
     var pairingRequested = false
+    /// A terminal a deep link or notification asked for. The connected shell
+    /// consumes it once its host is on screen.
+    var pendingTerminalRoute: TerminalRoute?
 
     init() {
         savedLinks = Self.load()
@@ -180,8 +183,58 @@ final class ConnectionStore {
     }
 
     func openIncomingURL(_ url: URL) {
-        HostLog.session.info("Opening pairing link")
-        connect(to: url.absoluteString)
+        switch HostDeepLink.parse(url) {
+        case .pairing(let pairingURL):
+            HostLog.session.info("Opening pairing link")
+            connect(to: pairingURL.absoluteString)
+        case .terminal(let route):
+            openTerminalDestination(route)
+        case .unknown:
+            HostLog.session.error("Ignored an unrecognized deep link")
+        }
+    }
+
+    /// Open the saved host that owns a terminal destination, then leave the
+    /// route for the connected shell. An unknown host keeps the route pending
+    /// and returns to the host list instead of dialing an arbitrary address.
+    func openTerminalDestination(_ route: TerminalRoute) {
+        pendingTerminalRoute = route
+        if let active = activeLink, Self.matches(route, link: active) { return }
+        if let saved = savedLinks.first(where: { Self.matches(route, link: $0) }) {
+            _ = connect(link: saved)
+            return
+        }
+        if activeLink != nil { disconnect() }
+    }
+
+    /// Notification taps: a terminal exit carries a terminal id; an agent event
+    /// carries only the host and leaves the shell where it is.
+    func openNotificationDestination(hostID: String?, terminalID: String?) {
+        if let terminalID, !terminalID.isEmpty {
+            openTerminalDestination(TerminalRoute(hostID: hostID, terminalID: terminalID))
+            return
+        }
+        guard activeLink == nil, let hostID else { return }
+        if let saved = savedLinks.first(where: {
+            $0.stableHostID == hostID || $0.id.uuidString.caseInsensitiveCompare(hostID) == .orderedSame
+        }) {
+            _ = connect(link: saved)
+        }
+    }
+
+    /// Take the pending route when it belongs to the mounted host. A route for
+    /// another host is dropped rather than applied to the wrong session.
+    func takePendingTerminalRoute() -> TerminalRoute? {
+        guard let route = pendingTerminalRoute else { return nil }
+        pendingTerminalRoute = nil
+        guard let active = activeLink else { return route }
+        return Self.matches(route, link: active) ? route : nil
+    }
+
+    private static func matches(_ route: TerminalRoute, link: RemoteLink) -> Bool {
+        guard let hostID = route.hostID, !hostID.isEmpty else { return true }
+        if hostID == link.stableHostID { return true }
+        return hostID.caseInsensitiveCompare(link.id.uuidString) == .orderedSame
     }
 
     func dismissError() {

@@ -1,361 +1,347 @@
 import SwiftUI
 
-/// Identifies the full-screen attach console for one project terminal.
-nonisolated struct TerminalsHubConsoleRequest: Identifiable, Hashable, Sendable {
-    let terminalId: String
-    let title: String
-
-    var id: String { terminalId }
-}
-
-/// The 终端 hub: every live project terminal grouped by project, then the
-/// 快捷终端 group. Tapping a terminal attaches its existing host PTY; the hub
-/// never spawns (closing the console only detaches) and never fabricates a
-/// terminal the host did not report.
+/// T1 — the terminal directory's data plumbing.
+///
+/// Owns the live-terminal list (15 s poll, foreground refresh) and the quick
+/// terminal mutations, then renders `TerminalLandingScreen` with a pure model.
+/// Opening a row is forwarded: the shell scopes the session and opens the
+/// workbench, this view never attaches a PTY itself.
 struct TerminalsHubScreen: View {
     @Environment(\.sePalette) private var palette
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.scenePhase) private var scenePhase
 
-    let session: WorkspaceSession
+    @Bindable var session: WorkspaceSession
+    @Bindable var store: TerminalsHubStore
+    let hostName: String
+    let hostMeta: String
+    let themeIcon: SeIcon
+    let lastTerminalID: String?
+    let allowsCreate: Bool
+    var isRefreshing: Bool
+    var notice: String?
+    var onRefresh: () -> Void
+    var onSelectHost: () -> Void
+    var onToggleTheme: () -> Void
+    var onOpenDrawer: () -> Void
+    var onOpenCommand: () -> Void
+    var onOpen: (TerminalOpenRequest) -> Void
 
-    @State private var store = TerminalsHubStore()
-    @State private var console: TerminalsHubConsoleRequest?
-    @State private var quickConsole: QuickTerminalConsoleRequest?
-    @State private var refreshing = false
-    @State private var pendingRefresh = false
-    @State private var desktopSheet: HubDesktopRequest?
+    @State private var showsProjectPicker = false
+    @State private var spawning = false
+    @State private var showsCreateQuick = false
+    @State private var quickTitle = ""
+    @State private var renaming: QuickTerminalRecordWire?
+    @State private var renameTitle = ""
+    @State private var pendingDestruction: Destruction?
+    @State private var busy = false
+    @State private var localNotice: String?
+    @State private var localError: String?
 
-    private struct HubDesktopRequest: Identifiable {
-        let terminalId: String
-        let title: String
-        let viewfinder: Bool
-
-        var id: String { terminalId + (viewfinder ? ":viewfinder" : ":desktop") }
+    private struct Destruction: Identifiable {
+        let record: QuickTerminalRecordWire
+        let deleting: Bool
+        var id: String { "\(record.id)-\(deleting)" }
     }
 
-    private static let refreshInterval: Duration = .seconds(15)
+    private var model: TerminalLandingModel {
+        let agentIDs = Set(session.liveAgents.sessions.map(\.terminalId))
+        return TerminalLandingModel.make(
+            summaries: store.summaries,
+            projects: session.projects.projects,
+            quickRecords: session.quickTerminals.records,
+            runningAgentTerminalIDs: agentIDs,
+            lastTerminalID: lastTerminalID,
+            allowsCreate: allowsCreate
+        )
+    }
+
+    private var creatableProjects: [HostProject] {
+        session.projects.projects.filter { !$0.isArchived }
+    }
+
+    private var displayedNotice: String? { localNotice ?? notice }
+    private var displayedError: String? { localError ?? store.errorMessage }
 
     var body: some View {
-        NocturneToolScreen(
-            title: String(localized: "Terminal"),
-            subtitle: subtitle,
-            onRefresh: { await refresh() }
-        ) {
-            content
-                .task {
-                    store.attach(socket: session.terminalSocket) {
-                        try await session.terminals.ensureConnected()
-                    }
-                    await refreshAndPoll()
-                }
-                .onChange(of: scenePhase) { _, phase in
-                    guard phase == .active else { return }
-                    Task { await refresh() }
-                }
-        }
-        .fullScreenCover(item: $console, onDismiss: {
-            Task { await refresh() }
-        }) { request in
-            QuickTerminalConsoleView(
-                session: session,
-                terminalId: request.terminalId,
-                claim: nil,
-                title: request.title,
-                onClose: { console = nil }
-            )
-        }
-        .fullScreenCover(item: $quickConsole, onDismiss: {
-            Task { await refresh() }
-        }) { request in
-            QuickTerminalConsoleView(
-                session: session,
-                opened: request.opened,
-                title: request.title,
-                onClose: { quickConsole = nil }
-            )
-        }
-        .sheet(item: $desktopSheet) { request in
-            DesktopQuickSheet(
-                hostName: hostName,
-                sender: DesktopShotSender(
-                    http: session.http,
-                    chat: session.chat,
-                    terminals: session.terminals,
-                    conversation: nil
-                ),
-                target: .terminal(id: request.terminalId),
-                startsInViewfinder: request.viewfinder
-            )
-        }
-    }
-
-    // MARK: - Data
-
-    private var hostName: String {
-        session.origin.host() ?? String(localized: "Host")
-    }
-
-    private var subtitle: String {
-        switch store.state {
-        case .loaded, .empty:
-            return "\(hostName) · \(String(localized: "\(store.summaries.count) terminals"))"
-        default:
-            return hostName
-        }
-    }
-
-    private var terminalGroups: [TerminalsHubGroup] {
-        let agentIds = Set(session.liveAgents.sessions.map(\.terminalId))
-        let terminals = store.summaries.map {
-            TerminalsHubPresentation.terminal(from: $0, runningAgentTerminalIds: agentIds)
-        }
-        let projects = session.projects.projects.map {
-            TerminalsHubProject(id: $0.id, name: $0.name)
-        }
-        let excluded = TerminalsHubPresentation.quickTerminalIds(session.quickTerminals.records)
-        return TerminalsHubPresentation.groups(
-            terminals: terminals,
-            projects: projects,
-            excluding: excluded
+        TerminalLandingScreen(
+            hostName: hostName,
+            hostMeta: hostMeta,
+            model: model,
+            isRefreshing: isRefreshing,
+            notice: displayedNotice,
+            errorMessage: displayedError,
+            themeIcon: themeIcon,
+            onRefresh: onRefresh,
+            onSelectHost: onSelectHost,
+            onToggleTheme: onToggleTheme,
+            onOpenDrawer: onOpenDrawer,
+            onOpenCommand: onOpenCommand,
+            onOpen: { row in onOpen(TerminalLandingModel.request(for: row)) },
+            onOpenQuick: openQuick,
+            onRenameQuick: beginRename,
+            onCloseQuick: { row in
+                guard let record = record(for: row) else { return }
+                pendingDestruction = Destruction(record: record, deleting: false)
+            },
+            onDeleteQuick: { row in
+                guard let record = record(for: row) else { return }
+                pendingDestruction = Destruction(record: record, deleting: true)
+            },
+            onNewTerminal: { showsProjectPicker = true },
+            onNewQuickTerminal: {
+                quickTitle = ""
+                localError = nil
+                showsCreateQuick = true
+            }
         )
+        .sheet(isPresented: $showsProjectPicker) { projectPicker }
+        .sheet(isPresented: $showsCreateQuick) { createQuickSheet }
+        .alert(String(localized: "Rename quick terminal"), isPresented: renameBinding) {
+            TextField(String(localized: "Title"), text: $renameTitle)
+            Button(String(localized: "Cancel"), role: .cancel) { renaming = nil }
+            Button(String(localized: "Rename")) { rename() }
+        } message: {
+            Text("Leave the title empty to clear it and use the fallback title.")
+        }
+        .confirmationDialog(
+            pendingDestruction.map(destructionTitle) ?? "",
+            isPresented: destructionBinding,
+            titleVisibility: .visible,
+            presenting: pendingDestruction
+        ) { item in
+            Button(
+                item.deleting ? String(localized: "Delete") : String(localized: "Close shells"),
+                role: .destructive
+            ) { Task { await destroy(item) } }
+            Button(String(localized: "Cancel"), role: .cancel) { pendingDestruction = nil }
+        } message: { item in
+            Text(item.deleting
+                 ? String(localized: "Delete \(QuickTerminalPresentation.title(item.record)) and end all its running shells? The host folder is kept.")
+                 : String(localized: "End all running shells for \(QuickTerminalPresentation.title(item.record))? Unsaved work may be lost. The shortcut and folder are kept."))
+        }
     }
 
-    // MARK: - Content
+    // MARK: - Project picker
 
-    @ViewBuilder
-    private var content: some View {
-        if let error = store.errorMessage {
-            NocturneNotice(message: error, isError: true)
-                .padding(.horizontal, NocturneToolMetrics.gutter)
-                .padding(.top, 14)
-        }
-        if store.usedProjectFallback {
-            NocturneNotice(
-                message: String(localized: "This host lists terminals one project at a time."),
-                isError: false
-            )
-            .padding(.horizontal, NocturneToolMetrics.gutter)
-            .padding(.top, 14)
-        }
-
-        if store.state == .loading && store.summaries.isEmpty {
-            HStack(spacing: 8) {
-                ProgressView()
-                Text("Loading terminals from the host…")
-                    .font(SeNocturneType.font(11, weight: .regular))
-                    .foregroundStyle(palette.inkSecondary)
-            }
-            .frame(maxWidth: .infinity, minHeight: NocturneToolMetrics.minimumTarget, alignment: .leading)
-            .padding(.horizontal, NocturneToolMetrics.gutter)
-            .padding(.top, 14)
-        } else if store.state == .empty {
-            NocturneEmptyState(
-                systemImage: "terminal",
-                title: String(localized: "No running terminals"),
-                message: String(localized: "There are no running terminals on the host.")
-            )
-            .padding(.horizontal, NocturneToolMetrics.gutter)
-            .padding(.top, 14)
-        } else if store.errorMessage != nil && store.summaries.isEmpty {
-            // The notice above carries the error; do not claim the host is empty.
-            EmptyView()
-        } else {
-            ForEach(terminalGroups) { group in
-                groupHeader(group)
-                VStack(spacing: NocturneToolMetrics.cardGap) {
-                    ForEach(group.terminals) { terminal in
-                        terminalRow(terminal)
+    private var projectPicker: some View {
+        NavigationStack {
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: NocturneToolMetrics.cardGap) {
+                    if creatableProjects.isEmpty {
+                        Text("This host has no projects yet.")
+                            .font(SeNocturneType.font(11))
+                            .foregroundStyle(palette.inkSecondary)
+                            .padding(.vertical, 18)
                     }
-                }
-                .padding(.horizontal, NocturneToolMetrics.gutter)
-            }
-        }
-
-        TerminalsHubQuickSection(session: session, console: $quickConsole)
-    }
-
-    // MARK: - Groups
-
-    private func groupHeader(_ group: TerminalsHubGroup) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(verbatim: group.name)
-                .font(SeNocturneType.font(12, weight: .semibold))
-                .foregroundStyle(palette.ink)
-                .lineLimit(1)
-            Text(verbatim: "\(group.count)")
-                .font(SeNocturneType.font(9, weight: .medium, mono: true))
-                .foregroundStyle(palette.inkSecondary)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 2)
-                .background(palette.cardAlt, in: Capsule())
-                .overlay {
-                    Capsule().strokeBorder(palette.stroke, lineWidth: 1)
-                }
-                .accessibilityLabel(Text("\(group.count) terminals"))
-            Spacer(minLength: 8)
-        }
-        .padding(.horizontal, NocturneToolMetrics.gutter)
-        .padding(.top, 20)
-        .padding(.bottom, 8)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text("\(group.name), \(group.count) terminals"))
-    }
-
-    // MARK: - Rows
-
-    private func terminalRow(_ terminal: TerminalsHubTerminal) -> some View {
-        HStack(spacing: 12) {
-            Button {
-                // The workbench terminal stays mounted (opacity 0) behind the hub.
-                // Presenting a full-screen console while it holds first responder
-                // leaves the keyboard attached to an invisible view.
-                session.dismissTerminalKeyboard()
-                console = TerminalsHubConsoleRequest(terminalId: terminal.id, title: terminal.title)
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "terminal")
-                        .font(.system(size: 14, weight: .regular))
-                        .foregroundStyle(palette.inkTertiary)
-                        .frame(width: 22, height: 22)
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(verbatim: terminal.title)
-                            .font(SeNocturneType.font(12, weight: .semibold))
-                            .foregroundStyle(palette.ink)
-                            .lineLimit(1)
-                        if let detail = rowDetail(terminal) {
-                            Text(verbatim: detail)
-                                .font(SeNocturneType.font(9, weight: .regular, mono: true))
-                                .foregroundStyle(palette.inkTertiary)
-                                .lineLimit(1)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    if terminal.hasRunningAgent {
-                        agentBadge
-                    }
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(palette.inkTertiary)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Text(terminal.title))
-            .accessibilityValue(Text(terminal.hasRunningAgent ? String(localized: "Agent running") : ""))
-            .accessibilityHint(Text("Opens the running shell. Detaching leaves it running on the host."))
-
-            // One gesture path, so a press is never both a tap and a long press.
-            // The trailing 12pt gap keeps this 44pt target clear of the row's
-            // open button above.
-            if session.desktopSupported != false {
-                viewfinderCapsule
-                    .gesture(
-                        LongPressGesture(minimumDuration: 0.4)
-                            .exclusively(before: TapGesture())
-                            .onEnded { value in
-                                switch value {
-                                case .first: openDesktop(terminal, viewfinder: true)
-                                case .second: openDesktop(terminal, viewfinder: false)
-                                }
+                    ForEach(creatableProjects) { project in
+                        Button {
+                            Task { await start(in: project) }
+                        } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(project.name)
+                                    .font(SeNocturneType.font(12, weight: .semibold))
+                                    .foregroundStyle(palette.ink)
+                                Text(project.path ?? String(localized: "Project"))
+                                    .font(SeNocturneType.font(9, mono: true))
+                                    .foregroundStyle(palette.inkTertiary)
+                                    .lineLimit(1)
                             }
-                    )
-                    .accessibilityElement()
-                    .accessibilityAddTraits(.isButton)
-                    .accessibilityLabel(Text("Viewfinder"))
-                    .accessibilityHint(Text("Opens the desktop. Long press opens the viewfinder."))
-                    .accessibilityAction { openDesktop(terminal, viewfinder: false) }
-                    .accessibilityAction(named: Text("Viewfinder")) { openDesktop(terminal, viewfinder: true) }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(12)
+                            .frame(minHeight: NocturneToolMetrics.minimumTarget)
+                            .background(palette.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .strokeBorder(palette.stroke, lineWidth: 1)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(SePressable())
+                        .disabled(spawning)
+                    }
+                }
+                .padding(.horizontal, NocturneToolMetrics.gutter)
+                .padding(.vertical, 18)
             }
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, minHeight: NocturneToolMetrics.minimumTarget, alignment: .leading)
-        .background(palette.card, in: RoundedRectangle(cornerRadius: 12))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(palette.stroke, lineWidth: 1)
-        }
-    }
-
-    private func openDesktop(_ terminal: TerminalsHubTerminal, viewfinder: Bool) {
-        desktopSheet = HubDesktopRequest(
-            terminalId: terminal.id,
-            title: terminal.title,
-            viewfinder: viewfinder
-        )
-    }
-
-    private var viewfinderCapsule: some View {
-        Text("Viewfinder")
-            .font(SeNocturneType.font(8.5, weight: .medium, mono: true))
-            .foregroundStyle(palette.inkSecondary)
-            .padding(.horizontal, 8)
-            .frame(height: 26)
-            .background(palette.cardAlt, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .background(palette.canvas)
+            .navigationTitle(String(localized: "New Terminal"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showsProjectPicker = false }
+                        .frame(minHeight: SeSpace.hitTarget)
+                }
+            }
             .overlay {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(palette.stroke, lineWidth: 1)
+                if spawning {
+                    ProgressView(String(localized: "Starting shell…"))
+                        .padding(18)
+                }
             }
-            .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
-            .contentShape(Rectangle())
-    }
-
-    private func rowDetail(_ terminal: TerminalsHubTerminal) -> String? {
-        var parts: [String] = []
-        if let branch = terminal.branch { parts.append(branch) }
-        if let cwd = terminal.cwd?.trimmingCharacters(in: .whitespacesAndNewlines), !cwd.isEmpty {
-            parts.append(cwd)
         }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        .presentationDetents([.medium, .large])
     }
 
-    private var agentBadge: some View {
-        HStack(spacing: 4) {
-            Circle()
-                .fill(palette.live)
-                .frame(width: 5, height: 5)
-            Text("Agent")
-                .font(SeNocturneType.font(9, weight: .medium))
-                .foregroundStyle(palette.live)
-        }
-        .padding(.horizontal, 7)
-        .padding(.vertical, 3)
-        .background(palette.liveSubtle, in: Capsule())
-        .accessibilityLabel(Text("Agent running"))
-    }
-
-    // MARK: - Refresh
-
-    /// Refresh on appear, keeps refreshing every 15 s while visible (the
-    /// `.task` cancels on disappear), and refreshes again on foreground.
-    private func refreshAndPoll() async {
-        await refresh()
-        while !Task.isCancelled {
-            try? await Task.sleep(for: Self.refreshInterval)
-            guard !Task.isCancelled else { return }
-            await refresh()
-        }
-    }
-
-    /// Single-flight, coalescing refresh. `projects` and `liveAgents` are
-    /// polled by `WorkspaceSession` every 15 s, so the hub reads their
-    /// published state and only refreshes what it owns: the live terminal
-    /// summaries and the quick-terminal records. An overlapping request sets
-    /// `pendingRefresh` and is folded into one follow-up pass instead of
-    /// being dropped.
-    private func refresh() async {
-        guard !refreshing else {
-            pendingRefresh = true
+    private func start(in project: HostProject) async {
+        guard allowsCreate, !spawning else { return }
+        spawning = true
+        localError = nil
+        defer { spawning = false }
+        await session.selectProject(project)
+        await session.spawnTerminal()
+        showsProjectPicker = false
+        guard let terminalID = session.terminals.activeId else {
+            localError = session.terminals.errorMessage ?? String(localized: "The host did not start a shell.")
             return
         }
-        refreshing = true
-        repeat {
-            pendingRefresh = false
-            await session.quickTerminals.refresh()
-            await store.refresh(projects: session.projects.projects)
-        } while pendingRefresh
-        refreshing = false
+        let terminal = session.terminals.terminals.first(where: { $0.id == terminalID })
+        onOpen(TerminalOpenRequest(
+            attach: .workspace(terminalID: terminalID),
+            title: terminal?.title ?? String(localized: "Terminal"),
+            cwd: terminal?.cwd ?? project.path,
+            projectID: terminal?.projectId ?? project.id,
+            projectName: project.name
+        ))
+    }
+
+    // MARK: - Quick terminals
+
+    private var createQuickSheet: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("New quick terminal")
+                    .font(SeNocturneType.font(19, weight: .semibold))
+                    .foregroundStyle(palette.ink)
+                Text("The host opens a shell in its workspace folder. Creating the shortcut does not start one.")
+                    .font(SeNocturneType.font(11))
+                    .foregroundStyle(palette.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                TextField(String(localized: "Title"), text: $quickTitle)
+                    .font(SeNocturneType.font(12))
+                    .padding(12)
+                    .frame(minHeight: NocturneToolMetrics.minimumTarget)
+                    .background(palette.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(palette.stroke, lineWidth: 1)
+                    }
+                if let localError {
+                    NocturneNotice(message: localError, isError: true)
+                }
+                Spacer(minLength: 0)
+                HStack(spacing: 8) {
+                    Button(String(localized: "Cancel")) { showsCreateQuick = false }
+                        .frame(maxWidth: .infinity, minHeight: NocturneToolMetrics.minimumTarget)
+                        .foregroundStyle(palette.inkSecondary)
+                    Button(String(localized: "Create")) { Task { await createQuick() } }
+                        .font(SeNocturneType.font(12, weight: .semibold))
+                        .frame(maxWidth: .infinity, minHeight: NocturneToolMetrics.minimumTarget)
+                        .foregroundStyle(palette.onAccent)
+                        .background(palette.ink, in: RoundedRectangle(cornerRadius: NocturneToolMetrics.controlRadius))
+                        .disabled(busy)
+                }
+            }
+            .padding(NocturneToolMetrics.gutter)
+            .background(palette.canvas)
+            .toolbar(.hidden, for: .navigationBar)
+        }
+        .presentationDetents([.height(300), .medium])
+        .presentationDragIndicator(.hidden)
+    }
+
+    private func createQuick() async {
+        guard allowsCreate, !busy else { return }
+        busy = true
+        localError = nil
+        defer { busy = false }
+        do {
+            let title = quickTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            _ = try await session.quickTerminals.create(
+                target: .workspace,
+                title: title.isEmpty ? nil : title
+            )
+            showsCreateQuick = false
+            localNotice = String(localized: "Quick terminal created. Open it to start a shell on the host.")
+        } catch {
+            localError = error.localizedDescription
+        }
+    }
+
+    private func openQuick(_ row: TerminalLandingModel.QuickRow) {
+        guard row.canOpen, !busy else { return }
+        busy = true
+        localError = nil
+        defer { busy = false }
+        Task {
+            do {
+                let opened = try await session.quickTerminals.open(id: row.id, cols: 80, rows: 24)
+                let claim = QuickTerminalPresentation.attachClaim(opened)
+                onOpen(TerminalOpenRequest(
+                    attach: .standalone(terminalID: opened.terminalId, claim: claim),
+                    title: row.title,
+                    cwd: opened.record.cwd
+                ))
+            } catch {
+                localError = error.localizedDescription
+            }
+        }
+    }
+
+    private func record(for row: TerminalLandingModel.QuickRow) -> QuickTerminalRecordWire? {
+        session.quickTerminals.records.first(where: { $0.id == row.id })
+    }
+
+    private func beginRename(_ row: TerminalLandingModel.QuickRow) {
+        guard let record = record(for: row) else { return }
+        renameTitle = record.title ?? ""
+        renaming = record
+    }
+
+    private func rename() {
+        guard let record = renaming else { return }
+        renaming = nil
+        Task {
+            busy = true
+            localError = nil
+            defer { busy = false }
+            do {
+                let title = renameTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                try await session.quickTerminals.rename(id: record.id, title: title.isEmpty ? nil : title)
+                localNotice = String(localized: "Quick terminal renamed.")
+            } catch {
+                localError = error.localizedDescription
+            }
+        }
+    }
+
+    private func destroy(_ item: Destruction) async {
+        pendingDestruction = nil
+        busy = true
+        localError = nil
+        defer { busy = false }
+        do {
+            if item.deleting {
+                try await session.quickTerminals.delete(id: item.record.id)
+                localNotice = String(localized: "Quick terminal deleted. Its host folder was kept.")
+            } else {
+                try await session.quickTerminals.close(id: item.record.id)
+                localNotice = String(localized: "All terminals for this shortcut were closed.")
+            }
+        } catch {
+            localError = error.localizedDescription
+        }
+    }
+
+    private var renameBinding: Binding<Bool> {
+        Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })
+    }
+
+    private var destructionBinding: Binding<Bool> {
+        Binding(get: { pendingDestruction != nil }, set: { if !$0 { pendingDestruction = nil } })
+    }
+
+    private func destructionTitle(_ item: Destruction) -> String {
+        item.deleting
+            ? String(localized: "Delete this quick terminal?")
+            : String(localized: "Close its running shells?")
     }
 }

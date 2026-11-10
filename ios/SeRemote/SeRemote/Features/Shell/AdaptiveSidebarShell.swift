@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The three primary places the workbench exposes: agent conversations,
-/// terminals and tools. Hosts and settings stay in the rail footer/groups.
+/// The three places the connected shell exposes. Terminals lead: that is where
+/// the host lands, and the rail lists them before anything else.
 enum SidebarDestination: String, CaseIterable, Identifiable, Sendable {
     case conversations
     case terminals
@@ -11,7 +11,7 @@ enum SidebarDestination: String, CaseIterable, Identifiable, Sendable {
     var id: String { rawValue }
 
     /// The three primary sections, in bar/rail order.
-    static let primary: [SidebarDestination] = [.conversations, .terminals, .tools]
+    static let primary: [SidebarDestination] = [.terminals, .conversations, .tools]
 
     var title: String {
         switch self {
@@ -42,6 +42,11 @@ struct AdaptiveSidebarShell: View {
     let counts: [SidebarDestination: String]
     let version: String
     let onOpenCommand: () -> Void
+    /// Terminals grouped by project. The iPad rail is the terminal list, so it
+    /// reads the same grouped model T1 renders.
+    var terminalGroups: [TerminalLandingModel.Group] = []
+    var selectedTerminalID: String? = nil
+    var onOpenTerminal: ((TerminalLandingModel.Row) -> Void)? = nil
     var expandedWidth: CGFloat = ShellPresentation.railExpandedWidth
     /// The phone drawer passes this so the header's trailing button closes the
     /// drawer (prototype `.railclose`) instead of folding a nil-effect rail.
@@ -73,13 +78,34 @@ struct AdaptiveSidebarShell: View {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: collapsed ? .center : .leading, spacing: 0) {
                     if !collapsed {
-                        groupLabel(String(localized: "Primary"))
+                        groupLabel(String(localized: "Terminals"))
                     }
-                    ForEach(SidebarDestination.primary) { destination in
-                        nav(destination)
+                    if terminalGroups.isEmpty {
+                        if !collapsed {
+                            Text("No running terminals")
+                                .font(SeNocturneType.font(10))
+                                .foregroundStyle(palette.inkTertiary)
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 8)
+                        }
+                    } else {
+                        ForEach(terminalGroups) { group in
+                            if !collapsed {
+                                railGroup(group)
+                            }
+                            ForEach(group.rows) { row in
+                                terminalNav(row)
+                            }
+                        }
                     }
                     if !collapsed {
-                        groupLabel(String(localized: "Hosts"))
+                        groupLabel(String(localized: "Sections"))
+                    }
+                    nav(.terminals)
+                    nav(.conversations)
+                    nav(.tools)
+                    if !collapsed {
+                        groupLabel(String(localized: "Host"))
                     }
                     hostRow
                 }
@@ -202,6 +228,66 @@ struct AdaptiveSidebarShell: View {
             .padding(.horizontal, 8)
             .padding(.top, 10)
             .padding(.bottom, 5)
+    }
+
+    /// A project heading inside the rail's terminal list.
+    private func railGroup(_ group: TerminalLandingModel.Group) -> some View {
+        HStack(spacing: 6) {
+            Text(verbatim: group.name)
+                .font(SeNocturneType.font(10, weight: .semibold))
+                .foregroundStyle(palette.inkSecondary)
+                .lineLimit(1)
+            Text(verbatim: String(format: "%02d", group.count))
+                .font(SeNocturneType.font(8.5, mono: true))
+                .foregroundStyle(palette.inkTertiary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 9)
+        .padding(.top, 10)
+        .padding(.bottom, 3)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text("\(group.name), \(group.count) terminals"))
+    }
+
+    /// One terminal row in the rail. Selecting it opens the workbench; the row
+    /// is not a separate destination.
+    @ViewBuilder
+    private func terminalNav(_ row: TerminalLandingModel.Row) -> some View {
+        let on = selectedTerminalID == row.id
+        Button {
+            onOpenTerminal?(row)
+        } label: {
+            HStack(spacing: collapsed ? 0 : 9) {
+                SeIconView(icon: .terminal,
+                           size: 14,
+                           stroke: 1.6,
+                           color: on ? palette.accent : palette.inkSecondary)
+                if !collapsed {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(verbatim: row.title)
+                            .font(SeNocturneType.font(11.5))
+                            .foregroundStyle(on ? palette.ink : palette.inkSecondary)
+                            .lineLimit(1)
+                        if row.hasAgent {
+                            Text("Agent")
+                                .font(SeNocturneType.font(8, mono: true))
+                                .foregroundStyle(palette.live)
+                        }
+                    }
+                    Spacer(minLength: 4)
+                }
+            }
+            .padding(.horizontal, collapsed ? 0 : 8)
+            .frame(maxWidth: collapsed ? nil : .infinity, alignment: collapsed ? .center : .leading)
+            .frame(width: collapsed ? 44 : nil, height: 36)
+            .background(on ? palette.accentSubtle : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(SePressable())
+        .disabled(onOpenTerminal == nil)
+        .accessibilityLabel(Text(row.title))
+        .accessibilityAddTraits(on ? .isSelected : [])
     }
 
     private func nav(_ destination: SidebarDestination) -> some View {

@@ -271,7 +271,8 @@ struct SearchFeatureView: View {
                 fileError = session.files.errorMessage ?? String(localized: "The host could not open this file preview.")
                 return
             }
-            session.setWorkspaceTab(.files)
+            // The caller decides where a preview lives now: the workbench opens
+            // the full-screen cover, a standalone tool screen just closes.
             onOpenFile()
         }
     }

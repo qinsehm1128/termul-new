@@ -228,6 +228,8 @@ struct NocturneR1LabelTests {
 
     @Test("Rail destinations keep the three primary entries and settings")
     func railDestinations() {
+        // Terminals lead: connecting lands on the terminal list.
+        #expect(SidebarDestination.primary.map(\.rawValue) == ["terminals", "conversations", "tools"])
         #expect(SidebarDestination.conversations.title == L("Conversations"))
         #expect(SidebarDestination.terminals.title == L("Terminals"))
         #expect(SidebarDestination.tools.title == L("Tools"))

@@ -56,21 +56,18 @@ final class WorkspaceSession {
     let search = SearchStore()
     let liveAgents = LiveAgentSessionStore()
 
-    /// Chat sits on a Conversation. A project workspace is terminals only.
-    var showChat = true
-    var workspaceTab: WorkspaceTab = .chat
     var workspace: WorkspaceKind = .home
     var phase: SessionPhase = .idle
     /// The last open failed in a way a retry cannot fix: the saved origin no
     /// longer reaches the host, or the host refuses this device's credential.
     /// The caller offers a pairing scan instead of another retry.
     private(set) var needsRePairing = false
-    /// Software keyboard is covering the terminal tab. Chrome hides while typing.
+    /// Software keyboard is covering the terminal surface. Chrome hides while typing.
     var terminalKeyboardVisible = false
     var terminalBlurToken: UInt64 = 0
-    /// Regular-width layout keeps the terminal pane mounted next to chat, so
-    /// PTY geometry must stay active instead of parking between tab switches.
-    var isWideLayout = false
+    /// The workbench surface is the visible page. Keyboard ownership reads this;
+    /// PTY geometry is owned by park/resume, so a hidden surface never claims it.
+    var terminalSurfaceVisible = false
     private(set) var isBackgrounded = false
     /// Whether the host serves the remote desktop. `nil` until probed: unknown
     /// hides nothing, `false` hides every desktop entry.
@@ -85,13 +82,16 @@ final class WorkspaceSession {
     private var runningRefreshTask: Task<Void, Never>?
     private var startEpoch = 0
     private let notificationSettings: AppSettings?
+    /// Stable host id for notification payloads; `nil` on hosts that predate it.
+    private let hostID: String?
     @ObservationIgnored nonisolated(unsafe) private var revocationObserver: NSObjectProtocol?
 
-    init(accessURL: URL, bearer: String? = nil, settings: AppSettings? = nil) {
+    init(accessURL: URL, bearer: String? = nil, settings: AppSettings? = nil, hostID: String? = nil) {
         credentials = HostCredentials(accessURL: accessURL, bearer: bearer)
         origin = credentials.origin
         http = HostHTTP(origin: origin, credentials: credentials)
         notificationSettings = settings
+        self.hostID = hostID
         chat.attach(socket: acp)
         chat.onHostConversationsChanged = { [weak self] in
             guard let self else { return }
@@ -151,14 +151,18 @@ final class WorkspaceSession {
             guard let self else { return }
             let name = terminals.terminals.first(where: { $0.id == terminalId })?.title
                 ?? String(localized: "Terminal")
-            notifyIfBackgrounded(title: name, body: String(localized: "The terminal exited."))
+            notifyIfBackgrounded(
+                title: name,
+                body: String(localized: "The terminal exited."),
+                terminalID: terminalId
+            )
         }
     }
 
-    private func notifyIfBackgrounded(title: String, body: String) {
+    private func notifyIfBackgrounded(title: String, body: String, terminalID: String? = nil) {
         guard isBackgrounded, notificationSettings?.notificationsEnabled == true else { return }
         Task {
-            await SeNotifications.post(title: title, body: body)
+            await SeNotifications.post(title: title, body: body, hostID: hostID, terminalID: terminalID)
         }
     }
 
@@ -331,7 +335,6 @@ final class WorkspaceSession {
     func selectConversation(_ conversation: HostConversation) async {
         projects.clearSelection()
         workspace = .conversation
-        setWorkspaceTab(.chat)
         _ = await conversations.open(conversation)
         let opened = conversations.active ?? conversation
         let binding = await conversations.binding(for: opened)
@@ -343,7 +346,6 @@ final class WorkspaceSession {
     func selectProject(_ project: HostProject) async {
         conversations.clearSelection()
         workspace = .project
-        setWorkspaceTab(.terminal)
         await projects.select(project)
         await refreshActiveTerminals()
         if let path = project.path {
@@ -363,20 +365,12 @@ final class WorkspaceSession {
         terminals.terminals = []
         terminals.activeId = nil
         chat.leave()
-        setWorkspaceTab(.chat)
     }
 
-    func leaveConversation() {
-        leaveWorkspace()
-    }
-
+    /// Watch an existing host shell. Presentation belongs to the shell, so this
+    /// only moves the store's watch; it never ends or respawns the PTY.
     func revealTerminal(_ terminalId: String) async {
-        setWorkspaceTab(.terminal)
         await terminals.open(terminalId)
-    }
-
-    func revealChat() {
-        setWorkspaceTab(.chat)
     }
 
     func dismissTerminalKeyboard() {
@@ -391,70 +385,10 @@ final class WorkspaceSession {
 
     func noteTerminalKeyboard(height: CGFloat) {
         // A keyboard over the chat composer is not the terminal's keyboard:
-        // the wide layout mounts both panes, so composer ownership decides
-        // whose keyboard this is before the chrome reacts.
-        let coversTerminal = !chat.composerActive && (workspaceTab == .terminal || isWideLayout)
+        // the composer's claim decides whose keyboard this is.
+        let coversTerminal = !chat.composerActive && terminalSurfaceVisible
         let visible = coversTerminal && height > 40
         terminalKeyboardVisible = visible
-    }
-
-    func setWorkspaceTab(_ tab: WorkspaceTab) {
-        guard workspaceTab != tab else { return }
-        if isWideLayout {
-            // Terminal pane stays mounted in the wide layout; nothing to park.
-            terminals.geometryActive = workspace != .home
-        } else {
-            dismissTerminalKeyboard()
-            if tab != .terminal {
-                terminals.geometryActive = false
-                let terminalId = terminals.activeId
-                Task { await terminals.releaseDisplayMode(for: terminalId) }
-            }
-        }
-        HostLog.session.info("Workspace tab \(tab.rawValue, privacy: .public)")
-        // Flip state in the same transaction so the caller's animation drives
-        // the tab change. Keyboard resign and geometry park above already ran.
-        workspaceTab = tab
-        showChat = tab == .chat
-        terminals.geometryActive = isWideLayout ? (workspace != .home) : (tab == .terminal)
-        if tab == .terminal {
-            // Returning to the terminal surface re-asserts the phone fit:
-            // the release on the way out restored the desktop grid, and no
-            // sizeChanged will fire because the view never unmounted.
-            terminals.scheduleRefit(force: true)
-        }
-    }
-
-    /// Layout width crossed the compact/regular boundary. The wide layout
-    /// mounts the terminal permanently, so host geometry follows it; going
-    /// compact un-mounts it, which must run the same park path a tab switch
-    /// would so the host restores its desktop PTY geometry.
-    func noteWideLayout(_ wide: Bool) {
-        guard isWideLayout != wide else { return }
-        isWideLayout = wide
-        terminals.refitEpochBump()
-        if wide {
-            terminals.geometryActive = workspace != .home
-        } else {
-            terminals.geometryActive = workspaceTab == .terminal
-            if workspaceTab != .terminal {
-                let terminalId = terminals.activeId
-                Task { await terminals.releaseDisplayMode(for: terminalId) }
-            }
-        }
-        HostLog.ui.info("Layout width \(wide ? "regular" : "compact", privacy: .public)")
-    }
-
-    /// View-mounted geometry activation. Only the wide layout mounts the
-    /// terminal without a tab switch; compact activation stays tab-driven so
-    /// a terminal hidden under the chat tab never claims the PTY lease.
-    /// TerminalStore.geometryActive has exactly this one view-side writer
-    /// (plus tab/leave transitions above), keeping lease ownership
-    /// centralized in the session.
-    func activateTerminalGeometry() {
-        guard isWideLayout else { return }
-        terminals.geometryActive = true
-        terminals.scheduleRefit(force: true)
     }
 
     /// Host folder the open workspace is rooted at: the conversation's
@@ -475,7 +409,7 @@ final class WorkspaceSession {
     /// Release the live viewport lease without ending the PTY or dropping the
     /// mounted canvas. Order is load-bearing: dismiss the keyboard, stop
     /// recording fitted grids, hand the host its desktop size, then reset the
-    /// local mode. The tab itself is untouched — the workbench owns presentation.
+    /// local mode. The visible page is untouched — the shell owns presentation.
     func parkTerminalSurface() async {
         dismissTerminalKeyboard()
         terminals.geometryActive = false
@@ -488,7 +422,7 @@ final class WorkspaceSession {
     /// A forced refit converges even when the grid is unchanged (reconnect,
     /// panel return, host-side resize while parked).
     func resumeTerminalSurface() async {
-        guard workspace != .home, terminals.activeId != nil else { return }
+        guard terminals.activeId != nil else { return }
         terminals.displayMode = .phone
         terminals.geometryActive = true
         terminals.scheduleRefit(force: true)
