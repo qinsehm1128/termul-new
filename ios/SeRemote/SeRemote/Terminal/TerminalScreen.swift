@@ -9,6 +9,9 @@ struct TerminalScreen: UIViewRepresentable {
     var terminalId: String
     var hostCols: Int
     var lockToHostCols: Bool
+    /// The grid the host replay about to be fed was authored at. `nil` when the
+    /// canvas is not carrying a replay (a resume) or the host did not state it.
+    var replayGrid: TerminalReplayGrid? = nil
     var textScale: CGFloat
     var onSend: (String) -> Void
     var onResize: (Int, Int) -> Void
@@ -39,16 +42,25 @@ struct TerminalScreen: UIViewRepresentable {
             context.coordinator.onTextScaleChange(scale, settled)
         }
         context.coordinator.attach(view)
+        context.coordinator.replayGrid = replayGrid
         // Buffered output is not replayed here: `onReady` installs the feed and
         // drains the backlog in the same synchronous step, so no byte can fall
         // between the snapshot this struct captured and the installed feed.
+        // The coordinator holds those bytes until the canvas has fitted to its
+        // own grid: this view was created at a zero size, so SwiftTerm still
+        // owns its 80x25 startup grid, and a takeover replay painted there
+        // outlives the shrink inside the alternate buffer.
         onReady { data in
-            view.feed(byteArray: [UInt8](data)[...])
+            context.coordinator.receive(data, into: view)
         }
         return view
     }
 
     func updateUIView(_ uiView: PhoneTerminalView, context: Context) {
+        context.coordinator.replayGrid = replayGrid
+        // A canvas mounted without a size report still must not hold the replay
+        // forever; a laid-out view is enough to interpret it at its own width.
+        context.coordinator.flushFeedIfFitted(uiView)
         uiView.allowsInput = allowsInput
         context.coordinator.allowsInput = allowsInput
         context.coordinator.onSend = onSend
@@ -91,6 +103,18 @@ struct TerminalScreen: UIViewRepresentable {
         var lastBlurToken: UInt64 = 0
         private var lastCols = 0
         private var lastRows = 0
+        /// Grid the host replay was authored at, supplied by the surface.
+        var replayGrid: TerminalReplayGrid?
+        /// Bytes that arrived before this canvas owned a grid. The store hands
+        /// the whole buffered replay over at mount, when SwiftTerm is still on
+        /// its 80x25 startup grid; painting it there authors the screen at a
+        /// grid the canvas is about to leave.
+        private var pendingFeed = Data()
+        /// True once the replay was applied at the canvas's own grid. From then
+        /// on host bytes are live and go straight to the emulator.
+        private(set) var didApplyReplay = false
+        /// A canvas that never reports a size must not buffer without bound.
+        private static let maxPendingFeed = 4 * 1024 * 1024
         /// Strong ownership: UIKit holds the accessory view weakly enough that
         /// a dropped hosting controller would blank the strip mid-typing.
         private var accessoryHost: UIHostingController<AnyView>?
@@ -114,6 +138,66 @@ struct TerminalScreen: UIViewRepresentable {
             lastCols = 0
             lastRows = 0
         }
+
+        /// Host output for this canvas. Everything before the canvas owns a
+        /// grid is held back: the replay's cursor moves and wraps are relative
+        /// to the grid it was authored at, and the phone's fitted grid is only
+        /// known after the first layout pass.
+        func receive(_ data: Data, into view: PhoneTerminalView) {
+            if didApplyReplay {
+                view.feed(byteArray: [UInt8](data)[...])
+                return
+            }
+            pendingFeed.append(data)
+            if pendingFeed.count > Self.maxPendingFeed {
+                applyPendingFeed(into: view)
+            }
+        }
+
+        /// Apply the held replay once the canvas has a real, laid-out grid.
+        /// SwiftTerm resizes the emulator before it reports `sizeChanged`, so
+        /// at this point the bytes are interpreted at the width the user sees.
+        func flushFeedIfFitted(_ view: PhoneTerminalView) {
+            guard !didApplyReplay,
+                  view.bounds.width > 8,
+                  view.bounds.height > 8
+            else { return }
+            applyPendingFeed(into: view)
+        }
+
+        private func applyPendingFeed(into view: PhoneTerminalView) {
+            didApplyReplay = true
+            guard !pendingFeed.isEmpty else { return }
+            let data = pendingFeed
+            pendingFeed = Data()
+            view.feed(byteArray: [UInt8](data)[...])
+            dropDesktopFrameIfNeeded(in: view)
+        }
+
+        /// A replay authored at another grid cannot rebuild a full-screen
+        /// program. SwiftTerm's alternate buffer is neither reflowed nor trimmed
+        /// when the canvas shrinks from the desktop grid to the phone grid, so
+        /// the desktop-laid-out frame stays in the buffer and the program's
+        /// next (incremental) repaint only overwrites part of it: broken lines
+        /// and a mix of old and new content. Drop that frame instead; the fit
+        /// below resizes the PTY, and the program repaints on SIGWINCH.
+        ///
+        /// The normal buffer keeps its replay: it is reflowed to the new width,
+        /// so shell scrollback survives a takeover.
+        private func dropDesktopFrameIfNeeded(in view: PhoneTerminalView) {
+            guard let replayGrid else { return }
+            let terminal = view.getTerminal()
+            guard terminal.isCurrentBufferAlternate else { return }
+            guard terminal.cols != replayGrid.cols || terminal.rows != replayGrid.rows else { return }
+            // Through the view, so the cleared screen is queued for display
+            // instead of waiting for the next host byte.
+            view.feed(text: Self.takeoverScreenHygiene)
+            HostLog.session.info("Dropped a takeover frame authored at another grid")
+        }
+
+        /// Origin mode off, scroll region reset, SGR reset, clear, home. The
+        /// program's repaint after the takeover resize owns the screen again.
+        private static let takeoverScreenHygiene = "\u{1b}[?6l\u{1b}[r\u{1b}[0m\u{1b}[2J\u{1b}[H"
 
         /// Mount or refresh the terminal's keyboard accessory row. A hosting
         /// controller is created once and retained; updates only swap its
@@ -142,6 +226,11 @@ struct TerminalScreen: UIViewRepresentable {
             guard newCols != lastCols || newRows != lastRows else { return }
             lastCols = newCols
             lastRows = newRows
+            if let view = source as? PhoneTerminalView {
+                // SwiftTerm already resized the emulator, so the held replay can
+                // now be interpreted at the grid the user actually sees.
+                flushFeedIfFitted(view)
+            }
             onResize(newCols, newRows)
         }
 

@@ -25,6 +25,10 @@ final class TerminalPTYViewer {
     /// Set when the host refuses the phone fit; the canvas then mirrors the
     /// host grid instead of pushing viewport dimensions.
     private(set) var locksToHostCols = false
+    /// Grid the attach reply was authored at. A quick terminal usually starts
+    /// at the host grid, so the first canvas fit has to treat the replay as a
+    /// takeover instead of painting it as-is.
+    private(set) var replayGrid: TerminalReplayGrid?
     var errorMessage: String?
 
     @ObservationIgnored private let socket: TerminalSocket
@@ -66,6 +70,7 @@ final class TerminalPTYViewer {
         if let replyRows = reply.rows, replyRows > 1 {
             rows = replyRows
         }
+        replayGrid = TerminalReplayGrid(cols: reply.cols, rows: reply.rows)
         isAttached = true
         HostLog.session.info("Attached standalone host PTY")
     }

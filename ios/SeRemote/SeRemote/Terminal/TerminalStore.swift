@@ -23,6 +23,10 @@ struct LiveTerminal: Identifiable, Hashable, Sendable {
     var conversationId: String? = nil
     var terminalScreenEngine: HostTerminalScreenEngine? = nil
     var screenObservation: HostScreenObservation = .legacyHost
+    /// Grid the watch reply that delivered this terminal's replay was authored
+    /// at. It stays at the takeover-time value while `cols`/`rows` follow the
+    /// live PTY, so the canvas can tell history from live layout.
+    var replayGrid: TerminalReplayGrid? = nil
 }
 
 @MainActor
@@ -295,6 +299,13 @@ final class TerminalStore {
             let attached = try await socket.watch(terminalId: terminalId, lastSeq: 0)
             if let index = terminals.firstIndex(where: { $0.id == terminalId }) {
                 terminals[index].terminalScreenEngine = attached.terminalScreenEngine
+                // This watch just replayed the whole log. Remember the grid it
+                // was authored at: the phone fit below resizes the PTY, and a
+                // replay interpreted at the new grid cannot rebuild the screen.
+                terminals[index].replayGrid = TerminalReplayGrid(
+                    cols: attached.cols,
+                    rows: attached.rows
+                )
             }
             watchedId = terminalId
             watchedGeneration = socket.connectionGeneration
@@ -569,7 +580,8 @@ final class TerminalStore {
                 projectId: item.projectId ?? owned?.projectId,
                 conversationId: item.conversationId ?? owned?.conversationId,
                 terminalScreenEngine: item.terminalScreenEngine,
-                screenObservation: item.screenObservation ?? .legacyHost
+                screenObservation: item.screenObservation ?? .legacyHost,
+                replayGrid: owned?.replayGrid
             )
         }
     }

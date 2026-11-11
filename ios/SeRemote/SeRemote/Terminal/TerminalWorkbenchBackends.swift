@@ -66,6 +66,11 @@ final class WorkspaceTerminalBackend: TerminalSurfaceBackend, TerminalSurfaceCan
     var canvasCols: Int { activeTerminal?.cols ?? 80 }
     var canvasRows: Int { activeTerminal?.rows ?? 24 }
 
+    /// Set by the watch that delivered the buffered replay; a takeover replay
+    /// is authored at the desktop grid, which is exactly what the canvas must
+    /// know before it paints it.
+    var canvasReplayGrid: TerminalReplayGrid? { activeTerminal?.replayGrid }
+
     var canvasLocksToHostCols: Bool {
         session.terminals.displayMode == .desktop
     }
@@ -178,6 +183,8 @@ final class StandaloneTerminalBackend: TerminalSurfaceBackend, TerminalSurfaceCa
 
     var canvasCols: Int { viewer?.cols ?? 80 }
     var canvasRows: Int { viewer?.rows ?? 24 }
+
+    var canvasReplayGrid: TerminalReplayGrid? { viewer?.replayGrid }
 
     var canvasLocksToHostCols: Bool { viewer?.locksToHostCols ?? false }
 

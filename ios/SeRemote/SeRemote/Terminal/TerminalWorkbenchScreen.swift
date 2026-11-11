@@ -99,6 +99,7 @@ struct TerminalWorkbenchScreen: View {
                 terminalId: id,
                 hostCols: host.canvasCols,
                 lockToHostCols: host.canvasLocksToHostCols,
+                replayGrid: host.canvasReplayGrid,
                 textScale: textScale,
                 onSend: { text in
                     guard allowsInput else { return }

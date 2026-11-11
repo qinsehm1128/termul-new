@@ -35,6 +35,7 @@ struct TerminalWorkbenchMountTests {
         var canvasTerminalID: String? { "t1" }
         var canvasCols: Int { 80 }
         var canvasRows: Int { 24 }
+        var canvasReplayGrid: TerminalReplayGrid? { nil }
         var canvasLocksToHostCols: Bool { false }
 
         func installCanvasFeed(_ feed: @escaping (Data) -> Void) {

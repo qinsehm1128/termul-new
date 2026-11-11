@@ -55,6 +55,23 @@ nonisolated struct TerminalOpenRequest: Identifiable, Hashable, Sendable {
     }
 }
 
+/// The grid a host replay was authored at, reported by the attach/watch reply.
+///
+/// A replay is the raw output log, not a screen: every cursor move and every
+/// wrap in it is relative to this grid. The phone can only trust it when its
+/// own fitted grid matches; otherwise the canvas has to treat it as history
+/// and let the program repaint after the takeover resize.
+nonisolated struct TerminalReplayGrid: Equatable, Hashable, Sendable {
+    let cols: Int
+    let rows: Int
+
+    init?(cols: Int?, rows: Int?) {
+        guard let cols, let rows, cols > 1, rows > 1 else { return nil }
+        self.cols = cols
+        self.rows = rows
+    }
+}
+
 nonisolated struct TerminalSurfaceItem: Identifiable, Hashable, Sendable {
     let id: String
     let title: String

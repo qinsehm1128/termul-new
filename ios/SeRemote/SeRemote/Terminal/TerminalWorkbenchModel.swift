@@ -425,6 +425,9 @@ protocol TerminalSurfaceCanvasHost: AnyObject {
     var canvasTerminalID: String? { get }
     var canvasCols: Int { get }
     var canvasRows: Int { get }
+    /// Grid the host reported when this surface took its replay. `nil` when no
+    /// replay is in flight (a resume) or the host did not state one.
+    var canvasReplayGrid: TerminalReplayGrid? { get }
     var canvasLocksToHostCols: Bool { get }
     func installCanvasFeed(_ feed: @escaping (Data) -> Void)
     func sendCanvasInput(_ text: String)
