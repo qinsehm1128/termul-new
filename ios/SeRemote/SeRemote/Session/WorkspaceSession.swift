@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import Observation
 import UIKit
 
@@ -76,7 +77,12 @@ final class WorkspaceSession {
     /// panel that is not mounted, replacing the one-shot notification route.
     @ObservationIgnored private var agentDrafts: [String: String] = [:]
     private var isStarting = false
-    private var reconnectTask: Task<Void, Never>?
+    /// Watches the phone's path (Wi-Fi ↔ cellular ↔ VPN). A changed route can
+    /// silently strand both WebSockets, so the session re-validates them instead
+    /// of waiting for the next user request to fail.
+    private var pathMonitor: NWPathMonitor?
+    private var pathRefreshTask: Task<Void, Never>?
+    private var lastPathWasSatisfied: Bool?
     /// Host-backed running state (live terminals + live agent processes) is
     /// polled: the host does not push a terminal-started event to the phone.
     private var runningRefreshTask: Task<Void, Never>?
@@ -198,6 +204,7 @@ final class WorkspaceSession {
             }
             guard startEpoch == epoch else { return }
             phase = .connected
+            startPathMonitor()
             startRunningRefresh()
             await refreshDesktopSupport()
             HostLog.session.info("Host connect succeeded")
@@ -253,8 +260,11 @@ final class WorkspaceSession {
     func stop() {
         startEpoch += 1
         isStarting = false
-        reconnectTask?.cancel()
-        reconnectTask = nil
+        pathRefreshTask?.cancel()
+        pathRefreshTask = nil
+        pathMonitor?.cancel()
+        pathMonitor = nil
+        lastPathWasSatisfied = nil
         runningRefreshTask?.cancel()
         runningRefreshTask = nil
         acp.stop()
@@ -298,7 +308,10 @@ final class WorkspaceSession {
             // Cached grid can match while the host PTY changed in background;
             // re-assert equal dims to converge after resume.
             terminals.scheduleRefit(force: true)
-            reconnectIfNeeded()
+            // Give a suspended socket a moment to report its terminal state
+            // before deciding it is stale. An immediate probe races the
+            // resume and reconnects a socket that was about to recover.
+            scheduleTransportRefresh(reason: "foreground")
             // Running state may have changed while polling was parked.
             Task { [weak self] in
                 guard let self, self.phase == .connected else { return }
@@ -308,33 +321,119 @@ final class WorkspaceSession {
         }
     }
 
-    private func reconnectIfNeeded() {
-        guard phase != .revoked else { return }
-        let acpFailed: Bool
-        if case .failed = acp.state {
-            acpFailed = true
-        } else {
-            acpFailed = false
+    // MARK: - Transport freshness
+
+    /// One monitor per live session. The first callback describes the current
+    /// path, so it only records the baseline; later callbacks are real changes
+    /// (Wi-Fi ↔ cellular, VPN up/down) that can strand both WebSockets.
+    private func startPathMonitor() {
+        guard pathMonitor == nil else { return }
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            let satisfied = path.status == .satisfied
+            Task { @MainActor in
+                self?.handlePathUpdate(satisfied: satisfied)
+            }
         }
-        let terminalFailed = workspace != .home && !terminalSocket.isConnected
-        let phaseFailed: Bool
-        if case .failed = phase {
-            phaseFailed = true
-        } else {
-            phaseFailed = false
+        monitor.start(queue: DispatchQueue(label: "\(HostLog.subsystem).session.path"))
+        pathMonitor = monitor
+    }
+
+    private func handlePathUpdate(satisfied: Bool) {
+        let wasSatisfied = lastPathWasSatisfied
+        lastPathWasSatisfied = satisfied
+        guard satisfied else {
+            HostLog.session.info("Network path unavailable")
+            return
         }
-        guard acpFailed || terminalFailed || phaseFailed else { return }
-        guard reconnectTask == nil else { return }
-        HostLog.session.info("Foreground reconnect scheduled")
-        reconnectTask = Task { @MainActor [weak self] in
-            defer { self?.reconnectTask = nil }
-            await self?.start()
+        // The initial callback is the baseline, not a change.
+        guard wasSatisfied != nil else { return }
+        HostLog.session.info("Network path changed")
+        scheduleTransportRefresh(reason: "path-change")
+    }
+
+    /// Coalesce foreground and path notifications into one revalidation after
+    /// the route has settled.
+    private func scheduleTransportRefresh(reason: String) {
+        guard !isBackgrounded else { return }
+        switch phase {
+        case .connected, .failed:
+            break
+        case .idle, .connecting, .revoked:
+            return
+        }
+        pathRefreshTask?.cancel()
+        pathRefreshTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard let self, !Task.isCancelled else { return }
+            await self.revalidateTransports(reason: reason)
+        }
+    }
+
+    /// Rebuild transports that outlived the previous network path, and retry a
+    /// link that is already offline. `phase` only becomes `.failed` inside
+    /// `start()`, after its retry budget is spent.
+    private func revalidateTransports(reason: String) async {
+        guard phase != .revoked, !isBackgrounded else { return }
+        switch phase {
+        case .failed:
+            HostLog.session.info("Retrying host link after \(reason, privacy: .public)")
+            await start()
+        case .connected:
+            let acpLiveness = await acp.probeLiveness()
+            let terminalLiveness = await terminalSocket.probeLiveness()
+            guard acpLiveness.isDead || terminalLiveness.isDead else {
+                if acpLiveness == .unknown || terminalLiveness == .unknown {
+                    HostLog.session.info("Transport liveness inconclusive after \(reason, privacy: .public)")
+                }
+                await refreshRunningState()
+                await refreshDesktopSupport()
+                return
+            }
+            HostLog.session.info("Stale host transport after \(reason, privacy: .public); reconnecting link")
+            await start()
+        case .idle, .connecting:
+            // The in-flight start owns the retry budget.
+            break
+        case .revoked:
+            break
+        }
+    }
+
+    /// Rebuild the terminal WebSocket before a user-visible request if the
+    /// socket outlived its network path. A ping is only sent while the socket
+    /// still claims to be connected; a known-down socket reconnects at once.
+    /// This keeps one stale-path failure from surfacing as a failed open.
+    func ensureTerminalTransport() async {
+        guard phase == .connected else { return }
+        guard await terminalSocket.probeLiveness().isDead else { return }
+        HostLog.session.info("Terminal transport stale; reconnecting")
+        terminalSocket.stop()
+        do {
+            try await terminals.ensureConnected()
+        } catch {
+            HostLog.session.error("Terminal transport reconnect failed")
+            terminals.errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Same freshness check for the agent socket. A failed reconnect leaves the
+    /// last chat state alone instead of claiming the whole link is down.
+    func ensureAgentTransport() async {
+        guard phase == .connected else { return }
+        guard await acp.probeLiveness().isDead else { return }
+        HostLog.session.info("Agent transport stale; reconnecting")
+        do {
+            try await connectAgent()
+        } catch {
+            HostLog.session.error("Agent transport reconnect failed")
         }
     }
 
     func selectConversation(_ conversation: HostConversation) async {
         projects.clearSelection()
         workspace = .conversation
+        await ensureAgentTransport()
         _ = await conversations.open(conversation)
         let opened = conversations.active ?? conversation
         let binding = await conversations.binding(for: opened)
@@ -346,6 +445,7 @@ final class WorkspaceSession {
     func selectProject(_ project: HostProject) async {
         conversations.clearSelection()
         workspace = .project
+        await ensureAgentTransport()
         await projects.select(project)
         await refreshActiveTerminals()
         if let path = project.path {

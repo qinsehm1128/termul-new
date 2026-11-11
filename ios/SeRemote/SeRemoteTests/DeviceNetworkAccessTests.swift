@@ -9,7 +9,7 @@ struct DeviceNetworkAccessTests {
         let error = try #require(HostHTTP.responseError(statusCode: 401, data: data))
         guard case .deviceRevoked = error else { Issue.record("Expected deviceRevoked"); return }
         #expect(!PairingRecovery.needsRePairing(error))
-        #expect(!PairingRecovery.isWorthRetrying(error))
+        #expect(!LinkOpenRetry.shouldRetry(error))
     }
 
     @Test func httpScopeDenialRetainsCapabilityAndDoesNotRequestPairing() throws {
@@ -19,7 +19,7 @@ struct DeviceNetworkAccessTests {
         #expect(capability == "files")
         #expect(error.localizedDescription.contains(DeviceScope.label(for: "files")))
         #expect(!PairingRecovery.needsRePairing(error))
-        #expect(!PairingRecovery.isWorthRetrying(error))
+        #expect(!LinkOpenRetry.shouldRetry(error))
     }
 
     @Test func legacyAuthFailureStillRequestsPairingAndSuccessIsNotAnError() throws {
@@ -34,7 +34,7 @@ struct DeviceNetworkAccessTests {
             let gate = HostWebSocketOpenGate { confirm() }
             let error = gate.handleClose(.policyViolation)
             gate.handleClose(.policyViolation)
-            #expect(!PairingRecovery.isWorthRetrying(error))
+            #expect(!LinkOpenRetry.shouldRetry(error))
             do {
                 try await gate.waitForOpen(seconds: 0.5)
                 Issue.record("A 1008 close must not open")
@@ -59,7 +59,7 @@ struct DeviceNetworkAccessTests {
     @Test func nonPolicyCloseIsRetryableAndDoesNotPublishRevocation() async {
         await confirmation("no revocation on network close", expectedCount: 0) { confirm in
             let gate = HostWebSocketOpenGate { confirm() }
-            #expect(PairingRecovery.isWorthRetrying(gate.handleClose(.goingAway)))
+            #expect(LinkOpenRetry.shouldRetry(gate.handleClose(.goingAway)))
         }
     }
 

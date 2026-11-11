@@ -559,6 +559,7 @@ struct ConnectedShellScreen: View {
             try await session.terminals.ensureConnected()
         }
         Task {
+            await session.ensureTerminalTransport()
             await refreshHub()
             await session.quickTerminals.refresh()
             if let request = await resumeRequest() {
@@ -650,6 +651,10 @@ struct ConnectedShellScreen: View {
     /// so `TerminalStore` lists the PTY, then open the mounted surface.
     private func open(_ request: TerminalOpenRequest, presentingAgent: Bool = false) async {
         preview = nil
+        // A tap is the first request after a resume on a phone. Verify the
+        // socket that claims to be connected before the watch rides it, so a
+        // stale-path failure never becomes the user-visible result of the tap.
+        await session.ensureTerminalTransport()
         await scopeSession(for: request)
         navigation.open(request)
         await terminalModel.open(request)

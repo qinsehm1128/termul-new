@@ -286,6 +286,15 @@ final class TerminalSocket {
         HostError.deviceRevoked.publishAccessFailure(origin: origin)
     }
 
+    /// Transport-level liveness for a socket the app still believes is
+    /// connected. A socket that survived a network-path change reports the
+    /// stale-path error here immediately, which lets the session rebuild the
+    /// transport instead of surfacing a failed request to the user.
+    func probeLiveness() async -> TransportLiveness {
+        guard isConnected, let task else { return .dead }
+        return await WebSocketLiveness.probe(task)
+    }
+
     func stop() {
         receiveTask?.cancel()
         receiveTask = nil
@@ -327,6 +336,10 @@ final class TerminalSocket {
             task.send(.string(String(data: data, encoding: .utf8) ?? "")) { [weak self] error in
                 Task { @MainActor in
                     if let error {
+                        // The task outlived its connection: stop claiming it is
+                        // usable so the next request reconnects instead of
+                        // sending into a dead socket again.
+                        self?.isConnected = false
                         self?.pending.removeValue(forKey: id)?.resume(throwing: HostError.network(error.localizedDescription))
                     }
                 }

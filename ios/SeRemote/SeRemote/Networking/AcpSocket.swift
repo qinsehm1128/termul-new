@@ -143,6 +143,14 @@ final class AcpSocket {
         }
     }
 
+    /// Transport-level liveness for a socket the app still believes is
+    /// connected. Used after a resume or a path change so a stranded socket is
+    /// rebuilt before the next user request has to fail.
+    func probeLiveness() async -> TransportLiveness {
+        guard state == .connected, let task else { return .dead }
+        return await WebSocketLiveness.probe(task)
+    }
+
     func revoke() {
         guard state != .revoked else { return }
         state = .revoked

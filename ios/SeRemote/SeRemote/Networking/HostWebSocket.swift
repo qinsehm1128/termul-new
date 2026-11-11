@@ -35,6 +35,56 @@ enum HostTunnelSession {
     }
 }
 
+/// What a protocol-level WebSocket ping says about a socket the app still
+/// believes is connected.
+///
+/// A socket that outlived its network path usually reports an immediate error
+/// (`-1004` / "on unconnected nw_connection"). A timeout is not proof of death:
+/// cellular commonly needs a few seconds to wake, so it stays `.unknown` and
+/// the caller keeps the mounted session instead of replaying a terminal.
+nonisolated enum TransportLiveness: Equatable, Sendable {
+    case alive
+    case dead
+    case unknown
+
+    var isDead: Bool { self == .dead }
+}
+
+nonisolated enum WebSocketLiveness {
+    static func probe(
+        _ task: URLSessionWebSocketTask,
+        timeout: Duration = .seconds(4)
+    ) async -> TransportLiveness {
+        await withCheckedContinuation { continuation in
+            let gate = PingGate(continuation)
+            task.sendPing { error in
+                gate.finish(error == nil ? .alive : .dead)
+            }
+            Task {
+                try? await Task.sleep(for: timeout)
+                gate.finish(.unknown)
+            }
+        }
+    }
+}
+
+nonisolated private final class PingGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<TransportLiveness, Never>?
+
+    init(_ continuation: CheckedContinuation<TransportLiveness, Never>) {
+        self.continuation = continuation
+    }
+
+    func finish(_ result: TransportLiveness) {
+        lock.lock()
+        let waiting = continuation
+        continuation = nil
+        lock.unlock()
+        waiting?.resume(returning: result)
+    }
+}
+
 final class HostWebSocketOpenGate: NSObject, URLSessionWebSocketDelegate, @unchecked Sendable {
     private let lock = NSLock()
     private var didOpen = false

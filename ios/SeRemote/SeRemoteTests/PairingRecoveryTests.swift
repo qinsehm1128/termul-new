@@ -51,18 +51,22 @@ struct PairingRecoveryTests {
         #expect(!PairingRecovery.needsRePairing(URLError(.timedOut), origin: tunnel))
     }
 
-    @Test("Settled failures inside the connect budget are not retried")
+    @Test("The link retries transient transport failures, including -1004")
     func retryPolicy() {
-        // A refused connection or an unknown host is the answer, not a hiccup.
-        #expect(!PairingRecovery.isWorthRetrying(URLError(.cannotConnectToHost)))
-        #expect(!PairingRecovery.isWorthRetrying(URLError(.cannotFindHost)))
-        #expect(!PairingRecovery.isWorthRetrying(URLError(.dnsLookupFailed)))
-        #expect(!PairingRecovery.isWorthRetrying(HostError.rePairingRequired("rotate")))
-        #expect(!PairingRecovery.isWorthRetrying(CancellationError()))
-        // A stalled or dropped request can still settle.
-        #expect(PairingRecovery.isWorthRetrying(URLError(.timedOut)))
-        #expect(PairingRecovery.isWorthRetrying(URLError(.networkConnectionLost)))
-        #expect(PairingRecovery.isWorthRetrying(HostError.network("tunnel 502")))
+        // A stale path after resume reports -1004 (cannotConnectToHost); that is
+        // the device-log case this policy exists for, so it must be retried.
+        #expect(LinkOpenRetry.shouldRetry(URLError(.cannotConnectToHost)))
+        #expect(LinkOpenRetry.shouldRetry(URLError(.cannotFindHost)))
+        #expect(LinkOpenRetry.shouldRetry(URLError(.dnsLookupFailed)))
+        #expect(LinkOpenRetry.shouldRetry(URLError(.networkConnectionLost)))
+        #expect(LinkOpenRetry.shouldRetry(URLError(.timedOut)))
+        #expect(LinkOpenRetry.shouldRetry(URLError(.notConnectedToInternet)))
+        #expect(LinkOpenRetry.shouldRetry(HostError.network("tunnel 502")))
+        // Access failures cannot settle differently and surface immediately.
+        #expect(!LinkOpenRetry.shouldRetry(HostError.rePairingRequired("rotate")))
+        #expect(!LinkOpenRetry.shouldRetry(HostError.deviceRevoked))
+        #expect(!LinkOpenRetry.shouldRetry(HostError.forbidden("terminal.write")))
+        #expect(!LinkOpenRetry.shouldRetry(CancellationError()))
     }
 
     @Test("Host-side failures that carry a message are not pairing problems")

@@ -91,31 +91,26 @@ struct HostHTTP: Sendable {
 
     /// The health probe gates the whole workspace, so an origin that no longer
     /// answers must reach the one-tap rescan state within seconds instead of
-    /// hanging on a dead address. Attempts share one budget: a refused connection
-    /// is retried only if it can still settle differently inside it.
-    private static let probeAttemptLimit = 3
+    /// hanging on a dead address. Transient transport failures are retried a
+    /// few times with a short backoff (`LinkOpenRetry`): a single stale-path
+    /// failure (`-1004`) after resume must not flip the session to offline.
+    private static let probeAttemptLimit = LinkOpenRetry.maxAttempts
     private static let probeAttemptTimeout: TimeInterval = 5
     private static let probeBudget: Duration = .seconds(7)
 
     func probeHealth() async throws {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: Self.probeBudget)
-        var lastError: Error?
-        for attempt in 0 ..< Self.probeAttemptLimit {
-            let remaining = clock.now.duration(to: deadline)
-            guard remaining > .zero else { break }
-            do {
+        do {
+            try await LinkOpenRetry.run(budget: Self.probeBudget) { [self] _ in
+                let remaining = clock.now.duration(to: deadline)
                 try await probeHealthOnce(timeout: min(Self.probeAttemptTimeout, Self.seconds(remaining)))
-                return
-            } catch {
-                lastError = error
-                guard PairingRecovery.isWorthRetrying(error) else { break }
-                if attempt < Self.probeAttemptLimit - 1 {
-                    try await Task.sleep(for: .milliseconds(250))
-                }
             }
+        } catch {
+            let attempts = Self.probeAttemptLimit
+            HostLog.session.error("Host health probe failed after \(attempts) attempt(s)")
+            throw error
         }
-        throw lastError ?? HostError.network(String(localized: "The phone could not reach the host."))
     }
 
     private static func seconds(_ duration: Duration) -> TimeInterval {
