@@ -200,7 +200,7 @@ async fn probe_tunnel_ready(url: &str) -> Result<(), String> {
 
 /// Parameterized probe core so tests can run a short deadline against a
 /// definitely-unreachable URL without waiting the full 10s.
-async fn probe_tunnel_ready_with(
+pub(crate) async fn probe_tunnel_ready_with(
     url: &str,
     timeout: std::time::Duration,
     interval: std::time::Duration,

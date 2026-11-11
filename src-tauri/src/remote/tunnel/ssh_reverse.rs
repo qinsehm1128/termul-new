@@ -15,6 +15,25 @@ use super::StartedTunnel;
 use crate::acp::atomic_file;
 
 const READY_GRACE: Duration = Duration::from_millis(1500);
+/// Budget for confirming the published port answers from the internet.
+const PUBLIC_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+const PUBLIC_PROBE_INTERVAL: Duration = Duration::from_millis(500);
+
+/// `/health` on the published Origin; it needs no pairing bearer.
+fn public_health_url(origin: &str) -> String {
+    format!("{}/health", origin.trim_end_matches('/'))
+}
+
+/// sshd accepts `-R 0.0.0.0:port` even with `GatewayPorts no` and silently
+/// binds loopback instead, so the forward looks healthy while a phone gets
+/// "connection refused". Name the server-side fix.
+fn unreachable_error(origin: &str, remote_port: u16) -> String {
+    format!(
+        "SSH tunnel is connected, but {origin} is not reachable from the internet. \
+         On the VPS, set `GatewayPorts clientspecified` (or `yes`) in sshd_config, reload sshd, \
+         and allow TCP {remote_port} in the firewall or security group."
+    )
+}
 
 pub async fn start_ssh_reverse_tunnel(
     local_port: u16,
@@ -111,6 +130,24 @@ pub async fn start_ssh_reverse_tunnel(
         }
         Ok(None) => {}
         Err(error) => return Err(format!("ssh reverse tunnel wait failed: {error}")),
+    }
+
+    // The ssh process staying up only proves the forward exists on the VPS,
+    // not that it is published. Confirm the path the phone will use.
+    if crate::remote::cloudflared::probe_tunnel_ready_with(
+        &public_health_url(&url),
+        PUBLIC_PROBE_TIMEOUT,
+        PUBLIC_PROBE_INTERVAL,
+    )
+    .await
+    .is_err()
+    {
+        let _ = child.start_kill();
+        log::warn!(
+            target: "se_manager::remote::tunnel",
+            "operation=tunnel_public_probe provider=sshReverse stable_code=PUBLIC_UNREACHABLE"
+        );
+        return Err(unreachable_error(&url, remote_port));
     }
 
     log::info!(
@@ -216,6 +253,47 @@ fn clear_askpass(store: &TunnelConfigStore) {
     let _ = std::fs::remove_file(dir.join("ssh-reverse-askpass.dat"));
     let _ = std::fs::remove_file(dir.join("ssh-reverse-askpass.sh"));
     let _ = std::fs::remove_file(dir.join("ssh-reverse-askpass.bat"));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn health_url_is_on_the_published_origin() {
+        assert_eq!(
+            public_health_url("http://203.0.113.7:18787"),
+            "http://203.0.113.7:18787/health"
+        );
+        assert_eq!(
+            public_health_url("http://203.0.113.7:18787/"),
+            "http://203.0.113.7:18787/health"
+        );
+    }
+
+    #[test]
+    fn unreachable_error_names_the_server_side_fix() {
+        let message = unreachable_error("http://203.0.113.7:18787", 18787);
+        assert!(message.contains("GatewayPorts clientspecified"));
+        assert!(message.contains("18787"));
+        assert!(message.contains("http://203.0.113.7:18787"));
+    }
+
+    #[tokio::test]
+    async fn a_loopback_only_forward_is_reported_unreachable() {
+        // Nothing listens on this port, as with a forward sshd bound to
+        // loopback on the VPS: the probe must fail, not report ready.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let result = crate::remote::cloudflared::probe_tunnel_ready_with(
+            &public_health_url(&format!("http://127.0.0.1:{port}")),
+            Duration::from_millis(600),
+            Duration::from_millis(100),
+        )
+        .await;
+        assert!(result.is_err());
+    }
 }
 
 fn restrict_owner_only(path: &PathBuf) {
