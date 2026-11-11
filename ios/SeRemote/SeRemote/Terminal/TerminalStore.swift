@@ -34,14 +34,26 @@ struct LiveTerminal: Identifiable, Hashable, Sendable {
 final class TerminalStore {
     var terminals: [LiveTerminal] = []
     var activeId: String?
-    /// Bytes that arrived while no canvas feed was installed. Only the store
-    /// writes them; `consumeOutput` hands them to the mounting canvas exactly
-    /// once, in the same step that installs the feed.
+    /// Bytes that arrived while no canvas feed was installed *for that
+    /// terminal*. Keyed by PTY id, so output for a tab whose canvas has not
+    /// remounted yet is never swallowed by the feed of the tab still on screen.
     private(set) var pendingOutput: [String: Data] = [:]
+    /// Terminals whose buffered stream starts mid-sequence because the host
+    /// could not replay every byte. The canvas must reset before consuming it.
+    private var pendingReset: Set<String> = []
+    /// Terminal whose canvas owns `onFeed`. A feed installed for A must not
+    /// swallow B's bytes: those wait in `pendingOutput` until B installs.
+    private var feedTerminalId: String?
+    /// One terminal's queued output must not grow without bound while its
+    /// canvas is away (a tab switch, a cover, a slow remount). Oldest bytes are
+    /// dropped first; a reset flag then marks the truncated stream.
+    static let pendingOutputLimit = 4 * 1024 * 1024
     var errorMessage: String?
     var isConnecting = false
     var isRefreshingScreenObservation = false
-    var onFeed: (@MainActor (String, Data) -> Void)?
+    /// Receives `(data, needsReset)` for the terminal named by
+    /// `feedTerminalId`; bytes for any other terminal are buffered instead.
+    var onFeed: (@MainActor (String, Data, Bool) -> Void)?
     /// Phone-fit takeover when viewing; desktop restores the parked host size.
     var displayMode: TerminalDisplayMode = .phone
     /// True only while the terminal tab is the visible workspace surface.
@@ -70,6 +82,7 @@ final class TerminalStore {
     private var lastPushed: [String: (cols: Int, rows: Int)] = [:]
 
     private var coalesceBuffers: [String: Data] = [:]
+    private var coalesceGapped: Set<String> = []
     private var coalesceTask: Task<Void, Never>?
     private var socket: TerminalSocket?
     private var origin: URL?
@@ -96,8 +109,8 @@ final class TerminalStore {
         self.socket = socket
         self.origin = origin
         self.credentials = credentials
-        socket.onBytes = { [weak self] terminalId, data in
-            self?.enqueueOutput(terminalId: terminalId, data: data)
+        socket.onBytes = { [weak self] terminalId, data, gap in
+            self?.enqueueOutput(terminalId: terminalId, data: data, gap: gap)
         }
         socket.onCatalogChanged = { [weak self] in
             guard let self else { return }
@@ -130,6 +143,7 @@ final class TerminalStore {
             self.onTerminalExit?(terminalId)
             self.terminals.removeAll { $0.id == terminalId }
             self.pendingOutput.removeValue(forKey: terminalId)
+            self.pendingReset.remove(terminalId)
             self.standaloneClaims.removeValue(forKey: terminalId)
             if let viewer = self.viewers[terminalId]?.viewer {
                 viewer.markExited()
@@ -517,23 +531,40 @@ final class TerminalStore {
         terminals[index].rows = state.rows
     }
 
-    private func enqueueOutput(terminalId: String, data: Data) {
+    private func enqueueOutput(terminalId: String, data: Data, gap: Bool) {
+        // A gap means the new stream starts mid-sequence. Bytes from the
+        // previous stream that are still waiting in the 16 ms window belong to
+        // the truncated prefix; drop them so the reset cannot be preceded by
+        // stale bytes.
+        if gap {
+            coalesceBuffers[terminalId] = Data()
+            coalesceGapped.insert(terminalId)
+        }
         coalesceBuffers[terminalId, default: Data()].append(data)
         if coalesceTask == nil {
             coalesceTask = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(16))
                 guard let self else { return }
                 let pending = self.coalesceBuffers
+                let gapped = self.coalesceGapped
                 self.coalesceBuffers.removeAll()
+                self.coalesceGapped.removeAll()
                 self.coalesceTask = nil
                 for (id, bytes) in pending {
-                    self.deliverOutput(terminalId: id, data: bytes)
+                    self.deliverOutput(terminalId: id, data: bytes, gap: gapped.contains(id))
                 }
             }
         }
     }
 
-    private func deliverOutput(terminalId: String, data: Data) {
+    /// Route one terminal's bytes. Only the feed installed for this exact
+    /// terminal may consume them; every other terminal buffers by id, which is
+    /// what keeps a replay that lands before its canvas remounts from being
+    /// dropped by the outgoing tab's feed.
+    ///
+    /// Internal (not private) so the replay-continuity tests can drive the
+    /// coalesced destination without a live socket.
+    func deliverOutput(terminalId: String, data: Data, gap: Bool = false) {
         if let existing = terminals.firstIndex(where: { $0.id == terminalId }) {
             terminals[existing].lastSeq += 1
         }
@@ -541,21 +572,51 @@ final class TerminalStore {
         // workbench's single `onFeed` never has to know it exists.
         if let box = viewers[terminalId] {
             if let viewer = box.viewer {
-                viewer.receive(data)
+                viewer.receive(data, reset: gap)
                 return
             }
             viewers.removeValue(forKey: terminalId)
         }
-        if let onFeed {
-            onFeed(terminalId, data)
-        } else {
-            pendingOutput[terminalId, default: Data()].append(data)
+        if let onFeed, feedTerminalId == terminalId {
+            onFeed(terminalId, data, gap)
+            return
+        }
+        if gap {
+            // The buffered prefix came from before the gap and cannot be
+            // trusted; the reset flag tells the canvas to start clean.
+            pendingOutput[terminalId] = Data()
+            pendingReset.insert(terminalId)
+        }
+        var buffered = pendingOutput[terminalId] ?? Data()
+        buffered.append(data)
+        if buffered.count > Self.pendingOutputLimit {
+            buffered.removeFirst(buffered.count - Self.pendingOutputLimit)
+            // Dropping the oldest bytes cuts the stream mid-sequence, exactly
+            // like a host gap, so the canvas must start clean.
+            pendingReset.insert(terminalId)
+        }
+        pendingOutput[terminalId] = buffered
+    }
+
+    /// Install the mounted canvas for `terminalId` as the destination for its
+    /// output, in the same synchronous step that hands over whatever the store
+    /// buffered while that canvas did not exist. Splitting the two would let
+    /// output that arrives in between land in the buffer and be lost.
+    func installFeed(for terminalId: String, _ feed: @escaping @MainActor (Data, Bool) -> Void) {
+        feedTerminalId = terminalId
+        onFeed = { incomingId, data, reset in
+            guard incomingId == terminalId else { return }
+            feed(data, reset)
+        }
+        if let buffered = consumeOutput(for: terminalId) {
+            feed(buffered.data, buffered.needsReset)
         }
     }
 
-    func consumeOutput(for terminalId: String) -> Data? {
-        let data = pendingOutput.removeValue(forKey: terminalId)
-        return data?.isEmpty == false ? data : nil
+    func consumeOutput(for terminalId: String) -> (data: Data, needsReset: Bool)? {
+        guard let data = pendingOutput.removeValue(forKey: terminalId) else { return nil }
+        let needsReset = pendingReset.remove(terminalId) != nil
+        return data.isEmpty && !needsReset ? nil : (data, needsReset)
     }
 
     /// Pure catalog mapping. Owned flags, claims and replay cursors survive a

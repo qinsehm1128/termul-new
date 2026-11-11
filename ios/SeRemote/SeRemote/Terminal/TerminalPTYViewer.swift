@@ -34,7 +34,9 @@ final class TerminalPTYViewer {
     @ObservationIgnored private let socket: TerminalSocket
     /// Bytes that arrived before the SwiftTerm canvas installed its feed.
     @ObservationIgnored private var backlog = Data()
-    @ObservationIgnored private var feed: ((Data) -> Void)?
+    /// The backlog starts mid-stream; the canvas must reset before it.
+    @ObservationIgnored private var backlogNeedsReset = false
+    @ObservationIgnored private var feed: (@MainActor (Data, Bool) -> Void)?
     @ObservationIgnored private var refitTask: Task<Void, Never>?
 
     /// A viewer that is installed late (or never) must not grow unbounded.
@@ -76,11 +78,17 @@ final class TerminalPTYViewer {
     }
 
     /// Host output for this PTY, already coalesced by `TerminalStore`.
-    func receive(_ data: Data) {
+    /// `reset` marks a gapped replay: the stream starts mid-sequence, so the
+    /// pre-gap backlog is discarded and the canvas is told to reset first.
+    func receive(_ data: Data, reset: Bool = false) {
         guard !isClosed, !hasExited else { return }
         if let feed {
-            feed(data)
+            feed(data, reset)
             return
+        }
+        if reset {
+            backlog.removeAll(keepingCapacity: true)
+            backlogNeedsReset = true
         }
         backlog.append(data)
         if backlog.count > Self.backlogLimit {
@@ -89,14 +97,18 @@ final class TerminalPTYViewer {
     }
 
     /// Install the mounted canvas as the destination for host output and flush
-    /// whatever arrived while it was being created.
-    func install(_ feed: @escaping (Data) -> Void) {
+    /// whatever arrived while it was being created. The reset flag travels
+    /// with the backlog so the canvas can clear before painting a gapped
+    /// replay; if the reset arrived without bytes it is still delivered.
+    func install(_ feed: @escaping @MainActor (Data, Bool) -> Void) {
         guard !isClosed, !hasExited else { return }
         self.feed = feed
-        guard !backlog.isEmpty else { return }
+        let needsReset = backlogNeedsReset
+        backlogNeedsReset = false
         let pending = backlog
         backlog.removeAll(keepingCapacity: false)
-        feed(pending)
+        if pending.isEmpty && !needsReset { return }
+        feed(pending, needsReset)
     }
 
     func send(_ text: String) {

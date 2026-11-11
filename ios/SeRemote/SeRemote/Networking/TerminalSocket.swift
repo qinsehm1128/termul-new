@@ -91,7 +91,10 @@ final class TerminalSocket {
     private(set) var connectionGeneration = 0
     private var origin: URL?
 
-    var onBytes: (@MainActor (String, Data) -> Void)?
+    /// `gap` is true on the first replay frame when the host could not replay
+    /// every byte since the client's cursor: the stream starts mid-sequence and
+    /// the canvas must reset before painting it.
+    var onBytes: (@MainActor (String, Data, Bool) -> Void)?
     var onExit: (@MainActor (String) -> Void)?
     var onCatalogChanged: (@MainActor () -> Void)?
     var onDisplayModeChanged: (@MainActor (String, String, Int, Int) -> Void)?
@@ -385,7 +388,7 @@ final class TerminalSocket {
             return
         }
         if let output = Self.output(from: object) {
-            onBytes?(output.terminalId, output.data)
+            onBytes?(output.terminalId, output.data, output.gap)
             return
         }
         guard let type = object["type"] as? String else { return }
@@ -416,11 +419,16 @@ final class TerminalSocket {
     /// Pure mapping for the two terminal-output frames the host sends over the
     /// v2 JSON protocol: `data` for live bytes and `replay` for backlog chunks.
     /// Keeping it pure lets the wire contract be tested without a socket.
-    nonisolated static func output(from object: [String: Any]) -> (terminalId: String, data: Data)? {
+    ///
+    /// A replay whose host cursor fell behind the oldest retained chunk carries
+    /// `gap: true` on its first frame. Concatenating those chunks without that
+    /// flag would replay a stream that starts mid-escape at an unknown screen
+    /// state — the canvas has to reset first.
+    nonisolated static func output(from object: [String: Any]) -> (terminalId: String, data: Data, gap: Bool)? {
         switch object["type"] as? String {
         case "data":
             guard let terminalId = object["terminalId"] as? String else { return nil }
-            return (terminalId, bytes(from: object["data"]))
+            return (terminalId, bytes(from: object["data"]), false)
         case "replay":
             guard let terminalId = object["terminalId"] as? String,
                   let chunks = object["chunks"] as? [[String: Any]] else { return nil }
@@ -428,7 +436,8 @@ final class TerminalSocket {
             for chunk in chunks {
                 data.append(bytes(from: chunk["data"]))
             }
-            return (terminalId, data)
+            let gap = object["gap"] as? Bool ?? false
+            return (terminalId, data, gap)
         default:
             return nil
         }

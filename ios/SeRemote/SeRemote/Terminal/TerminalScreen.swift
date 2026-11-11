@@ -16,7 +16,7 @@ struct TerminalScreen: UIViewRepresentable {
     var textScale: CGFloat
     var onSend: (String) -> Void
     var onResize: (Int, Int) -> Void
-    var onReady: (@escaping (Data) -> Void) -> Void
+    var onReady: (@escaping @MainActor (Data, Bool) -> Void) -> Void
     var onTextScaleChange: (CGFloat, Bool) -> Void
     var focusToken: UInt64 = 0
     var blurToken: UInt64 = 0
@@ -52,8 +52,8 @@ struct TerminalScreen: UIViewRepresentable {
         // own grid: this view was created at a zero size, so SwiftTerm still
         // owns its 80x25 startup grid, and a takeover replay painted there
         // outlives the shrink inside the alternate buffer.
-        onReady { data in
-            context.coordinator.receive(data, into: view)
+        onReady { data, reset in
+            context.coordinator.receive(data, reset: reset, into: view)
         }
         return view
     }
@@ -129,11 +129,19 @@ struct TerminalScreen: UIViewRepresentable {
         /// its 80x25 startup grid; painting it there authors the screen at a
         /// grid the canvas is about to leave.
         private var pendingFeed = Data()
+        /// The held replay starts mid-sequence (the host dropped history).
+        /// Clear the emulator's state before those bytes are interpreted.
+        private var pendingFeedNeedsReset = false
         /// True once the replay was applied at the canvas's own grid. From then
         /// on host bytes are live and go straight to the emulator.
         private(set) var didApplyReplay = false
         /// A canvas that never reports a size must not buffer without bound.
         private static let maxPendingFeed = 4 * 1024 * 1024
+        /// ESC c (RIS): full terminal reset. A gapped replay begins inside an
+        /// escape sequence or a text run authored at an unknown screen state;
+        /// interpreting it on top of whatever the emulator holds can leave a
+        /// corrupted buffer that no later repaint repairs.
+        nonisolated static let gappedReplayReset = "\u{1b}c"
         /// Strong ownership: UIKit holds the accessory view weakly enough that
         /// a dropped hosting controller would blank the strip mid-typing.
         private var accessoryHost: UIHostingController<AnyView>?
@@ -162,10 +170,19 @@ struct TerminalScreen: UIViewRepresentable {
         /// grid is held back: the replay's cursor moves and wraps are relative
         /// to the grid it was authored at, and the phone's fitted grid is only
         /// known after the first layout pass.
-        func receive(_ data: Data, into view: PhoneTerminalView) {
+        ///
+        /// `reset` means the stream starts mid-sequence: the emulator is reset
+        /// first, and any pre-gap bytes still held for layout are discarded
+        /// because they belong to the truncated prefix.
+        func receive(_ data: Data, reset: Bool = false, into view: PhoneTerminalView) {
             if didApplyReplay {
+                if reset { applyReplayReset(into: view) }
                 view.feed(byteArray: [UInt8](data)[...])
                 return
+            }
+            if reset {
+                pendingFeed.removeAll(keepingCapacity: true)
+                pendingFeedNeedsReset = true
             }
             pendingFeed.append(data)
             if pendingFeed.count > Self.maxPendingFeed {
@@ -186,11 +203,22 @@ struct TerminalScreen: UIViewRepresentable {
 
         private func applyPendingFeed(into view: PhoneTerminalView) {
             didApplyReplay = true
+            if pendingFeedNeedsReset {
+                pendingFeedNeedsReset = false
+                applyReplayReset(into: view)
+            }
             guard !pendingFeed.isEmpty else { return }
             let data = pendingFeed
             pendingFeed = Data()
             view.feed(byteArray: [UInt8](data)[...])
             dropDesktopFrameIfNeeded(in: view)
+        }
+
+        /// Clear every mode, buffer and cursor the evicted prefix had set, so
+        /// a replay that starts mid-stream cannot corrupt the screen.
+        private func applyReplayReset(into view: PhoneTerminalView) {
+            view.feed(text: Self.gappedReplayReset)
+            HostLog.session.info("Reset the canvas for a gapped replay")
         }
 
         /// A replay authored at another grid cannot rebuild a full-screen

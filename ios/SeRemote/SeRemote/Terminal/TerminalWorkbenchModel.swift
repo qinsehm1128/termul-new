@@ -429,7 +429,10 @@ protocol TerminalSurfaceCanvasHost: AnyObject {
     /// replay is in flight (a resume) or the host did not state one.
     var canvasReplayGrid: TerminalReplayGrid? { get }
     var canvasLocksToHostCols: Bool { get }
-    func installCanvasFeed(_ feed: @escaping (Data) -> Void)
+    /// `feed(data, needsReset)`: `needsReset` is true when the buffered stream
+    /// starts mid-sequence (a gapped host replay) and the canvas must reset
+    /// the emulator before painting it.
+    func installCanvasFeed(_ feed: @escaping @MainActor (Data, Bool) -> Void)
     func sendCanvasInput(_ text: String)
     func canvasResized(cols: Int, rows: Int)
 }

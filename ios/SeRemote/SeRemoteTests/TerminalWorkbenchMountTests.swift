@@ -38,7 +38,7 @@ struct TerminalWorkbenchMountTests {
         var canvasReplayGrid: TerminalReplayGrid? { nil }
         var canvasLocksToHostCols: Bool { false }
 
-        func installCanvasFeed(_ feed: @escaping (Data) -> Void) {
+        func installCanvasFeed(_ feed: @escaping @MainActor (Data, Bool) -> Void) {
             installs += 1
         }
 
