@@ -2279,22 +2279,28 @@ mod v3 {
         Err("probe_unsupported")
     }
     fn perform_probe(home: &Path, adapter: &definition::LoadedAdapter) -> Probe {
-        let start = Instant::now();
         let mut result = Probe::default();
         let parser = match regex::Regex::new(&adapter.manifest.cli.version_parser.pattern) {
             Ok(p) => p,
             Err(_) => return result,
         };
         let mut remaining_bytes = 64 * 1024;
+        // A GUI-launched app inherits launchd's PATH (/usr/bin:/bin:...), which
+        // misses ~/.local/bin, Homebrew and version managers. Resolve against the
+        // user's login-shell PATH, the same one `discover` and PTYs use, or a
+        // CLI the user can run is reported as missing and install is refused.
+        let search_path = crate::pty::env_refresh::path_for_resolution();
+        // The first PATH resolution may run the login shell; it must not eat
+        // the CLI probe's own deadline.
+        let start = Instant::now();
         for binary in &adapter.manifest.cli.binaries {
             if remaining_bytes == 0 {
                 break;
             }
-            let Some(path) = std::env::var_os("PATH").and_then(|paths| {
-                std::env::split_paths(&paths)
-                    .map(|p| p.join(binary))
-                    .find(|p| p.is_file())
-            }) else {
+            let Some(path) = std::env::split_paths(&search_path)
+                .map(|p| p.join(binary))
+                .find(|p| p.is_file())
+            else {
                 continue;
             };
             let remaining = Duration::from_secs(5).saturating_sub(start.elapsed());
@@ -2877,6 +2883,17 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    #[test]
+    fn cli_version_probe_resolves_against_the_login_shell_path() {
+        // A Finder/Dock launch inherits launchd's PATH, so a CLI installed in
+        // ~/.local/bin or Homebrew is invisible to the raw process PATH and the
+        // install was refused with "No declared CLI binary was found".
+        let source = include_str!("install.rs");
+        let start = source.find("fn perform_probe(").expect("probe exists");
+        let body = &source[start..start + source[start..].find("\n    }\n").unwrap()];
+        assert!(body.contains("env_refresh::path_for_resolution()"));
+        assert!(!body.contains(concat!("var_os(", "\"PATH\")")));
+    }
     // Fixed, deliberately quoted home: never discover a CLI, mutate HOME, or write here.
     const LEGACY_FIXTURE_HOME: &str = "/se-hooks-legacy-fixture/home 'with spaces";
 
