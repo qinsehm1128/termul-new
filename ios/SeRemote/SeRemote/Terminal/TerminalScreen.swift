@@ -4,6 +4,7 @@ import UIKit
 
 struct TerminalScreen: UIViewRepresentable {
     @Environment(\.remoteDeviceLink) private var deviceLink
+    @Environment(\.colorScheme) private var colorScheme
     private var allowsInput: Bool { deviceLink?.allows("terminal.input") ?? true }
 
     var terminalId: String
@@ -30,6 +31,7 @@ struct TerminalScreen: UIViewRepresentable {
 
     func makeUIView(context: Context) -> PhoneTerminalView {
         let view = PhoneTerminalView(frame: .zero)
+        applyTheme(to: view, coordinator: context.coordinator)
         view.allowsInput = allowsInput
         context.coordinator.allowsInput = allowsInput
         view.terminalDelegate = context.coordinator
@@ -56,11 +58,27 @@ struct TerminalScreen: UIViewRepresentable {
         return view
     }
 
+    /// SwiftTerm paints its own opaque surface (black / grey by default), so the
+    /// palette must reach the view itself or a light appearance keeps a black
+    /// terminal. Re-applied only when the effective scheme changes, so a live
+    /// Light/Dark switch repaints without touching the emulator's content.
+    private func applyTheme(to view: PhoneTerminalView, coordinator: Coordinator) {
+        let mode = SeThemeMode.resolved(colorScheme: colorScheme)
+        guard coordinator.appliedThemeMode != mode else { return }
+        coordinator.appliedThemeMode = mode
+        let canvas = UIColor(mode.palette.terminalCanvas)
+        view.nativeBackgroundColor = canvas
+        view.nativeForegroundColor = UIColor(mode.palette.terminalInk)
+        view.backgroundColor = canvas
+        view.layer.backgroundColor = canvas.cgColor
+    }
+
     func updateUIView(_ uiView: PhoneTerminalView, context: Context) {
         context.coordinator.replayGrid = replayGrid
         // A canvas mounted without a size report still must not hold the replay
         // forever; a laid-out view is enough to interpret it at its own width.
         context.coordinator.flushFeedIfFitted(uiView)
+        applyTheme(to: uiView, coordinator: context.coordinator)
         uiView.allowsInput = allowsInput
         context.coordinator.allowsInput = allowsInput
         context.coordinator.onSend = onSend
@@ -101,6 +119,7 @@ struct TerminalScreen: UIViewRepresentable {
         var lastFocusToken: UInt64 = 0
         var allowsInput = true
         var lastBlurToken: UInt64 = 0
+        var appliedThemeMode: SeThemeMode?
         private var lastCols = 0
         private var lastRows = 0
         /// Grid the host replay was authored at, supplied by the surface.
