@@ -445,8 +445,47 @@ describe('terminal-store', () => {
       expect(useTerminalStore.getState().terminals[0].claim).toBeUndefined()
     })
 
-    it('reports unavailable for a scope-less terminal without calling the host', async () => {
+    it('claims a scope-less project terminal through the host project-terminal path', async () => {
+      // A plain project terminal (qin-code, Claude Code ...) has no Conversation.
+      // After a GUI restart it is reattached by watch without a claim, so the
+      // takeover must still be able to obtain one.
       seed({ conversationId: undefined })
+      vi.mocked(terminalApi.resume).mockResolvedValue({
+        success: true,
+        data: {
+          claim: 'project-claim',
+          terminal: {
+            id: 'pty-watched',
+            shell: 'zsh',
+            cwd: '/work',
+            pid: 11,
+            cols: 80,
+            rows: 24,
+            latestSeq: 90,
+            gap: false
+          }
+        }
+      })
+
+      const result = await useTerminalStore.getState().acquireTerminalClaim('pty-watched')
+
+      expect(result).toEqual({ status: 'acquired', claim: 'project-claim' })
+      // No conversationId: the host routes it to the untracked project-terminal
+      // path, which refuses any PTY a SessionWorkspace tracks.
+      expect(terminalApi.resume).toHaveBeenCalledWith({
+        terminalId: 'pty-watched',
+        lastSeq: Number.MAX_SAFE_INTEGER
+      })
+      expect(useTerminalStore.getState().terminals[0]).toMatchObject({
+        claim: 'project-claim',
+        healthStatus: 'running',
+        resumeCursor: 90
+      })
+      expect(terminalApi.spawn).not.toHaveBeenCalled()
+    })
+
+    it('reports unavailable for a record that has no PTY yet', async () => {
+      seed({ conversationId: undefined, ptyId: undefined })
 
       const result = await useTerminalStore.getState().acquireTerminalClaim('pty-watched')
 

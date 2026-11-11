@@ -6973,6 +6973,113 @@ mod tests {
         manager.active_terminal_slots.store(0, Ordering::SeqCst);
     }
 
+    /// The renderer's takeover of a plain project terminal (no Conversation)
+    /// asks for a claim without a conversation id. That path must never hand
+    /// out a claim for a PTY a SessionWorkspace tracks.
+    #[tokio::test]
+    async fn project_terminal_resume_only_claims_untracked_ptys() {
+        let manager = crate::test_pty_manager();
+        let conversation_id =
+            ConversationId::parse("018f7a1c-1b4d-7c8a-9f01-0123456789ab").unwrap();
+        let insert = |terminal_id: &str, tracked: bool| {
+            let (broadcast_tx, _) = tokio::sync::broadcast::channel(8);
+            let instance = Arc::new(TerminalInstance {
+                terminal_screen_engine: Default::default(),
+                screen_observer: None,
+                id: terminal_id.to_string(),
+                conversation_id,
+                workspace_ref_tracked: tracked,
+                project_id: Some("project-1".to_string()),
+                child: Arc::new(AsyncMutex::new(None)),
+                master: Arc::new(AsyncMutex::new(None)),
+                writer: Arc::new(AsyncMutex::new(None)),
+                reader_handle: Arc::new(AsyncMutex::new(None)),
+                flusher_handle: Arc::new(AsyncMutex::new(None)),
+                done_flag: Arc::new(AtomicBool::new(false)),
+                stop_requested: Arc::new(AtomicBool::new(false)),
+                lifecycle_state: Arc::new(RwLock::new(TerminalLifecycleState::Active)),
+                cleanup_gate: Arc::new(AsyncMutex::new(())),
+                cleanup_job: Arc::new(Mutex::new(None)),
+                cleanup_progress: Arc::new(Mutex::new(TerminalCleanupProgress::default())),
+                cleanup_attempts: Arc::new(AtomicU64::new(0)),
+                shell: "host-shell".to_string(),
+                cwd: "/host/workspace".to_string(),
+                pid: 42,
+                last_activity: Arc::new(RwLock::new(Instant::now())),
+                orphan_since: Arc::new(RwLock::new(None)),
+                renderer_refs: Arc::new(RwLock::new(HashSet::new())),
+                protected: Arc::new(AtomicBool::new(true)),
+                cols: Arc::new(RwLock::new(80)),
+                rows: Arc::new(RwLock::new(24)),
+                cell_px: Arc::new(RwLock::new(None)),
+                phone_fit: empty_phone_fit(),
+                broadcast_tx: Arc::new(broadcast_tx),
+                output_log: Arc::new(RwLock::new(std::collections::VecDeque::new())),
+                output_log_bytes: Arc::new(AtomicUsize::new(0)),
+                output_log_modes: Arc::new(parking_lot::Mutex::new(
+                    crate::modes::ModeTracker::default(),
+                )),
+                next_output_seq: Arc::new(AtomicU64::new(1)),
+                #[cfg(target_os = "windows")]
+                conpty_handles: None,
+            });
+            manager
+                .terminals
+                .write()
+                .insert(terminal_id.to_string(), instance);
+        };
+        insert("terminal-project", false);
+        insert("terminal-conversation", true);
+        manager.active_terminal_slots.store(2, Ordering::SeqCst);
+        let tracked_claim =
+            manager
+                .claims
+                .issue("terminal-conversation", conversation_id, Some("project-1"));
+        let tracked_generation = manager.claim_generation("terminal-conversation");
+        // A project terminal got its claim at spawn; the renderer lost it on a
+        // GUI restart, which is what the takeover recovers.
+        let lost_spawn_claim =
+            manager
+                .claims
+                .issue("terminal-project", conversation_id, Some("project-1"));
+
+        assert!(
+            manager
+                .resume_project_terminal("terminal-conversation", u64::MAX)
+                .is_err(),
+            "a Conversation terminal must not be claimable without its Conversation"
+        );
+        assert_eq!(
+            manager.claim_generation("terminal-conversation"),
+            tracked_generation
+        );
+        assert!(manager
+            .verify_claim("terminal-conversation", &tracked_claim)
+            .is_ok());
+
+        let (grant, _) = manager
+            .resume_project_terminal("terminal-project", u64::MAX)
+            .unwrap();
+        assert_eq!(grant.terminal.id, "terminal-project");
+        assert!(manager
+            .verify_claim("terminal-project", &grant.claim)
+            .is_ok());
+        assert_eq!(
+            manager.verify_claim("terminal-project", &lost_spawn_claim),
+            Err(ClaimError)
+        );
+        assert!(
+            manager.get("terminal-project").is_some(),
+            "takeover preserves PTY"
+        );
+
+        for terminal_id in ["terminal-project", "terminal-conversation"] {
+            manager.terminals.write().remove(terminal_id);
+            manager.claims.remove(terminal_id);
+        }
+        manager.active_terminal_slots.store(0, Ordering::SeqCst);
+    }
+
     #[test]
     fn test_spawn_options_default() {
         let options = SpawnOptions::default();

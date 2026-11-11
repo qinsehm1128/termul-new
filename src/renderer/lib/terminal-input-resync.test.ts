@@ -189,14 +189,35 @@ describe('resyncRendererInputModes after a claim-less rehydrate', () => {
     expect(readTerminalInputModes).not.toHaveBeenCalled()
   })
 
-  it('keeps the no-claim message for terminals without a Conversation id', async () => {
+  it('takes over a scope-less project terminal (qin-code in a project tab)', async () => {
     seedRehydratedTerminal({ conversationId: undefined })
     registerFakeRenderer(PTY_ID)
+    vi.mocked(terminalApi.resume).mockResolvedValue(resumeGrant('project-claim'))
+    vi.mocked(readTerminalInputModes).mockResolvedValue({ success: true, data: MODES })
 
     const result = await resyncRendererInputModes(PTY_ID, { recoverClaim: true })
 
-    expect(result).toEqual({ status: 'unavailable', reason: 'no-claim' })
-    expect(terminalApi.resume).not.toHaveBeenCalled()
+    expect(result.status).toBe('applied')
+    expect(terminalApi.resume).toHaveBeenCalledWith({
+      terminalId: PTY_ID,
+      lastSeq: Number.MAX_SAFE_INTEGER
+    })
+    expect(readTerminalInputModes).toHaveBeenCalledWith(PTY_ID, 'project-claim')
+  })
+
+  it('reports host-denied when the host refuses a scope-less takeover', async () => {
+    seedRehydratedTerminal({ conversationId: undefined })
+    registerFakeRenderer(PTY_ID)
+    vi.mocked(terminalApi.resume).mockResolvedValue({
+      success: false,
+      error: 'Unauthorized',
+      code: 'UNAUTHORIZED'
+    })
+
+    const result = await resyncRendererInputModes(PTY_ID, { recoverClaim: true })
+
+    expect(result).toEqual({ status: 'unavailable', reason: 'host-denied' })
+    expect(readTerminalInputModes).not.toHaveBeenCalled()
   })
 
   it('stays unsupported on a transport without claim-gated input modes', async () => {

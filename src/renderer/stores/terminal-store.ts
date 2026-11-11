@@ -819,15 +819,17 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       const terminal = get().findTerminalByPtyId(ptyId)
       if (!terminal) return { status: 'unavailable' }
       if (terminal.claim) return { status: 'acquired', claim: terminal.claim }
-      // Scope-less project PTYs have no Conversation reference the host can
-      // validate, which is exactly the case the resync already reports as
-      // `no-claim`. Do not invent a broader authorization for a read.
-      if (!terminal.conversationId) return { status: 'unavailable' }
+      // Scope-less project PTYs (a plain project terminal running qin-code,
+      // Claude Code, ...) have no Conversation reference. The host serves them
+      // through its restart-adoption path instead, which only rotates a claim
+      // for an active PTY that no SessionWorkspace tracks, so a Conversation
+      // terminal can never be claimed this way.
+      if (!terminal.ptyId) return { status: 'unavailable' }
 
       let result: IpcResult<TerminalResumeGrant>
       try {
         result = await terminalApi.resume({
-          conversationId: terminal.conversationId,
+          ...(terminal.conversationId ? { conversationId: terminal.conversationId } : {}),
           terminalId: ptyId,
           // Live-only. This PTY is already painting through the claim-less
           // watch forwarder; replaying from `resumeCursor` would duplicate
