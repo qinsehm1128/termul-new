@@ -809,28 +809,31 @@ struct SeToggle: View {
 }
 
 struct SeThemePick: View {
-    @Binding var mode: SeThemeMode
+    /// The persisted preference, not the resolved mode: "Follow system" is a
+    /// choice the picker has to be able to show.
+    @Binding var appearance: AppAppearance
 
     @Environment(\.sePalette) private var palette
     @Environment(\.seThemeMode) private var current
 
     var body: some View {
         HStack(spacing: 4) {
-            ForEach(SeThemeMode.allCases) { item in
+            ForEach(AppAppearance.allCases) { item in
                 Button {
-                    mode = item
+                    appearance = item
                 } label: {
-                    Text(item == .day ? "Day" : "Night")
+                    Text(item.title)
                         .font(SeNocturneType.font(10))
-                        .foregroundStyle(mode == item ? palette.canvas : palette.inkTertiary)
+                        .foregroundStyle(appearance == item ? palette.canvas : palette.inkTertiary)
                         .padding(.horizontal, 8)
                         .frame(height: 24)
-                        .background(mode == item ? palette.ink : Color.clear,
+                        .background(appearance == item ? palette.ink : Color.clear,
                                     in: RoundedRectangle(cornerRadius: 5, style: .continuous))
                         .frame(height: 44)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(SePressable())
+                .accessibilityAddTraits(appearance == item ? .isSelected : [])
             }
         }
         .padding(2)

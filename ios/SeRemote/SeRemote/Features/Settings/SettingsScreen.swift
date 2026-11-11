@@ -85,10 +85,7 @@ struct SettingsScreen: View {
                 SeGroupLabel(title: String(localized: "Appearance"), count: nil)
                 SeGroupCard {
                     SeRowItem(title: String(localized: "Theme")) {
-                        SeThemePick(mode: Binding(
-                            get: { mode },
-                            set: { settings.appearance = $0.appearance }
-                        ))
+                        SeThemePick(appearance: $settings.appearance)
                     }
                     SeRowItem(title: String(localized: "Language")) {
                         Menu {

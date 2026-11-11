@@ -37,8 +37,8 @@ enum SeThemeMode: String, CaseIterable, Identifiable, Sendable {
 /// Semantic colors of the Nocturne system.
 ///
 /// Chrome stays neutral in both modes; color is reserved for state and the one
-/// primary action. The terminal keeps its own dark canvas in both modes: it is
-/// a screen inside the screen, not app chrome.
+/// primary action. The terminal gets a readable pair per mode: a dark canvas
+/// in Night and a light canvas in Day, matching the surface it sits inside.
 struct SePalette: Sendable {
     let canvas: Color
     let surface: Color
@@ -109,8 +109,11 @@ struct SePalette: Sendable {
         dangerSubtle: Color(hex: 0xC0392B).opacity(0.10),
         codeCanvas: Color(hex: 0xF1F4F8),
         codeInk: Color(hex: 0x10151C),
-        terminalCanvas: Color(hex: 0x0B0D12),
-        terminalInk: Color(hex: 0xEDE7D8)
+        // The terminal is a surface inside the screen, so it needs a light
+        // variant too: readable ink on a near-white canvas in Day, the
+        // original dark canvas in Night.
+        terminalCanvas: Color(hex: 0xF7F8FB),
+        terminalInk: Color(hex: 0x1B2028)
     )
 
     static func palette(for mode: SeThemeMode) -> SePalette {

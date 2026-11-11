@@ -1,5 +1,6 @@
 import SwiftUI
 import Testing
+import UIKit
 @testable import SeRemote
 
 @Suite("Design system")
@@ -181,4 +182,108 @@ struct DesignSystemTests {
         #expect(SeNocturneType.microSize == 8)
         #expect(SeNocturneType.badgeSize == 7)
     }
+
+    // MARK: - Appearance (follow system)
+
+    @Test("A fresh install follows the system appearance")
+    @MainActor
+    func defaultAppearanceFollowsSystem() throws {
+        let (defaults, name) = try isolatedDefaults("default")
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        let settings = AppSettings(defaults: defaults)
+        #expect(settings.appearance == .system)
+        #expect(settings.appearance.colorScheme == nil)
+        // Loading must not write the fallback: an absent value keeps meaning
+        // "the user never chose", so later upgrades can still change the default.
+        #expect(defaults.object(forKey: "se.app.appearance") == nil)
+    }
+
+    @Test("An explicit appearance persists and wins over the default")
+    @MainActor
+    func explicitAppearancePersists() throws {
+        let (defaults, name) = try isolatedDefaults("persist")
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        let settings = AppSettings(defaults: defaults)
+        for choice in [AppAppearance.light, .dark, .system] {
+            settings.appearance = choice
+            #expect(AppSettings(defaults: defaults).appearance == choice)
+        }
+    }
+
+    @Test("The pre-rename appearance key is still honored")
+    @MainActor
+    func legacyAppearanceKey() throws {
+        let (defaults, name) = try isolatedDefaults("legacy")
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set(AppAppearance.light.rawValue, forKey: "termul.app.appearance")
+
+        #expect(AppSettings(defaults: defaults).appearance == .light)
+    }
+
+    @Test("Only an explicit choice pins a color scheme")
+    func appearancePinsOnlyWhenChosen() {
+        #expect(AppAppearance.system.colorScheme == nil)
+        #expect(AppAppearance.light.colorScheme == .light)
+        #expect(AppAppearance.dark.colorScheme == .dark)
+        #expect(AppAppearance.system.themeMode == nil)
+        for choice in AppAppearance.allCases {
+            guard let scheme = choice.colorScheme, let mode = choice.themeMode else { continue }
+            #expect(SeThemeMode.resolved(colorScheme: scheme) == mode)
+            #expect(mode.colorScheme == scheme)
+        }
+        // Follow system is offered first so the default is visible in Settings.
+        #expect(AppAppearance.allCases.first == .system)
+        // Every option has a localized label (these keys exist in zh-Hans).
+        #expect(AppAppearance.allCases.allSatisfy { !$0.title.isEmpty })
+    }
+
+    @Test("Day and night palettes differ for the terminal surface")
+    func terminalPaletteDiffers() {
+        #expect(rgba(SePalette.day.terminalCanvas) != rgba(SePalette.night.terminalCanvas))
+        #expect(rgba(SePalette.day.terminalInk) != rgba(SePalette.night.terminalInk))
+        #expect(rgba(SePalette.day.canvas) != rgba(SePalette.night.canvas))
+    }
+
+    @Test("Terminal ink keeps readable contrast in both modes")
+    func terminalContrast() {
+        for palette in [SePalette.day, SePalette.night] {
+            #expect(contrastRatio(palette.terminalInk, palette.terminalCanvas) >= 4.5)
+        }
+        // Day is genuinely a light surface; night stays dark.
+        #expect(relativeLuminance(SePalette.day.terminalCanvas) > 0.5)
+        #expect(relativeLuminance(SePalette.night.terminalCanvas) < 0.1)
+    }
+
+    private func isolatedDefaults(_ tag: String) throws -> (UserDefaults, String) {
+        let name = "se.tests.appearance.\(tag).\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defaults.removePersistentDomain(forName: name)
+        return (defaults, name)
+    }
+}
+
+// MARK: - Color measurement
+
+private func rgba(_ color: Color) -> [CGFloat] {
+    var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+    _ = UIColor(color).getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+    return [red, green, blue, alpha]
+}
+
+private func relativeLuminance(_ color: Color) -> CGFloat {
+    let components = rgba(color)
+    func channel(_ value: CGFloat) -> CGFloat {
+        value <= 0.03928 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+    }
+    return 0.2126 * channel(components[0])
+        + 0.7152 * channel(components[1])
+        + 0.0722 * channel(components[2])
+}
+
+private func contrastRatio(_ first: Color, _ second: Color) -> CGFloat {
+    let a = relativeLuminance(first)
+    let b = relativeLuminance(second)
+    return (max(a, b) + 0.05) / (min(a, b) + 0.05)
 }

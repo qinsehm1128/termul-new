@@ -4,7 +4,14 @@ struct RootView: View {
     @Bindable var store: ConnectionStore
     @Bindable var settings: AppSettings
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.sePalette) private var palette
+    /// RootView's own body sits *above* `seResolvedThemeMode()`, so reading
+    /// `sePalette` here would always see the default (night) palette. Resolve
+    /// from the effective scheme directly instead — it also tracks live system
+    /// appearance changes.
+    @Environment(\.colorScheme) private var colorScheme
+    private var palette: SePalette {
+        SeThemeMode.resolved(colorScheme: colorScheme).palette
+    }
     @State private var deniedCapability: String?
 
     private var isRevoked: Bool {
