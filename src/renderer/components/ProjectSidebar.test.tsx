@@ -717,7 +717,7 @@ describe('ProjectSidebar Name Truncation', () => {
   const longName =
     'A Very Long Project Name That Would Otherwise Wrap Onto A Second Line In The Narrow Sidebar'
 
-  it('truncates a long active project name instead of wrapping', () => {
+  it('truncates a long active project name instead of wrapping', async () => {
     renderWithRouter({
       projects: [{ id: '1', name: longName, color: 'blue', gitBranch: 'main' }],
       activeProjectId: '1'
@@ -728,10 +728,10 @@ describe('ProjectSidebar Name Truncation', () => {
     // min-w-0 lets the flex child shrink below its content width so clipping kicks in.
     expect(nameEl).toHaveClass('truncate', 'min-w-0', 'flex-1')
     // Full name remains discoverable on hover.
-    expect(nameEl).toHaveAttribute('title', longName)
+    await expectFullNameTooltip(nameEl)
   })
 
-  it('truncates a long archived project name and exposes the full name via title', () => {
+  it('truncates a long archived project name and shows the full name on hover', async () => {
     renderWithRouter({
       projects: [
         { id: '1', name: 'Active Project', color: 'blue', gitBranch: 'main' },
@@ -744,8 +744,25 @@ describe('ProjectSidebar Name Truncation', () => {
 
     const nameEl = screen.getByText(longName)
     expect(nameEl).toHaveClass('truncate', 'min-w-0', 'flex-1')
-    expect(nameEl).toHaveAttribute('title', longName)
+    await expectFullNameTooltip(nameEl)
   })
+
+  it('shows no tooltip for a name that fits', () => {
+    renderWithRouter({
+      projects: [{ id: '1', name: 'Short', color: 'blue', gitBranch: 'main' }],
+      activeProjectId: '1'
+    })
+
+    fireEvent.focus(screen.getByText('Short'))
+    expect(screen.queryByRole('tooltip')).toBeNull()
+  })
+
+  async function expectFullNameTooltip(nameEl: HTMLElement): Promise<void> {
+    Object.defineProperty(nameEl, 'scrollWidth', { configurable: true, value: 400 })
+    Object.defineProperty(nameEl, 'clientWidth', { configurable: true, value: 120 })
+    fireEvent.focus(nameEl)
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(longName)
+  }
 })
 
 describe('ProjectSidebar Archived Projects', () => {

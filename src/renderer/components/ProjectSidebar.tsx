@@ -63,6 +63,7 @@ import {
 import { MonochromeSpinner } from '@/components/ui/monochrome-spinner'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { TruncatedText } from '@/components/ui/truncated-text'
 import { useProjectsWithActiveAgentChat } from '@/features/agent-session/stores/acp-store'
 import { PluginMenuItems } from '@/features/plugins/PluginMenuItems'
 import { useUpdateAppSetting } from '@/hooks/use-app-settings'
@@ -2076,7 +2077,8 @@ const ProjectItem = memo(function ProjectItem({
                 onClick={(e) => e.stopPropagation()}
               />
             ) : (
-              <span
+              <TruncatedText
+                text={project.name}
                 className={cn(
                   'min-w-0 flex-1 truncate text-sidebar-row leading-4 transition-colors',
                   // flex-1 min-w-0 is required for truncate to clip inside a flex row
@@ -2084,10 +2086,7 @@ const ProjectItem = memo(function ProjectItem({
                     ? 'text-foreground'
                     : 'text-sidebar-foreground group-hover:text-foreground'
                 )}
-                title={project.name}
-              >
-                {project.name}
-              </span>
+              />
             )}
             {hasError && (
               <span
@@ -2193,12 +2192,10 @@ function ArchivedProjectItem({
             data-project-color={project.color}
             className={cn('mr-1.5 size-1.5 shrink-0 rounded-[1px] opacity-40', colors.bg)}
           />
-          <span
+          <TruncatedText
+            text={project.name}
             className="min-w-0 flex-1 truncate text-sidebar-row leading-4 text-muted-foreground group-hover:text-foreground"
-            title={project.name}
-          >
-            {project.name}
-          </span>
+          />
           {hasActivity && (
             <span
               className="mr-1 flex items-center"
