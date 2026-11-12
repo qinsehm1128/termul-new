@@ -1614,12 +1614,26 @@ mod v3 {
         }
         Ok(Some(snapshot))
     }
-    fn ensure_owned(snapshot: &InstalledSnapshot) -> Result<(), HookErrorDto> {
+    fn ensure_owned(home: &Path, snapshot: &InstalledSnapshot) -> Result<(), HookErrorDto> {
+        let managed = managed_configs(home, &snapshot_adapter(snapshot)?)?;
         for target in &snapshot.targets {
-            if safe::read(&target.path)? != target.installed {
-                return Err(conflict(
-                    "Installed hook files were changed outside the installer",
-                ));
+            let current = safe::read(&target.path)?;
+            if current == target.installed {
+                continue;
+            }
+            // A shared config the agent rewrote (qin-code moves config.toml into
+            // config.d, any settings save reformats) is still ours to clean up
+            // as long as it parses; uninstall then removes only our entries.
+            match managed.get(&target.path) {
+                Some((format, ops)) => {
+                    strip_managed(format, ops, &current)
+                        .map_err(|_| conflict("Installed hook configuration is no longer valid"))?;
+                }
+                None => {
+                    return Err(conflict(
+                        "Installed hook files were changed outside the installer",
+                    ))
+                }
             }
         }
         Ok(())
@@ -2013,6 +2027,427 @@ mod v3 {
             Err(error(HookErrorCode::ValidationError, "Invalid file target"))
         }
     }
+    /// One rendered merge operation: the exact entry an install adds to a
+    /// shared config file. Ownership of merge targets is these entries, not the
+    /// file's bytes, because the agent itself rewrites its config (qin-code
+    /// absorbs `config.toml` into `config.d/*.toml`, settings saves reformat).
+    #[derive(Clone, Debug)]
+    struct ManagedOp {
+        key: Vec<String>,
+        op: String,
+        value: serde_json::Value,
+    }
+    type ManagedConfigs = BTreeMap<PathBuf, (String, Vec<ManagedOp>)>;
+
+    fn is_merge_format(format: &str) -> bool {
+        matches!(format, "json-merge" | "toml-merge")
+    }
+
+    fn render_context(
+        home: &Path,
+        adapter: &definition::LoadedAdapter,
+    ) -> Result<definition::RenderContext, HookErrorDto> {
+        let script = adapter
+            .manifest
+            .files
+            .iter()
+            .find(|f| f.id == "hook")
+            .ok_or_else(|| error(HookErrorCode::ValidationError, "Missing hook file"))?;
+        Ok(definition::RenderContext {
+            script_path: file_target(home, adapter, &script.target)?
+                .to_string_lossy()
+                .into_owned(),
+            endpoint_file: root(home)
+                .join("instances/{instance}/endpoint.env")
+                .to_string_lossy()
+                .into_owned(),
+            agent_id: adapter.manifest.id.clone(),
+        })
+    }
+
+    /// Every entry this adapter could own, independent of the selected events:
+    /// an exact rendered entry is ours whichever revision added it.
+    fn managed_configs(
+        home: &Path,
+        adapter: &definition::LoadedAdapter,
+    ) -> Result<ManagedConfigs, HookErrorDto> {
+        let context = render_context(home, adapter)?;
+        let mut result = ManagedConfigs::new();
+        for config in &adapter.manifest.config {
+            if !is_merge_format(&config.format) {
+                continue;
+            }
+            let path = scoped_config(home, &adapter.manifest.id, &config.path)?;
+            let mut ops = Vec::new();
+            for op in config.ops.iter().flatten() {
+                let value_json = serde_json::from_str(&op.value_json).map_err(io_error)?;
+                let value = definition::render_json_value(&value_json, &context).map_err(|_| {
+                    error(HookErrorCode::ValidationError, "Unsafe config placeholder")
+                })?;
+                ops.push(ManagedOp {
+                    key: op.key.clone(),
+                    op: op.op.clone(),
+                    value,
+                });
+            }
+            result
+                .entry(path)
+                .or_insert_with(|| (config.format.clone(), Vec::new()))
+                .1
+                .extend(ops);
+        }
+        Ok(result)
+    }
+
+    fn snapshot_adapter(
+        snapshot: &InstalledSnapshot,
+    ) -> Result<definition::LoadedAdapter, HookErrorDto> {
+        let manifest: definition::AdapterManifest =
+            serde_json::from_value(snapshot.manifest.clone())
+                .map_err(|_| conflict("Installed manifest is invalid"))?;
+        Ok(definition::LoadedAdapter {
+            manifest,
+            files: BTreeMap::new(),
+            source_digest: snapshot.source_digest.clone(),
+            origin: if snapshot.origin == AdapterOrigin::Builtin {
+                definition::AdapterOrigin::Builtin
+            } else {
+                definition::AdapterOrigin::Custom
+            },
+        })
+    }
+
+    fn toml_table_json(table: &toml_edit::Table) -> Option<serde_json::Value> {
+        let mut doc = toml_edit::DocumentMut::new();
+        *doc.as_table_mut() = table.clone();
+        let value: toml::Value = toml::from_str(&doc.to_string()).ok()?;
+        serde_json::to_value(value).ok()
+    }
+    fn toml_value_json(value: &toml_edit::Value) -> Option<serde_json::Value> {
+        let mut value = value.clone();
+        value.decor_mut().clear();
+        let parsed: toml::Table = toml::from_str(&format!("v = {value}")).ok()?;
+        serde_json::to_value(parsed.get("v")?).ok()
+    }
+    fn toml_item_json(item: &toml_edit::Item) -> Option<serde_json::Value> {
+        match item {
+            toml_edit::Item::Table(table) => toml_table_json(table),
+            toml_edit::Item::Value(value) => toml_value_json(value),
+            toml_edit::Item::ArrayOfTables(array) => Some(serde_json::Value::Array(
+                array
+                    .iter()
+                    .map(toml_table_json)
+                    .collect::<Option<Vec<_>>>()?,
+            )),
+            toml_edit::Item::None => None,
+        }
+    }
+    fn json_to_toml_item(value: &serde_json::Value) -> Result<toml_edit::Item, HookErrorDto> {
+        let unrepresentable = || {
+            error(
+                HookErrorCode::ValidationError,
+                "Merge value cannot be represented as TOML",
+            )
+        };
+        let mut wrapper = toml::Table::new();
+        wrapper.insert(
+            "v".into(),
+            toml::Value::try_from(value).map_err(|_| unrepresentable())?,
+        );
+        let mut doc: toml_edit::DocumentMut = toml::to_string(&wrapper)
+            .map_err(|_| unrepresentable())?
+            .parse()
+            .map_err(|_| unrepresentable())?;
+        doc.remove("v").ok_or_else(unrepresentable)
+    }
+    /// An entry inside an inline array: tables become inline tables.
+    fn json_to_toml_value(value: &serde_json::Value) -> Result<toml_edit::Value, HookErrorDto> {
+        match json_to_toml_item(value)? {
+            toml_edit::Item::Value(value) => Ok(value),
+            toml_edit::Item::Table(table) => {
+                Ok(toml_edit::Value::InlineTable(table.into_inline_table()))
+            }
+            _ => Err(conflict("Append value cannot be an inline array entry")),
+        }
+    }
+    fn json_to_toml_table(value: &serde_json::Value) -> Result<toml_edit::Table, HookErrorDto> {
+        match json_to_toml_item(value)? {
+            toml_edit::Item::Table(table) => Ok(table),
+            toml_edit::Item::Value(toml_edit::Value::InlineTable(inline)) => {
+                Ok(inline.into_table())
+            }
+            _ => Err(conflict("Append value is not a table")),
+        }
+    }
+
+    fn parse_toml_document(bytes: &[u8]) -> Result<toml_edit::DocumentMut, HookErrorDto> {
+        let text = std::str::from_utf8(bytes).map_err(io_error)?;
+        // toml_edit is lenient about some semantic errors; the typed parser is
+        // the authority on whether the agent will accept this file.
+        toml::from_str::<toml::Value>(text).map_err(|_| conflict("Config is not valid TOML"))?;
+        text.parse()
+            .map_err(|_| conflict("Config is not valid TOML"))
+    }
+
+    /// The next free table position, so an appended table is written after
+    /// everything already in the file instead of at the top.
+    fn next_table_position(table: &toml_edit::Table) -> isize {
+        fn walk(table: &toml_edit::Table, max: &mut isize) {
+            if let Some(p) = table.position() {
+                *max = (*max).max(p);
+            }
+            for (_, item) in table.iter() {
+                match item {
+                    toml_edit::Item::Table(t) => walk(t, max),
+                    toml_edit::Item::ArrayOfTables(array) => {
+                        for t in array.iter() {
+                            walk(t, max);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut max = 0;
+        walk(table, &mut max);
+        max + 1
+    }
+
+    /// Apply one merge op to a TOML document while preserving the user's
+    /// layout, comments and key order everywhere else.
+    fn toml_apply(
+        doc: &mut toml_edit::DocumentMut,
+        key: &[String],
+        op: &str,
+        value: &serde_json::Value,
+    ) -> Result<(), HookErrorDto> {
+        let position = next_table_position(doc.as_table());
+        let (leaf, parents) = key
+            .split_last()
+            .ok_or_else(|| error(HookErrorCode::ValidationError, "Empty merge key"))?;
+        let mut table: &mut dyn toml_edit::TableLike = doc.as_table_mut();
+        for parent in parents {
+            let item = table.entry(parent).or_insert_with(|| {
+                let mut created = toml_edit::Table::new();
+                created.set_implicit(true);
+                toml_edit::Item::Table(created)
+            });
+            table = item
+                .as_table_like_mut()
+                .ok_or_else(|| conflict("Merge key crosses a non-object value"))?;
+        }
+        match op {
+            "set" => {
+                table.insert(leaf, json_to_toml_item(value)?);
+            }
+            "append-unique" => match table.get_mut(leaf) {
+                None if value.is_object() => {
+                    let mut array = toml_edit::ArrayOfTables::new();
+                    let mut entry = json_to_toml_table(value)?;
+                    entry.set_position(Some(position));
+                    array.push(entry);
+                    table.insert(leaf, toml_edit::Item::ArrayOfTables(array));
+                }
+                None => {
+                    let mut array = toml_edit::Array::new();
+                    array.push_formatted(json_to_toml_value(value)?);
+                    table.insert(leaf, toml_edit::value(array));
+                }
+                Some(toml_edit::Item::ArrayOfTables(array)) => {
+                    if !array
+                        .iter()
+                        .any(|t| toml_table_json(t).as_ref() == Some(value))
+                    {
+                        let mut entry = json_to_toml_table(value)?;
+                        entry.set_position(Some(position));
+                        array.push(entry);
+                    }
+                }
+                Some(toml_edit::Item::Value(toml_edit::Value::Array(array))) => {
+                    if !array
+                        .iter()
+                        .any(|v| toml_value_json(v).as_ref() == Some(value))
+                    {
+                        array.push_formatted(json_to_toml_value(value)?);
+                    }
+                }
+                Some(_) => return Err(conflict("Append target is not an array")),
+            },
+            _ => {
+                return Err(error(
+                    HookErrorCode::ValidationError,
+                    "Unknown merge operation",
+                ))
+            }
+        }
+        Ok(())
+    }
+
+    fn toml_table_at<'a>(
+        doc: &'a mut toml_edit::DocumentMut,
+        path: &[String],
+    ) -> Option<&'a mut dyn toml_edit::TableLike> {
+        let mut table: &mut dyn toml_edit::TableLike = doc.as_table_mut();
+        for part in path {
+            table = table.get_mut(part)?.as_table_like_mut()?;
+        }
+        Some(table)
+    }
+    fn json_object_at<'a>(
+        root: &'a mut serde_json::Value,
+        path: &[String],
+    ) -> Option<&'a mut serde_json::Map<String, serde_json::Value>> {
+        let mut cursor = root;
+        for part in path {
+            cursor = cursor.get_mut(part.as_str())?;
+        }
+        cursor.as_object_mut()
+    }
+
+    /// Remove exactly the entries this adapter renders. Anything else in the
+    /// file, including look-alike user entries, is left alone.
+    fn toml_strip(doc: &mut toml_edit::DocumentMut, ops: &[ManagedOp]) -> bool {
+        let mut changed = false;
+        for managed in ops {
+            let Some((leaf, parents)) = managed.key.split_last() else {
+                continue;
+            };
+            let Some(table) = toml_table_at(doc, parents) else {
+                continue;
+            };
+            let remove_leaf = match (managed.op.as_str(), table.get_mut(leaf)) {
+                ("append-unique", Some(toml_edit::Item::ArrayOfTables(array))) => {
+                    let before = array.len();
+                    array.retain(|t| toml_table_json(t).as_ref() != Some(&managed.value));
+                    changed |= array.len() != before;
+                    array.is_empty()
+                }
+                ("append-unique", Some(toml_edit::Item::Value(toml_edit::Value::Array(array)))) => {
+                    let before = array.len();
+                    array.retain(|v| toml_value_json(v).as_ref() != Some(&managed.value));
+                    changed |= array.len() != before;
+                    array.is_empty()
+                }
+                ("set", Some(item)) => toml_item_json(item).as_ref() == Some(&managed.value),
+                _ => false,
+            };
+            if remove_leaf {
+                table.remove(leaf);
+                changed = true;
+            }
+            // Drop parents this removal left empty, innermost first.
+            for depth in (1..=parents.len()).rev() {
+                let name = &parents[depth - 1];
+                if let Some(table) = toml_table_at(doc, &parents[..depth - 1]) {
+                    if table
+                        .get(name)
+                        .and_then(|i| i.as_table_like())
+                        .is_some_and(|t| t.is_empty())
+                    {
+                        table.remove(name);
+                    }
+                }
+            }
+        }
+        changed
+    }
+
+    fn json_strip(root: &mut serde_json::Value, ops: &[ManagedOp]) -> bool {
+        let mut changed = false;
+        for managed in ops {
+            let Some((leaf, parents)) = managed.key.split_last() else {
+                continue;
+            };
+            let Some(map) = json_object_at(root, parents) else {
+                continue;
+            };
+            let remove_leaf = match (managed.op.as_str(), map.get_mut(leaf.as_str())) {
+                ("append-unique", Some(serde_json::Value::Array(array))) => {
+                    let before = array.len();
+                    array.retain(|v| v != &managed.value);
+                    changed |= array.len() != before;
+                    array.is_empty()
+                }
+                ("set", Some(value)) => value == &managed.value,
+                _ => false,
+            };
+            if remove_leaf {
+                map.shift_remove(leaf.as_str());
+                changed = true;
+            }
+            for depth in (1..=parents.len()).rev() {
+                let name = parents[depth - 1].as_str();
+                if let Some(map) = json_object_at(root, &parents[..depth - 1]) {
+                    if map
+                        .get(name)
+                        .and_then(serde_json::Value::as_object)
+                        .is_some_and(serde_json::Map::is_empty)
+                    {
+                        map.shift_remove(name);
+                    }
+                }
+            }
+        }
+        changed
+    }
+
+    /// The file with this adapter's exact entries removed. Unchanged input is
+    /// returned byte-for-byte, so a file without our entries is never rewritten.
+    fn strip_managed(
+        format: &str,
+        ops: &[ManagedOp],
+        current: &FileState,
+    ) -> Result<FileState, HookErrorDto> {
+        let Some(bytes) = current.bytes.as_deref() else {
+            return Ok(current.clone());
+        };
+        let stripped = if format == "toml-merge" {
+            let mut doc = parse_toml_document(bytes)?;
+            if !toml_strip(&mut doc, ops) {
+                return Ok(current.clone());
+            }
+            doc.to_string().into_bytes()
+        } else {
+            let mut value: serde_json::Value =
+                serde_json::from_slice(bytes).map_err(|_| conflict("Config is not valid JSON"))?;
+            if !json_strip(&mut value, ops) {
+                return Ok(current.clone());
+            }
+            let mut out = serde_json::to_vec_pretty(&value).map_err(io_error)?;
+            out.push(b'\n');
+            out
+        };
+        Ok(FileState {
+            bytes: Some(stripped),
+            mode: current.mode,
+        })
+    }
+
+    /// Undo one installed target. A file still holding exactly what we wrote is
+    /// restored byte-for-byte; a merge config the agent or user has since edited
+    /// loses only our entries.
+    fn restore_change(
+        managed: &ManagedConfigs,
+        target: &TargetSnapshot,
+    ) -> Result<Change, HookErrorDto> {
+        let current = safe::read(&target.path)?;
+        if current == target.installed {
+            return Ok(Change {
+                path: target.path.clone(),
+                before: target.installed.clone(),
+                after: target.original.clone(),
+            });
+        }
+        let (format, ops) = managed
+            .get(&target.path)
+            .ok_or_else(|| conflict("Installed hook files were changed outside the installer"))?;
+        Ok(Change {
+            path: target.path.clone(),
+            after: strip_managed(format, ops, &current)?,
+            before: current,
+        })
+    }
+
     fn merge_op(
         root: &mut serde_json::Value,
         key: &[String],
@@ -2084,6 +2519,27 @@ mod v3 {
             }
             let path = scoped_config(home, &adapter.manifest.id, &config.path)?;
             let existing = baseline.get(&path).cloned().unwrap_or(safe::read(&path)?);
+            if config.format == "toml-merge" {
+                // Edit in place so the user's comments, ordering and unrelated
+                // sections survive the install byte-for-byte.
+                let mut doc = match existing.bytes.as_deref() {
+                    None => toml_edit::DocumentMut::new(),
+                    Some(bytes) => parse_toml_document(bytes)?,
+                };
+                for op in config.ops.unwrap_or_default() {
+                    let value_json = serde_json::from_str(&op.value_json).map_err(io_error)?;
+                    let expanded =
+                        definition::render_json_value(&value_json, &context).map_err(|_| {
+                            error(HookErrorCode::ValidationError, "Unsafe config placeholder")
+                        })?;
+                    toml_apply(&mut doc, &op.key, &op.op, &expanded)?;
+                }
+                rendered.insert(
+                    path,
+                    FileState::file(doc.to_string().into_bytes(), existing.mode.unwrap_or(0o600)),
+                );
+                continue;
+            }
             let mut value = match existing.bytes.as_deref() {
                 None => serde_json::json!({}),
                 Some(bytes) if config.format == "json-merge" => serde_json::from_slice(bytes)
@@ -2418,7 +2874,7 @@ mod v3 {
                     &snapshot.effective_events.iter().cloned().collect(),
                 );
             }
-            if let Err(e) = ensure_owned(snapshot) {
+            if let Err(e) = ensure_owned(home, snapshot) {
                 status.state = AdapterStatus::Conflict;
                 status
                     .diagnostics
@@ -2597,20 +3053,21 @@ mod v3 {
             })
             .transpose()?;
         if let Some(snapshot) = &snapshot {
-            ensure_owned(snapshot)?;
+            ensure_owned(home, snapshot)?;
         }
+        let installed_managed = snapshot
+            .as_ref()
+            .map(|snapshot| managed_configs(home, &snapshot_adapter(snapshot)?))
+            .transpose()?
+            .unwrap_or_default();
         if request.action == HookAction::Uninstall {
             let (mut changes, revision) = if let Some(snapshot) = snapshot {
                 (
                     snapshot
                         .targets
-                        .into_iter()
-                        .map(|t| Change {
-                            path: t.path,
-                            before: t.installed,
-                            after: t.original,
-                        })
-                        .collect::<Vec<_>>(),
+                        .iter()
+                        .map(|t| restore_change(&installed_managed, t))
+                        .collect::<Result<Vec<_>, _>>()?,
                     snapshot.revision + 1,
                 )
             } else {
@@ -2660,7 +3117,14 @@ mod v3 {
         let mut migration = BTreeMap::new();
         let (install_id, revision) = if let Some(snapshot) = &snapshot {
             for target in &snapshot.targets {
-                baseline.insert(target.path.clone(), target.original.clone());
+                // A merge config the agent has rewritten since install keeps its
+                // new layout: the reinstall builds on it, minus our old entries.
+                let base = if safe::read(&target.path)? == target.installed {
+                    target.original.clone()
+                } else {
+                    restore_change(&installed_managed, target)?.after
+                };
+                baseline.insert(target.path.clone(), base);
             }
             (snapshot.install_id.clone(), snapshot.revision + 1)
         } else {
@@ -2693,14 +3157,21 @@ mod v3 {
                 0o600,
             ),
         );
+        let source_managed = managed_configs(home, &adapter)?;
         let mut targets = Vec::new();
         let mut changes = BTreeMap::new();
         for (path, installed) in desired {
             let before = safe::read(&path)?;
-            let original = baseline
-                .get(&path)
-                .cloned()
-                .unwrap_or_else(|| before.clone());
+            let original = match baseline.get(&path) {
+                Some(original) => original.clone(),
+                // A config we have never recorded may already carry our exact
+                // entries (an earlier install, moved by the agent). They are not
+                // the user's, so uninstall must not restore them.
+                None => match source_managed.get(&path) {
+                    Some((format, ops)) => strip_managed(format, ops, &before)?,
+                    None => before.clone(),
+                },
+            };
             targets.push(TargetSnapshot {
                 path: path.clone(),
                 original,
@@ -2722,11 +3193,7 @@ mod v3 {
                 if !changes.contains_key(&target.path) {
                     changes.insert(
                         target.path.clone(),
-                        Change {
-                            path: target.path.clone(),
-                            before: target.installed.clone(),
-                            after: target.original.clone(),
-                        },
+                        restore_change(&installed_managed, target)?,
                     );
                 }
             }

@@ -583,6 +583,249 @@ fn v3_mode_edits_and_concurrent_confirms_fail_without_overwrite() {
     );
 }
 
+fn custom_toml(home: &Path) {
+    custom_toml_at(home, "config.d/tools.toml");
+}
+fn custom_toml_at(home: &Path, relative: &str) {
+    let directory = root(home).join("adapters/toml-agent");
+    fs::create_dir_all(directory.join("files")).unwrap();
+    fs::write(
+        directory.join("adapter.toml"),
+        r#"schema_version = 1
+id = "toml-agent"
+display_name = "TOML Agent"
+version = "1.0.0"
+[cli]
+binaries = ["se-hook-test-no-such-binary"]
+version_args = ["--version"]
+[cli.version_parser]
+kind = "anchored-regex"
+pattern = '^TOML Agent (?P<version>[0-9]+\.[0-9]+\.[0-9]+)$'
+[[config]]
+id = "settings"
+path = "home:.toml-agent/CONFIG_PATH"
+format = "toml-merge"
+[[config.ops]]
+op = "append-unique"
+key = ["hooks", "rules"]
+event = "start"
+value_json = '{"event":"session_start","command":"\"{{script_path}}\""}'
+[payload]
+native_event = "/event"
+session_id = "/session_id"
+[[native_events]]
+name = "start"
+hook_kind = "session_start"
+enabled_by_default = true
+[[files]]
+id = "hook"
+source = "files/hook.sh.tmpl"
+target = "install:toml-agent-hook.sh"
+mode = "0700"
+"#
+        .replace("CONFIG_PATH", relative),
+    )
+    .unwrap();
+    fs::write(
+        directory.join("files/hook.sh.tmpl"),
+        "#!/bin/sh\n# {{agent_id}}\n",
+    )
+    .unwrap();
+}
+fn toml_request(action: HookAction) -> HookPreviewRequest {
+    HookPreviewRequest {
+        adapter_id: AdapterId::try_from("toml-agent".to_owned()).unwrap(),
+        action,
+        event_options: BTreeMap::new(),
+    }
+}
+fn hook_rules(text: &str) -> Vec<toml::Value> {
+    let value: toml::Value = toml::from_str(text).unwrap();
+    value
+        .get("hooks")
+        .and_then(|h| h.get("rules"))
+        .and_then(|r| r.as_array())
+        .cloned()
+        .unwrap_or_default()
+}
+
+#[test]
+fn v3_toml_install_keeps_user_layout_and_survives_agent_rewrites() {
+    let (_dir, home) = home();
+    custom_toml(&home);
+    let config = home.join(".toml-agent/config.d/tools.toml");
+    let original = "# user notes stay\n[websearch]\norder = [\"a\", \"b\"]\n\n[hooks]\npre_tool_timeout_ms = 5000\n\n[[hooks.rules]]\nevent = \"session_start\"\ncommand = \"/usr/local/bin/my-own-hook\"\n";
+    write(&config, original.as_bytes(), 0o600);
+
+    confirm(
+        &home,
+        &preview_v3(&home, toml_request(HookAction::Install)).unwrap(),
+    )
+    .unwrap();
+    let installed = fs::read_to_string(&config).unwrap();
+    assert!(
+        installed.starts_with(original),
+        "install appends without reformatting the user's file:\n{installed}"
+    );
+    assert_eq!(hook_rules(&installed).len(), 2);
+
+    // The agent rewrites its own config (module absorption, settings saves):
+    // new bytes, new order, a new section, but our rule is still there.
+    let mut rewritten: toml::Value = toml::from_str(&installed).unwrap();
+    rewritten.as_table_mut().unwrap().insert(
+        "safety".into(),
+        toml::Value::Table(toml::toml! { prompt = true }),
+    );
+    write(
+        &config,
+        toml::to_string(&rewritten).unwrap().as_bytes(),
+        0o600,
+    );
+    let status = status_one(&home, "toml-agent").unwrap();
+    assert_eq!(
+        status.state,
+        AdapterStatus::Installed,
+        "{:?}",
+        status.diagnostics
+    );
+
+    confirm(
+        &home,
+        &preview_v3(&home, toml_request(HookAction::Uninstall)).unwrap(),
+    )
+    .unwrap();
+    let after: toml::Value = toml::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
+    let rules = hook_rules(&fs::read_to_string(&config).unwrap());
+    assert_eq!(rules.len(), 1, "only the managed rule is removed");
+    assert_eq!(
+        rules[0].get("command").and_then(|c| c.as_str()),
+        Some("/usr/local/bin/my-own-hook")
+    );
+    assert_eq!(
+        after["hooks"]["pre_tool_timeout_ms"].as_integer(),
+        Some(5000)
+    );
+    assert_eq!(after["safety"]["prompt"].as_bool(), Some(true));
+    assert!(!root(&home)
+        .join("installed/toml-agent/install.env")
+        .exists());
+}
+
+#[test]
+fn v3_owned_script_edits_are_still_a_conflict() {
+    let (_dir, home) = home();
+    custom_toml(&home);
+    confirm(
+        &home,
+        &preview_v3(&home, toml_request(HookAction::Install)).unwrap(),
+    )
+    .unwrap();
+    write(
+        &root(&home).join("installed/toml-agent/files/toml-agent-hook.sh"),
+        b"#!/bin/sh\nevil\n",
+        0o700,
+    );
+    let status = status_one(&home, "toml-agent").unwrap();
+    assert_eq!(status.state, AdapterStatus::Conflict);
+    assert!(preview_v3(&home, toml_request(HookAction::Uninstall)).is_err());
+}
+
+#[test]
+fn v3_reinstall_after_config_moved_by_the_agent_does_not_resurrect_rules() {
+    let (_dir, home) = home();
+    custom_toml(&home);
+    let config = home.join(".toml-agent/config.d/tools.toml");
+    confirm(
+        &home,
+        &preview_v3(&home, toml_request(HookAction::Install)).unwrap(),
+    )
+    .unwrap();
+    // The agent rewrites the file and adds its own section; a reinstall (e.g.
+    // after an adapter update) must build on that layout and not duplicate
+    // the managed rule.
+    let mut value: toml::Value = toml::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
+    value.as_table_mut().unwrap().insert(
+        "safety".into(),
+        toml::Value::Table(toml::toml! { prompt = true }),
+    );
+    write(&config, toml::to_string(&value).unwrap().as_bytes(), 0o600);
+    confirm(
+        &home,
+        &preview_v3(&home, toml_request(HookAction::Install)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(hook_rules(&fs::read_to_string(&config).unwrap()).len(), 1);
+    confirm(
+        &home,
+        &preview_v3(&home, toml_request(HookAction::Uninstall)).unwrap(),
+    )
+    .unwrap();
+    let after = fs::read_to_string(&config).unwrap();
+    assert!(hook_rules(&after).is_empty());
+    assert!(
+        after.contains("prompt = true"),
+        "the agent's own section survives"
+    );
+}
+
+#[test]
+fn v3_rules_moved_into_a_module_file_then_retargeted_install_stays_owned() {
+    // The qin-code case: installed into config.toml, the agent then absorbed
+    // config.toml into config.d/tools.toml and left a comment stub behind.
+    let (_dir, home) = home();
+    custom_toml_at(&home, "config.toml");
+    let legacy = home.join(".toml-agent/config.toml");
+    let module = home.join(".toml-agent/config.d/tools.toml");
+    confirm(
+        &home,
+        &preview_v3(&home, toml_request(HookAction::Install)).unwrap(),
+    )
+    .unwrap();
+    let installed = fs::read_to_string(&legacy).unwrap();
+    let stub = "# Configuration moved to config.d/*.toml.\n";
+    write(
+        &module,
+        format!("[safety]\nprompt = true\n\n{installed}").as_bytes(),
+        0o600,
+    );
+    write(&legacy, stub.as_bytes(), 0o600);
+    assert_ne!(
+        status_one(&home, "toml-agent").unwrap().state,
+        AdapterStatus::Conflict
+    );
+
+    // The adapter now targets the module file directly.
+    custom_toml_at(&home, "config.d/tools.toml");
+    assert_eq!(
+        status_one(&home, "toml-agent").unwrap().state,
+        AdapterStatus::Outdated
+    );
+    confirm(
+        &home,
+        &preview_v3(&home, toml_request(HookAction::Install)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(fs::read_to_string(&legacy).unwrap(), stub);
+    assert_eq!(hook_rules(&fs::read_to_string(&module).unwrap()).len(), 1);
+    assert_eq!(
+        status_one(&home, "toml-agent").unwrap().state,
+        AdapterStatus::Installed
+    );
+
+    confirm(
+        &home,
+        &preview_v3(&home, toml_request(HookAction::Uninstall)).unwrap(),
+    )
+    .unwrap();
+    let after = fs::read_to_string(&module).unwrap();
+    assert!(
+        hook_rules(&after).is_empty(),
+        "rules adopted from the moved file are not restored on uninstall"
+    );
+    assert!(after.contains("prompt = true"));
+    assert_eq!(fs::read_to_string(&legacy).unwrap(), stub);
+}
+
 #[cfg(unix)]
 #[test]
 fn v3_preview_then_parent_symlink_substitution_is_conflict() {

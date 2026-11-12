@@ -1,7 +1,7 @@
 schema_version = 1
 id = "qin-code"
 display_name = "qin-code"
-version = "3.0.0"
+version = "3.1.0"
 [cli]
 binaries = ["qin-code", "self-dev"]
 version_args = ["--version"]
@@ -10,7 +10,7 @@ kind = "anchored-regex"
 pattern = '^(?:qin-code|self-dev) v?(?P<version>[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)(?: \([0-9a-f]{7,40}\))?$'
 [[config]]
 id = "settings"
-path = "home:.qin-code/config.toml"
+path = "home:.qin-code/config.d/tools.toml"
 format = "toml-merge"
 [[config.ops]]
 op = "append-unique"
