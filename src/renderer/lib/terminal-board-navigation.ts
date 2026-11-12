@@ -120,9 +120,22 @@ export function openBoardTerminal(options: {
     focusTerminalInWorkspace(options.terminalId)
     return
   }
+  // Clicking a terminal in the project that is already active has nothing to
+  // defer to: `activeProjectId` and the route both stay put and no workspace
+  // restore completes, so nothing ever fires `ensureVisibleProjectTerminal` and
+  // the pending focus would expire unseen — the click reads as dead. The pane
+  // tree already belongs to this project, so land the focus now. `pending`
+  // stays armed because leaving the Conversation area can still replace the
+  // tree afterwards, and that restore re-applies it.
+  // Read the previous owner before `selectProject` below makes it true for
+  // every call: on a real project switch the outgoing tree must not be touched.
+  const alreadyActive = useProjectStore.getState().activeProjectId === projectId
   setPendingTerminalFocus({ projectId, terminalId: options.terminalId })
   useProjectStore.getState().selectProject(projectId)
   useSSHStore.getState().selectProfile(null)
+  if (alreadyActive) {
+    applyPendingTerminalFocus(projectId)
+  }
   options.navigate('/')
 }
 

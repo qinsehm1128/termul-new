@@ -194,4 +194,36 @@ describe('terminal-board-navigation', () => {
     expect(peekPendingTerminalFocus()).toBeNull()
     expect((useWorkspaceStore.getState().root as LeafNode).activeTabId).toBe('term-term-1')
   })
+
+  it('focuses the terminal now when its project is already the active one', () => {
+    // The reported symptom: clicking the switcher chip of the project you are
+    // already in does nothing. Nothing defers here — the project does not
+    // change, the route does not change and no restore completes — so the
+    // pending focus was never applied and silently expired.
+    useProjectStore.setState({ activeProjectId: 'p-cost' })
+    const navigate = vi.fn()
+
+    openBoardTerminal({ projectId: 'p-cost', terminalId: 'term-1', navigate })
+
+    expect((useWorkspaceStore.getState().root as LeafNode).activeTabId).toBe('term-term-1')
+  })
+
+  it('leaves the outgoing layout alone when the click switches projects', () => {
+    // The deferred half of the contract: on a real switch the pane tree still
+    // shows the previous project until its own layout is restored, so the
+    // clicked terminal must not be injected into it.
+    useProjectStore.setState({
+      projects: [
+        { id: 'p-cost', name: 'cost', color: 'blue', path: '/srv/logistics' },
+        { id: 'p-other', name: 'other', color: 'green', path: '/srv/other' }
+      ],
+      activeProjectId: 'p-other'
+    })
+    const navigate = vi.fn()
+
+    openBoardTerminal({ projectId: 'p-cost', terminalId: 'term-1', navigate })
+
+    expect((useWorkspaceStore.getState().root as LeafNode).tabs).toEqual([])
+    expect(peekPendingTerminalFocus()).toEqual({ projectId: 'p-cost', terminalId: 'term-1' })
+  })
 })
