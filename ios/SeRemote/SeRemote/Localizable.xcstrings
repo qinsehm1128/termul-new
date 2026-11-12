@@ -10068,6 +10068,16 @@
         }
       }
     },
+    "Use plugins" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用插件"
+          }
+        }
+      }
+    },
     "Manage host" : {
       "localizations" : {
         "zh-Hans" : {

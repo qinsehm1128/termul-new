@@ -12,6 +12,7 @@ enum DeviceScope {
         case "git.write": String(localized: "Git write")
         case "screen.view": String(localized: "View screen")
         case "screen.control": String(localized: "Control screen")
+        case "plugins.use": String(localized: "Use plugins")
         case "manage": String(localized: "Manage host")
         default: String(localized: "Additional permission")
         }

@@ -83,6 +83,7 @@ struct DevicePairingTests {
         #expect(DeviceScope.label(for: "git.write") == String(localized: "Git write"))
         #expect(DeviceScope.label(for: "screen.view") == String(localized: "View screen"))
         #expect(DeviceScope.label(for: "screen.control") == String(localized: "Control screen"))
+        #expect(DeviceScope.label(for: "plugins.use") == String(localized: "Use plugins"))
         #expect(DeviceScope.label(for: "future.internal.scope") == String(localized: "Additional permission"))
     }
 
