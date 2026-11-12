@@ -9,9 +9,9 @@ import {
   type UpdateState
 } from '@shared/types/updater.types'
 import { getVersion } from '@tauri-apps/api/app'
-import { invoke } from '@tauri-apps/api/core'
+import { Channel, invoke } from '@tauri-apps/api/core'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { check, type DownloadEvent, type Update } from '@tauri-apps/plugin-updater'
+import { check, type Update } from '@tauri-apps/plugin-updater'
 import { runtimeT } from '@/i18n/runtime'
 import { restartApp } from './app-restart'
 import { logFrontendError } from './log-api'
@@ -221,49 +221,39 @@ export function mapTauriUpdateToInfo(update: Update): UpdateInfo {
   }
 }
 
+/**
+ * Progress from the Rust `updater_download` command. Rust coalesces network
+ * chunks to a few messages per second and reports the running total, so the
+ * renderer and the main thread are not flooded while the package downloads.
+ */
+export type UpdaterDownloadEvent =
+  | { event: 'Started'; data: { contentLength: number | null } }
+  | { event: 'Progress'; data: { downloaded: number; contentLength: number | null } }
+  | { event: 'Finished' }
+
 function mapDownloadEventToProgress(
-  event: DownloadEvent,
-  downloadedSoFar: number,
+  event: UpdaterDownloadEvent,
   totalBytes: number
-): { progress: DownloadProgress; downloadedSoFar: number; totalBytes: number } {
+): { progress: DownloadProgress; totalBytes: number } {
   if (event.event === 'Started') {
     const total = event.data.contentLength ?? totalBytes
     return {
-      progress: {
-        bytesPerSecond: 0,
-        percent: 0,
-        transferred: 0,
-        total
-      },
-      downloadedSoFar: 0,
+      progress: { bytesPerSecond: 0, percent: 0, transferred: 0, total },
       totalBytes: total
     }
   }
 
   if (event.event === 'Progress') {
-    const nextDownloaded = downloadedSoFar + event.data.chunkLength
-    const percent = totalBytes > 0 ? Math.min(100, (nextDownloaded / totalBytes) * 100) : 0
-
+    const total = event.data.contentLength ?? totalBytes
+    const percent = total > 0 ? Math.min(100, (event.data.downloaded / total) * 100) : 0
     return {
-      progress: {
-        bytesPerSecond: 0,
-        percent,
-        transferred: nextDownloaded,
-        total: totalBytes
-      },
-      downloadedSoFar: nextDownloaded,
-      totalBytes
+      progress: { bytesPerSecond: 0, percent, transferred: event.data.downloaded, total },
+      totalBytes: total
     }
   }
 
   return {
-    progress: {
-      bytesPerSecond: 0,
-      percent: 100,
-      transferred: totalBytes,
-      total: totalBytes
-    },
-    downloadedSoFar,
+    progress: { bytesPerSecond: 0, percent: 100, transferred: totalBytes, total: totalBytes },
     totalBytes
   }
 }
@@ -674,7 +664,6 @@ export async function downloadUpdate(
       preparedUpdateVersion = updateVersion
     }
 
-    let downloadedSoFar = 0
     let totalBytes = 0
 
     if (onProgress) {
@@ -686,14 +675,29 @@ export async function downloadUpdate(
       })
     }
 
-    await updateHandle.download((event) => {
+    // Download in Rust: the plugin's JS API sends one IPC message per network
+    // chunk (thousands for a full package), which froze the window until the
+    // download finished. Rust keeps the bytes and throttles progress.
+    const channel = new Channel<UpdaterDownloadEvent>()
+    channel.onmessage = (event) => {
       if (!onProgress) return
-
-      const mapped = mapDownloadEventToProgress(event, downloadedSoFar, totalBytes)
-      downloadedSoFar = mapped.downloadedSoFar
+      const mapped = mapDownloadEventToProgress(event, totalBytes)
       totalBytes = mapped.totalBytes
       onProgress(mapped.progress)
+    }
+    const result = await invoke<IpcResult<void>>('updater_download', {
+      version: updateVersion,
+      onEvent: channel
     })
+    if (!result.success) {
+      return {
+        success: false,
+        error:
+          result.error ??
+          runtimeT('shell', 'updates.errors.downloadFailed', 'Failed to download update'),
+        code: result.code ?? UpdaterErrorCodes.DOWNLOAD_FAILED
+      }
+    }
 
     downloadedUpdate = updateHandle
     downloadedVersion = updateVersion
@@ -773,7 +777,21 @@ export async function installAndRestart(
 
     // Apply the already-downloaded package, then restart into the new version.
     // Split from download so the app is never force-restarted during download.
-    await downloadedUpdate.install()
+    // The install (archive extraction and bundle swap) runs on a Rust worker
+    // thread, so the window stays responsive while it works.
+    const installResult = await invoke<IpcResult<void>>('updater_install', {
+      version: pendingTauriUpdate.version
+    })
+    if (!installResult.success) {
+      throw new Error(
+        installResult.error ??
+          runtimeT(
+            'shell',
+            'updates.errors.installRestartFailed',
+            'Failed to install and restart after update'
+          )
+      )
+    }
     await restartApp()
     return { success: true, data: undefined }
   } catch (error) {

@@ -29,13 +29,13 @@ artifact: {"work_id":null,"created_by_session":"session_lizard_1794024668506_6ff
 
 ### 统计
 
-本表按 `src-tauri/src/lib.rs` 的 `generate_handler!` 逐条核对（2026-11-07 宿主 MCP、SSH 命令黑名单及独立记忆入口退役同步后用脚本比对）：后端共 347 个命令，全部已分类。合并为同一 op 的命令按各自原有分类计入，重复登记的只计一次。
+本表按 `src-tauri/src/lib.rs` 的 `generate_handler!` 逐条核对（2026-11-07 宿主 MCP、SSH 命令黑名单及独立记忆入口退役同步后用脚本比对）：后端共 349 个命令，全部已分类。合并为同一 op 的命令按各自原有分类计入，重复登记的只计一次。
 
 | 来源 | 总数 | OPEN | OPEN-REDACTED | SECRET-EXCLUDED | INTERNAL |
 |---|---|---|---|---|---|
-| 后端 Tauri 命令 | 347 | 309 | 12 | 9 | 17 |
+| 后端 Tauri 命令 | 349 | 311 | 12 | 9 | 17 |
 | 前端独有能力（无 Rust 命令） | 39 | 39 | 0 | 0 | 0 |
-| **合计** | **386** | **348** | **12** | **9** | **17** |
+| **合计** | **388** | **350** | **12** | **9** | **17** |
 
 各部分的范围：
 - A：Agent、会话、对话、记忆、Skills、定时任务、AI 渠道、MCP、远程访问、插件；
@@ -705,6 +705,8 @@ Legend — class: **R** read, **W** write, **D** destructive, **SEC** secret-bea
 | core.restart | restart_core `src-tauri/src/lib.rs:1926` | W/D | one core role | per-call | OPEN | rust-main | Terminates every resource owned by that core (terminals, agents). |
 | core.component_identities | component_runtime_identities `src-tauri/src/lib.rs:1730` | R | all cores | none | OPEN | rust-main | 由根节点补录（2026-11-04 覆盖检查发现漏项）。返回 GUI、acp/terminal/plugin core 的 build id 和运行身份，不含密钥。 |
 | updater.fetchChannelManifest | updater_fetch_channel_manifest `src-tauri/src/updater_api.rs:128` | R | global | none | OPEN | rust-main | 由根节点补录。in `channel`（stable/insider/nightly）；从服务端拉取更新清单 JSON，需要联网。 |
+| updater.download | updater_download `src-tauri/src/updater_api.rs:239` | W | global | none | OPEN | rust-main | in `version`, `onEvent` Channel（Started/Progress/Finished，进度约每 200 ms 一条）；在 Rust 侧下载并校验签名的稳定版更新包，包保留在宿主内存中，不安装。需要联网。 |
+| updater.install | updater_install `src-tauri/src/updater_api.rs:328` | W/D | global | per-call | OPEN | rust-main | in `version`；在后台线程安装 `updater.download` 留下的包并替换应用包，需随后重启生效。失败时保留包以便重试。 |
 
 ##### 1.6 Menus, keybindings, i18n, quit behaviour
 

@@ -6,7 +6,12 @@ const { mockInvoke, mockSavePlan } = vi.hoisted(() => ({
   mockSavePlan: vi.fn()
 }))
 
-vi.mock('@tauri-apps/api/core', () => ({ invoke: mockInvoke }))
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: mockInvoke,
+  Channel: class {
+    onmessage: ((event: unknown) => void) | null = null
+  }
+}))
 vi.mock('@tauri-apps/api/app', () => ({ getVersion: vi.fn(async () => '0.14.8') }))
 vi.mock('@tauri-apps/plugin-updater', () => ({ check: vi.fn(), Update: class {} }))
 vi.mock('../app-restart', () => ({
@@ -51,7 +56,9 @@ async function downloadDeclaredUpdate(): Promise<void> {
   mockInvoke.mockImplementation(async (command: string) =>
     command === 'updater_fetch_channel_manifest'
       ? { success: true, data: { version: '0.14.9', termul: { componentPolicy: declaredPolicy } } }
-      : undefined
+      : command === 'updater_download' || command === 'updater_install'
+        ? { success: true }
+        : undefined
   )
   vi.mocked(check).mockResolvedValue({
     version: '0.14.9',

@@ -4127,6 +4127,8 @@ pub fn run() {
             // Desktop updater: channel manifest fetch (CSP/CORS-free server-side
             // reqwest for the insider/nightly paths).
             updater_api::updater_fetch_channel_manifest,
+            updater_api::updater_download,
+            updater_api::updater_install,
             // Agent Skills (Zed-compatible SKILL.md packages)
             skills::commands::list_agent_skills_cmd,
             skills::commands::read_agent_skill_cmd,
@@ -4599,13 +4601,71 @@ pub fn run() {
                     log::info!(
                         "[desktop-exit] operation=restart stable_code=RESTARTING result=PASS"
                     );
-                    app_handle_clone.request_restart();
+                    if relaunch_via_launch_services_after_exit() {
+                        app_handle_clone.exit(0);
+                    } else {
+                        app_handle_clone.request_restart();
+                    }
                 } else {
                     app_handle_clone.exit(exit_code);
                 }
             });
         }
     });
+}
+
+/// macOS: hand the relaunch to LaunchServices once this process has exited.
+///
+/// Tauri's restart execs the bundle binary directly while this process is
+/// still alive, so the new instance can meet the old single-instance socket
+/// and quit, or be rejected right after an update swapped the bundle. A
+/// detached `open -n` that waits for our pid to disappear starts the app the
+/// same way a Dock click does. Returns false when the relauncher could not be
+/// started, so the caller falls back to Tauri's restart.
+#[cfg(target_os = "macos")]
+fn relaunch_via_launch_services_after_exit() -> bool {
+    let bundle = std::env::current_exe().ok().and_then(|exe| {
+        exe.ancestors()
+            .nth(3)
+            .filter(|p| p.extension().is_some_and(|ext| ext == "app"))
+            .map(std::path::Path::to_path_buf)
+    });
+    let Some(bundle) = bundle else {
+        log::warn!("[desktop-exit] operation=relaunch stable_code=NO_APP_BUNDLE result=FALLBACK");
+        return false;
+    };
+    let script =
+        "while kill -0 \"$1\" 2>/dev/null; do sleep 0.2; done; exec /usr/bin/open -n \"$2\"";
+    match std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(script)
+        .arg("se-relaunch")
+        .arg(std::process::id().to_string())
+        .arg(&bundle)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(_) => {
+            log::info!(
+                "[desktop-exit] operation=relaunch stable_code=LAUNCH_SERVICES result=SCHEDULED"
+            );
+            true
+        }
+        Err(e) => {
+            log::warn!(
+                "[desktop-exit] operation=relaunch stable_code=RELAUNCHER_SPAWN_FAILED result=FALLBACK kind={:?}",
+                e.kind()
+            );
+            false
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn relaunch_via_launch_services_after_exit() -> bool {
+    false
 }
 
 #[cfg(test)]
@@ -4724,11 +4784,17 @@ mod tests {
             "an unpreventable restart must not spawn a cleanup whose exit() races the restart"
         );
         let cleanup = &requested[spawn..];
-        let done = cleanup.find("CLEANUP_DONE.store(true").expect("cleanup done");
+        let done = cleanup
+            .find("CLEANUP_DONE.store(true")
+            .expect("cleanup done");
         let restart = cleanup
-            .find("app_handle_clone.request_restart()")
+            .find("relaunch_via_launch_services_after_exit()")
             .expect("restart after cleanup");
         assert!(done < restart, "the restart must follow the cleanup");
+        let fallback = cleanup
+            .find("app_handle_clone.request_restart()")
+            .expect("Tauri restart stays the fallback");
+        assert!(restart < fallback);
         assert!(cleanup.contains("RESTART_AFTER_CLEANUP.load"));
         let command = source
             .split("fn restart_app(app: tauri::AppHandle) {")
@@ -4746,7 +4812,10 @@ mod tests {
     #[test]
     fn async_core_supervision_never_blocks_on_the_update_plan() {
         let source = include_str!("lib.rs");
-        for name in ["async fn supervise_one_core(", "async fn reconcile_pending_core("] {
+        for name in [
+            "async fn supervise_one_core(",
+            "async fn reconcile_pending_core(",
+        ] {
             let body = source
                 .split(name)
                 .nth(1)
