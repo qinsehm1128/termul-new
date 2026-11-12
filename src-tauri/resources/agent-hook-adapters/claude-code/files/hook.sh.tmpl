@@ -12,6 +12,11 @@ valid_uuid() {
   [ "${#uuid_a}" = 8 ] && [ "${#uuid_b}" = 4 ] && [ "${#uuid_c}" = 4 ] && [ "${#uuid_d}" = 4 ] && [ "${#uuid_rest}" = 12 ] || return 1
   case "$uuid_a$uuid_b$uuid_c$uuid_d$uuid_rest" in *[!0-9a-fA-F]*) return 1;; esac
 }
+valid_pty() {
+  # PTY ids are host terminal ids such as terminal-1794455097514-5, not UUIDs.
+  [ -n "$1" ] && [ "${#1}" -le 128 ] || return 1
+  case "$1" in *[!A-Za-z0-9_-]*) return 1;; esac
+}
 safe_file() {
   [ -f "$1" ] && [ ! -L "$1" ] || return 1
   current=$1
@@ -51,7 +56,7 @@ case "$port" in ''|*[!0-9]*) exit 0;; esac
 [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || exit 0
 pty=${SE_AGENT_HOOK_PTY_ID:-}
 generation=${SE_AGENT_HOOK_GENERATION:-}
-valid_uuid "$pty" || exit 0
+valid_pty "$pty" || exit 0
 case "$generation" in ''|*[!0-9]*) exit 0;; esac
 [ "${#generation}" -le 20 ] || exit 0
 root=${pattern%/instances/*}

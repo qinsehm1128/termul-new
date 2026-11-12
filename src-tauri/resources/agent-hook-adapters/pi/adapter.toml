@@ -1,7 +1,7 @@
 schema_version = 1
 id = "pi"
 display_name = "pi"
-version = "3.0.0"
+version = "3.0.1"
 [cli]
 binaries = ["pi"]
 version_args = ["--version"]

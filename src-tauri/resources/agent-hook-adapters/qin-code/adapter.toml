@@ -1,7 +1,7 @@
 schema_version = 1
 id = "qin-code"
 display_name = "qin-code"
-version = "3.1.0"
+version = "3.1.1"
 [cli]
 binaries = ["qin-code", "self-dev"]
 version_args = ["--version"]

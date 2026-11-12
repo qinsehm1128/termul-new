@@ -1,7 +1,7 @@
 schema_version = 1
 id = "claude-code"
 display_name = "Claude Code"
-version = "3.0.0"
+version = "3.0.1"
 [cli]
 binaries = ["claude"]
 version_args = ["--version"]

@@ -5,6 +5,8 @@ import { dirname, join, isAbsolute } from "node:path";
 const agent = "{{agent_id}}";
 const endpointPattern = "{{endpoint_file}}";
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// PTY ids are host terminal ids such as terminal-1794455097514-5, not UUIDs.
+const ptyId = /^[A-Za-z0-9_-]{1,128}$/;
 function fixedFile(path: string, allowed: string[]): Record<string,string> {
   if (!isAbsolute(path)) throw new Error("unsafe path");
   for (let p = path; ; p = dirname(p)) {
@@ -32,7 +34,7 @@ function report(name: string, event: any, ctx: any): void {
     const instance = env.SE_AGENT_HOOK_INSTANCE || "";
     const terminal = env.SE_AGENT_HOOK_PTY_ID || "";
     const generation = env.SE_AGENT_HOOK_GENERATION || "";
-    if (!uuid.test(instance) || !uuid.test(terminal) || !/^[0-9]{1,20}$/.test(generation)) return;
+    if (!uuid.test(instance) || !ptyId.test(terminal) || !/^[0-9]{1,20}$/.test(generation)) return;
     if (!endpointPattern.endsWith("/instances/{instance}/endpoint.env")) return;
     const root = endpointPattern.slice(0,-"/instances/{instance}/endpoint.env".length);
     let endpoint = env.SE_AGENT_HOOK_ENDPOINT, token = env.SE_AGENT_HOOK_TOKEN;

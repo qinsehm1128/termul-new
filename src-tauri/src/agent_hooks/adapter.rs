@@ -1405,7 +1405,7 @@ mod tests {
                 .env("SE_AGENT_HOOK_INSTANCE", explicit)
                 .env(
                     "SE_AGENT_HOOK_PTY_ID",
-                    "33333333-3333-3333-3333-333333333333",
+                    "terminal-1794455097514-5",
                 )
                 .env("SE_AGENT_HOOK_GENERATION", "4")
                 .env_remove("SE_AGENT_HOOK_ENDPOINT")
@@ -1522,12 +1522,12 @@ jq() { printf invoked > "$ENCODER_SPY"; return 127; }
                 .env("SE_AGENT_HOOK_TOKEN", "envtoken")
                 .env(
                     "SE_AGENT_HOOK_PTY_ID",
-                    "33333333-3333-3333-3333-333333333333",
+                    "terminal-1794455097514-5",
                 )
                 .env("SE_AGENT_HOOK_GENERATION", "4")
                 .env("QIN_CODE_HOOK_EVENT", event)
-                .env("QIN_CODE_SESSION_ID", identity)
-                .env("QIN_CODE_HOOK_SESSION_ID", "wrong-legacy-variable")
+                .env("QIN_CODE_HOOK_SESSION_ID", identity)
+                .env("QIN_CODE_SESSION_ID", "wrong-tool-call-variable")
                 .env("QIN_CODE_HOOK_PAYLOAD", payload)
                 .stdin(Stdio::null())
                 .output()
