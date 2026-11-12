@@ -16,6 +16,8 @@ interface PluginDetailsProps {
   plugins: PluginInfo[]
   connected: boolean
   disabled: boolean
+  /** The browser/phone client can inspect plugins and open views, not manage them. */
+  manageable?: boolean
   onRetry: () => void
   onReload: () => void
   onUpgrade: () => void
@@ -27,6 +29,7 @@ export function PluginDetails({
   plugins,
   connected,
   disabled,
+  manageable = true,
   onRetry,
   onReload,
   onUpgrade,
@@ -117,25 +120,27 @@ export function PluginDetails({
               </div>
             ))}
           </dl>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={unavailable || plugin.state === 'quarantined'}
-              onClick={onReload}
-            >
-              <RefreshCw size={14} aria-hidden="true" />
-              {t('manager.reload')}
-            </Button>
-            <Button variant="outline" size="sm" disabled={unavailable} onClick={onUpgrade}>
-              <Upload size={14} aria-hidden="true" />
-              {t('manager.upgrade')}
-            </Button>
-            <Button variant="destructive" size="sm" disabled={unavailable} onClick={onUninstall}>
-              <Trash2 size={14} aria-hidden="true" />
-              {t('manager.uninstall')}
-            </Button>
-          </div>
+          {manageable ? (
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={unavailable || plugin.state === 'quarantined'}
+                onClick={onReload}
+              >
+                <RefreshCw size={14} aria-hidden="true" />
+                {t('manager.reload')}
+              </Button>
+              <Button variant="outline" size="sm" disabled={unavailable} onClick={onUpgrade}>
+                <Upload size={14} aria-hidden="true" />
+                {t('manager.upgrade')}
+              </Button>
+              <Button variant="destructive" size="sm" disabled={unavailable} onClick={onUninstall}>
+                <Trash2 size={14} aria-hidden="true" />
+                {t('manager.uninstall')}
+              </Button>
+            </div>
+          ) : null}
         </TabsContent>
         <TabsContent
           value="settings"

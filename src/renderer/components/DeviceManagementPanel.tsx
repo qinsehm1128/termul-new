@@ -25,7 +25,8 @@ const scopeLabels: Record<RemoteDeviceScope, string> = {
   'files.write': '修改文件',
   'git.write': 'Git 写入',
   'screen.view': '查看屏幕',
-  'screen.control': '控制屏幕'
+  'screen.control': '控制屏幕',
+  'plugins.use': '使用插件'
 }
 const buttonClass =
   'rounded border border-border px-2 py-1 text-2xs hover:bg-secondary disabled:opacity-50'

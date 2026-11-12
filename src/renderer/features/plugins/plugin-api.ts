@@ -1,8 +1,5 @@
 import type { IpcDataDecoder, IpcResult } from '@shared/types/ipc.types'
 import {
-  type PluginApi,
-  type PluginConnectionChanged,
-  type PluginEvent,
   parseCommandReply,
   parseConfigSnapshot,
   parsePluginConnectionChanged,
@@ -13,8 +10,6 @@ import {
   parseViewSnapshot
 } from '@shared/types/plugin.types'
 import {
-  type HostProcessLogsReply,
-  type HostProcessStatus,
   parseHostContextAck,
   parseHostProcessLogsReply,
   parseHostProcessStatus,
@@ -23,103 +18,23 @@ import {
 } from '@shared/types/plugin-host.types'
 import {
   parseWebCloseReply,
-  parseWebOpenReply,
   parseWebReadReply,
-  parseWebRequestReply,
-  type WebCloseReply,
-  type WebOpenReply,
-  type WebOpenRequest,
-  type WebReadReply,
-  type WebRequest,
-  type WebRequestReply
+  parseWebRequestReply
 } from '@shared/types/plugin-web.types'
 import { type HostEventSubscription, onHostEvent } from '@/lib/host-events'
 import { invokeDecodedIpcResult } from '@/lib/invoke-decoded-ipc-result'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { type PluginRuntimeApi, parseProcessList, parseWebSession } from './plugin-contract'
+import { createWebPluginApi } from './web/web-plugin-api'
 
-// URL is a GUI transport capability; the Plugin Core WebOpenReply deliberately has no URL.
-export type PluginWebSession = WebOpenReply & { url: string }
-export interface PluginProcessOwner {
-  id: string
-  generation: string
-}
-export interface PluginProcessList {
-  processes: { id: string; status: HostProcessStatus }[]
-}
-
-function parseWebSession(value: unknown): PluginWebSession {
-  if (!value || typeof value !== 'object' || Array.isArray(value))
-    throw new TypeError('Invalid session')
-  const { url, ...reply } = value as Record<string, unknown>
-  if (typeof url !== 'string' || url.length > 8192) throw new TypeError('Invalid session URL')
-  const parsed = new URL(url)
-  if (
-    !(
-      (parsed.protocol === 'se-plugin:' && parsed.hostname === 'localhost') ||
-      (parsed.protocol === 'http:' && parsed.hostname === 'se-plugin.localhost')
-    ) ||
-    parsed.port ||
-    parsed.username ||
-    parsed.password ||
-    parsed.search
-  )
-    throw new TypeError('Invalid session origin')
-  const session = parseWebOpenReply(reply)
-  // Manifest entries are relative to ui/; the scheme serves them at their package path.
-  const entry = session.entry.startsWith('ui/') ? session.entry : `ui/${session.entry}`
-  const expectedPath = `/${[session.pluginId, session.generation, session.sessionId, ...entry.split('/')].map(encodeURIComponent).join('/')}`
-  if (parsed.pathname !== expectedPath) throw new TypeError('Invalid session path')
-  return { ...session, url }
-}
-function parseProcessList(value: unknown): PluginProcessList {
-  if (!value || typeof value !== 'object' || Array.isArray(value))
-    throw new TypeError('Invalid process list')
-  const record = value as Record<string, unknown>
-  if (
-    Object.keys(record).some((key) => key !== 'processes') ||
-    !Array.isArray(record.processes) ||
-    record.processes.length > 64
-  )
-    throw new TypeError('Invalid process list')
-  const ids = new Set<string>()
-  return {
-    processes: record.processes.map((item: unknown) => {
-      if (!item || typeof item !== 'object' || Array.isArray(item))
-        throw new TypeError('Invalid process')
-      const entry = item as Record<string, unknown>
-      if (
-        Object.keys(entry).some((key) => key !== 'id' && key !== 'status') ||
-        typeof entry.id !== 'string' ||
-        !entry.id ||
-        entry.id.length > 256 ||
-        ids.has(entry.id)
-      )
-        throw new TypeError('Invalid process')
-      ids.add(entry.id)
-      return { id: entry.id, status: parseHostProcessStatus(entry.status) }
-    })
-  }
-}
-
-export interface TauriPluginApi extends PluginApi {
-  openWebSession(request: WebOpenRequest): Promise<IpcResult<PluginWebSession>>
-  requestWeb(request: WebRequest): Promise<IpcResult<WebRequestReply>>
-  readWebSession(request: {
-    sessionId: string
-    afterSequence: number
-  }): Promise<IpcResult<WebReadReply>>
-  closeWebSession(request: { sessionId: string }): Promise<IpcResult<WebCloseReply>>
-  listProcesses(request: PluginProcessOwner): Promise<IpcResult<PluginProcessList>>
-  getProcessLogs(
-    request: PluginProcessOwner & { processId: string; tail: number }
-  ): Promise<IpcResult<HostProcessLogsReply>>
-  controlProcess(
-    request: PluginProcessOwner & { processId: string; action: 'start' | 'stop' | 'restart' }
-  ): Promise<IpcResult<HostProcessStatus>>
-  onChanged(handler: (event: PluginEvent) => void): HostEventSubscription
-  onConnectionChanged(handler: (event: PluginConnectionChanged) => void): HostEventSubscription
-}
+export type {
+  PluginProcessList,
+  PluginProcessOwner,
+  PluginRuntimeApi,
+  PluginWebSession,
+  TauriPluginApi
+} from './plugin-contract'
 
 export interface PluginApiDependencies {
   isDesktop?: () => boolean
@@ -139,8 +54,22 @@ const notSupported = (): IpcResult<never> => ({
   error: 'Native plugins require the desktop application'
 })
 
-/** No web fallback: neither invoke nor HTTP nor event transport is touched in a browser. */
-export function createTauriPluginApi(deps: PluginApiDependencies = {}): TauriPluginApi {
+/**
+ * True when a plugin host is reachable from this runtime: the desktop webview,
+ * or a browser served by `se-server` (same-origin HTTP proxy to the core). A
+ * standalone server still returns this true and surfaces
+ * `PLUGIN_CORE_UNAVAILABLE` as a disconnected state on first request.
+ */
+export function pluginTransportAvailable(): boolean {
+  if (isTauriContext()) return true
+  return typeof window !== 'undefined' && !!window.location?.origin
+}
+
+/**
+ * Desktop transport. Off-desktop this stays inert (no invoke, HTTP or event
+ * transport) — the singleton below selects the browser transport instead.
+ */
+export function createTauriPluginApi(deps: PluginApiDependencies = {}): PluginRuntimeApi {
   const desktop = deps.isDesktop ?? isTauriContext
   const invoke = deps.invokeDecoded ?? invokeDecodedIpcResult
   const on = deps.onEvent ?? onHostEvent
@@ -212,4 +141,11 @@ export function createTauriPluginApi(deps: PluginApiDependencies = {}): TauriPlu
       listen('plugins:connection_changed', parsePluginConnectionChanged, handler)
   }
 }
-export const pluginApi = createTauriPluginApi()
+
+/**
+ * Exact transport singleton imported by production hooks: Tauri invoke on the
+ * desktop, same-origin HTTP on the browser/phone client.
+ */
+export const pluginApi: PluginRuntimeApi = isTauriContext()
+  ? createTauriPluginApi()
+  : createWebPluginApi()

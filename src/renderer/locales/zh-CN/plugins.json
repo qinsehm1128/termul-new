@@ -49,7 +49,9 @@
     "emptyDescription": "插件可为 Se 扩展面板、命令和服务。安装可信的 .seplugin 插件包或 .dylib、.so、.dll 动态库以开始使用。",
     "installFirst": "安装第一个插件",
     "noResults": "没有符合搜索内容和状态筛选条件的插件。",
-    "clearFilters": "清除筛选"
+    "clearFilters": "清除筛选",
+    "managedOnDesktop": "插件管理请在桌面端进行；此处可打开插件面板。",
+    "coreUnavailable": "桌面插件内核不可用，暂时无法使用插件。"
   },
   "state": {
     "installed": "已安装",

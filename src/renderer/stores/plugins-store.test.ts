@@ -1,10 +1,11 @@
 import type { PluginEvent, PluginInfo } from '@shared/types/plugin.types'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { pluginApi } from '@/features/plugins/plugin-api'
+import { pluginApi, pluginTransportAvailable } from '@/features/plugins/plugin-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { usePluginsStore } from './plugins-store'
 
 vi.mock('@/features/plugins/plugin-api', () => ({
+  pluginTransportAvailable: vi.fn(() => true),
   pluginApi: {
     list: vi.fn(),
     install: vi.fn(),
@@ -52,6 +53,7 @@ const offChanged = vi.fn(),
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(isTauriContext).mockReturnValue(true)
+  vi.mocked(pluginTransportAvailable).mockReturnValue(true)
   usePluginsStore.setState({
     plugins: [],
     connected: false,
@@ -245,8 +247,8 @@ describe('plugins store', () => {
     expect(pluginApi.list).toHaveBeenCalledTimes(2)
   })
 
-  it('browser performs zero API calls, subscriptions, invoke and HTTP', async () => {
-    vi.mocked(isTauriContext).mockReturnValue(false)
+  it('no plugin host performs zero API calls, subscriptions, invoke and HTTP', async () => {
+    vi.mocked(pluginTransportAvailable).mockReturnValue(false)
     const fetch = vi.spyOn(globalThis, 'fetch')
     dispose = usePluginsStore.getState().subscribe()
     const store = usePluginsStore.getState()

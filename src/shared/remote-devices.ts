@@ -7,7 +7,8 @@ export const REMOTE_DEVICE_SCOPES = [
   'files.write',
   'git.write',
   'screen.view',
-  'screen.control'
+  'screen.control',
+  'plugins.use'
 ] as const
 
 export type RemoteDeviceScope = (typeof REMOTE_DEVICE_SCOPES)[number]

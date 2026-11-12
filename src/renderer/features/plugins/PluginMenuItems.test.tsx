@@ -7,7 +7,10 @@ import { usePluginHostUiStore } from './host-ui-store'
 import { PluginMenuItems } from './PluginMenuItems'
 import { pluginApi } from './plugin-api'
 
-vi.mock('./plugin-api', () => ({ pluginApi: { executeContribution: vi.fn() } }))
+vi.mock('./plugin-api', () => ({
+  pluginTransportAvailable: () => true,
+  pluginApi: { executeContribution: vi.fn() }
+}))
 vi.mock('@/components/ui/context-menu', () => ({
   ContextMenuSeparator: () => <hr />,
   ContextMenuGroup: ({ children }: { children: React.ReactNode }) => (

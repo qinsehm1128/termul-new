@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { logFrontendError } from '@/lib/log-api'
 import { createTauriPluginApi } from './plugin-api'
+import { createWebPluginApi } from './web/web-plugin-api'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), isTauri: () => false }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn(async () => {}) }))
@@ -32,77 +33,195 @@ describe('native plugin API', () => {
     expect(logFrontendError).not.toHaveBeenCalled()
   })
 
-  it('browser fallback never invokes commands, HTTP, or event transport', async () => {
-    const transport = vi.fn(),
-      event = vi.fn(),
-      http = vi.spyOn(globalThis, 'fetch')
-    const api = createTauriPluginApi({
-      isDesktop: () => false,
-      invokeDecoded: transport,
-      onEvent: event
+  it('browser transport maps every plugin command to one same-origin HTTP request', async () => {
+    const calls: { url: string; init: RequestInit }[] = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init: init ?? {} })
+      return new Response(
+        JSON.stringify({ success: false, code: 'PLUGIN_NOT_FOUND', error: 'missing' }),
+        { status: 200 }
+      )
     })
-    const results = await Promise.all([
-      api.list(),
-      api.install({ path: '/tmp/plugin' }),
-      api.setEnabled({ id: action.pluginId, enabled: true }),
-      api.reload({ id: action.pluginId }),
-      api.uninstall({ id: action.pluginId }),
-      api.getView({ id: action.pluginId, viewId: action.viewId }),
-      api.dispatchAction(action),
-      api.executeCommand({
-        id: action.pluginId,
-        generation: bootId,
-        commandId: 'reset',
-        args: null
-      }),
-      api.getConfig({ id: action.pluginId }),
-      api.setConfig({ id: action.pluginId, expectedRevision: 1, values: {} }),
-      api.publishHostContext({
-        sourceId: bootId,
-        sourceSequence: 1,
-        reset: true,
-        snapshot: {
-          activeProject: null,
-          projectIds: [],
-          activeTerminalId: null,
-          activeSessionId: null,
-          terminals: [],
-          agentSessions: [],
-          focus: { textInput: false, terminal: false },
-          truncated: false
+    const api = createWebPluginApi({
+      base: () => 'https://phone.example',
+      fetch: fetchMock as unknown as typeof fetch
+    })
+    const processOwner = { id: action.pluginId, generation: bootId }
+    const requests = [
+      ['/plugins', 'GET', null, () => api.list()],
+      ['/plugins/host-ui', 'GET', null, () => api.getHostUi()],
+      [
+        '/plugins/install',
+        'POST',
+        { path: '/tmp/plugin' },
+        () => api.install({ path: '/tmp/plugin' })
+      ],
+      [
+        '/plugins/enabled',
+        'POST',
+        { id: action.pluginId, enabled: true },
+        () => api.setEnabled({ id: action.pluginId, enabled: true })
+      ],
+      [
+        '/plugins/reload',
+        'POST',
+        { id: action.pluginId },
+        () => api.reload({ id: action.pluginId })
+      ],
+      [
+        '/plugins/uninstall',
+        'POST',
+        { id: action.pluginId },
+        () => api.uninstall({ id: action.pluginId })
+      ],
+      [
+        '/plugins/view',
+        'POST',
+        { id: action.pluginId, viewId: action.viewId },
+        () => api.getView({ id: action.pluginId, viewId: action.viewId })
+      ],
+      ['/plugins/action', 'POST', action, () => api.dispatchAction(action)],
+      [
+        '/plugins/command',
+        'POST',
+        { id: action.pluginId, generation: bootId, commandId: 'reset', args: null },
+        () =>
+          api.executeCommand({
+            id: action.pluginId,
+            generation: bootId,
+            commandId: 'reset',
+            args: null
+          })
+      ],
+      [
+        '/plugins/config/get',
+        'POST',
+        { id: action.pluginId },
+        () => api.getConfig({ id: action.pluginId })
+      ],
+      [
+        '/plugins/config/set',
+        'POST',
+        { id: action.pluginId, expectedRevision: 1, values: {} },
+        () => api.setConfig({ id: action.pluginId, expectedRevision: 1, values: {} })
+      ],
+      [
+        '/plugins/host-ui/dismiss',
+        'POST',
+        { pluginId: action.pluginId, generation: bootId, kind: 'notification', id: 'note' },
+        () =>
+          api.dismissHostUi({
+            pluginId: action.pluginId,
+            generation: bootId,
+            kind: 'notification',
+            id: 'note'
+          })
+      ],
+      [
+        '/plugins/contribution',
+        'POST',
+        {
+          pluginId: action.pluginId,
+          generation: bootId,
+          kind: 'status',
+          contributionId: 'status',
+          contextRevision: 1,
+          target: {}
         },
-        events: []
-      }),
-      api.heartbeatHostContext({ sourceId: bootId }),
-      api.getHostUi(),
-      api.dismissHostUi({
-        pluginId: action.pluginId,
-        generation: bootId,
-        kind: 'notification',
-        id: 'note'
-      }),
-      api.executeContribution({
-        pluginId: action.pluginId,
-        generation: bootId,
-        kind: 'status',
-        contributionId: 'status',
-        contextRevision: 1,
-        target: {}
-      })
-    ])
-    results.forEach((x) => {
-      expect(x).toMatchObject({ success: false, code: 'PLUGIN_NOT_SUPPORTED' })
+        () =>
+          api.executeContribution({
+            pluginId: action.pluginId,
+            generation: bootId,
+            kind: 'status',
+            contributionId: 'status',
+            contextRevision: 1,
+            target: {}
+          })
+      ],
+      [
+        '/plugins/web/open',
+        'POST',
+        { ...processOwner, viewId: 'web' },
+        () => api.openWebSession({ ...processOwner, viewId: 'web' })
+      ],
+      [
+        '/plugins/web/request',
+        'POST',
+        { sessionId: bootId, requestId: 'request', method: 'config.get', params: {} },
+        () =>
+          api.requestWeb({
+            sessionId: bootId,
+            requestId: 'request',
+            method: 'config.get',
+            params: {}
+          })
+      ],
+      [
+        '/plugins/web/read',
+        'POST',
+        { sessionId: bootId, afterSequence: 0 },
+        () => api.readWebSession({ sessionId: bootId, afterSequence: 0 })
+      ],
+      [
+        '/plugins/web/close',
+        'POST',
+        { sessionId: bootId },
+        () => api.closeWebSession({ sessionId: bootId })
+      ],
+      ['/plugins/processes', 'POST', processOwner, () => api.listProcesses(processOwner)],
+      [
+        '/plugins/processes/logs',
+        'POST',
+        { ...processOwner, processId: 'server', tail: 200 },
+        () => api.getProcessLogs({ ...processOwner, processId: 'server', tail: 200 })
+      ],
+      [
+        '/plugins/processes/control',
+        'POST',
+        { ...processOwner, processId: 'server', action: 'restart' },
+        () => api.controlProcess({ ...processOwner, processId: 'server', action: 'restart' })
+      ]
+    ] as const
+    for (const [path, method, payload, invoke] of requests) {
+      expect(await invoke()).toMatchObject({ success: false, code: 'PLUGIN_NOT_FOUND' })
+      const last = calls[calls.length - 1]
+      expect(last.url).toBe(`https://phone.example${path}`)
+      expect(last.init.method).toBe(method)
+      expect(last.init.headers).toBeInstanceOf(Headers)
+      if (method === 'POST') expect(JSON.parse(last.init.body as string)).toEqual(payload)
+    }
+    // Host context is desktop-only: unsupported, and never sent over HTTP.
+    expect(await api.publishHostContext({ sourceId: bootId } as never)).toMatchObject({
+      success: false,
+      code: 'PLUGIN_NOT_SUPPORTED'
     })
-    const stopChanged = api.onChanged(vi.fn())
-    const stopConnection = api.onConnectionChanged(vi.fn())
-    await Promise.all([stopChanged.ready, stopConnection.ready])
-    stopChanged()
-    stopConnection()
-    expect(transport).not.toHaveBeenCalled()
+    expect(await api.heartbeatHostContext({ sourceId: bootId } as never)).toMatchObject({
+      success: false,
+      code: 'PLUGIN_NOT_SUPPORTED'
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(requests.length)
     expect(invoke).not.toHaveBeenCalled()
-    expect(event).not.toHaveBeenCalled()
-    expect(http).not.toHaveBeenCalled()
-    http.mockRestore()
+
+    // Shared WebSocket events are consumed through the ACP transport, never a new socket.
+    const listeners = new Map<string, (payload: unknown) => void>()
+    const events = createWebPluginApi({
+      fetch: fetchMock as unknown as typeof fetch,
+      onEvent: (name, handler) => {
+        listeners.set(name, handler)
+        return Object.assign(() => undefined, { ready: Promise.resolve() })
+      }
+    })
+    const changed = vi.fn()
+    const stop = events.onChanged(changed)
+    await stop.ready
+    listeners.get('plugins:changed')!({
+      schemaVersion: 1,
+      bootId,
+      seq: 1,
+      type: 'registry_changed'
+    })
+    expect(changed).toHaveBeenCalledOnce()
+    stop()
   })
   it('uses the decoded IpcResult path with exact commands and payload wrapping', async () => {
     vi.mocked(invoke).mockResolvedValue({

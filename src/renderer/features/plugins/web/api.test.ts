@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTauriPluginApi } from '../plugin-api'
 import { webSession } from './test-fixtures'
+import { createWebPluginApi } from './web-plugin-api'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), isTauri: () => false }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn(async () => {}) }))
@@ -12,13 +13,18 @@ beforeEach(() => {
 const owner = { id: webSession.pluginId, generation: webSession.generation }
 
 describe('web and managed process facade', () => {
-  it('performs zero invoke/listen for every new browser-mode API', async () => {
-    const listen = vi.fn()
-    const call = vi.fn()
-    const api = createTauriPluginApi({
-      isDesktop: () => false,
-      invokeDecoded: call,
-      onEvent: listen
+  it('routes browser-mode calls over HTTP and never invokes the desktop transport', async () => {
+    const calls: string[] = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      calls.push(String(input))
+      return new Response(
+        JSON.stringify({ success: false, code: 'PLUGIN_NOT_FOUND', error: 'missing' }),
+        { status: 200 }
+      )
+    })
+    const api = createWebPluginApi({
+      base: () => 'https://phone.example',
+      fetch: fetchMock as unknown as typeof fetch
     })
     const results = await Promise.all([
       api.openWebSession({ ...owner, viewId: 'web' }),
@@ -34,13 +40,54 @@ describe('web and managed process facade', () => {
       api.getProcessLogs({ ...owner, processId: 'server', tail: 200 }),
       api.controlProcess({ ...owner, processId: 'server', action: 'restart' })
     ])
-    api.onChanged(vi.fn())()
-    api.onConnectionChanged(vi.fn())()
-    expect(
-      results.every((result) => !result.success && result.code === 'PLUGIN_NOT_SUPPORTED')
-    ).toBe(true)
-    expect(call).not.toHaveBeenCalled()
-    expect(listen).not.toHaveBeenCalled()
+    expect(results.every((result) => !result.success && result.code === 'PLUGIN_NOT_FOUND')).toBe(
+      true
+    )
+    expect(calls).toEqual([
+      'https://phone.example/plugins/web/open',
+      'https://phone.example/plugins/web/close',
+      'https://phone.example/plugins/web/read',
+      'https://phone.example/plugins/web/request',
+      'https://phone.example/plugins/processes',
+      'https://phone.example/plugins/processes/logs',
+      'https://phone.example/plugins/processes/control'
+    ])
+    expect(await api.publishHostContext({ sourceId: webSession.bootId } as never)).toMatchObject({
+      success: false,
+      code: 'PLUGIN_NOT_SUPPORTED'
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(7)
+    expect(invoke).not.toHaveBeenCalled()
+    vi.mocked(invoke).mockReset()
+  })
+
+  it('accepts only same-origin relative session paths on the browser transport', async () => {
+    const relative = `/plugin-ui/${webSession.pluginId}/${webSession.generation}/${webSession.sessionId}/ui/index.html`
+    const reply = (url: string) =>
+      new Response(JSON.stringify({ success: true, data: { ...webSession, url } }), { status: 200 })
+    const call = vi.fn(async () => reply(relative))
+    const api = createWebPluginApi({
+      base: () => 'https://phone.example',
+      fetch: call as unknown as typeof fetch
+    })
+    expect(await api.openWebSession({ ...owner, viewId: 'web' })).toMatchObject({
+      success: true,
+      data: { url: relative }
+    })
+    const rejected = [
+      `https://attacker.invalid${relative}`,
+      `//attacker.invalid${relative}`,
+      `${relative}?capability=secret`,
+      relative.replace('/ui/index.html', '/ui/other.html'),
+      webSession.url
+    ]
+    for (const url of rejected) {
+      call.mockResolvedValueOnce(reply(url))
+      expect(await api.openWebSession({ ...owner, viewId: 'web' }), url).toMatchObject({
+        success: false,
+        code: 'NETWORK_ERROR'
+      })
+    }
   })
 
   it('binds session URLs to approved origins and exact generation/session entry paths', async () => {

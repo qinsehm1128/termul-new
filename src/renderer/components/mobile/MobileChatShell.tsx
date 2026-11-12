@@ -12,6 +12,7 @@ import {
   MoreHorizontal,
   Pencil,
   Plus,
+  Puzzle,
   RotateCcw,
   Search,
   Settings,
@@ -519,6 +520,15 @@ export function MobileChatShell({
                 }}
               >
                 <Camera size={16} />
+              </OverflowItem>
+              <OverflowItem
+                label={t('chatShell.plugins')}
+                onSelect={() => {
+                  closeOverflow()
+                  navigate('/plugins')
+                }}
+              >
+                <Puzzle size={16} />
               </OverflowItem>
               {isWeb ? (
                 <>

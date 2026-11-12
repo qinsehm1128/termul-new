@@ -540,6 +540,21 @@ describe('MobileChatShell', () => {
     expect(screen.getByLabelText('Git changes')).toBeDisabled()
   })
 
+  it('navigates to /plugins from the drawer', () => {
+    tauriRef.current = false
+    render(
+      <MemoryRouter>
+        <MobileChatShell onNewChat={vi.fn()} canNewChat>
+          <div>chat body</div>
+        </MobileChatShell>
+      </MemoryRouter>
+    )
+
+    openOverflow()
+    fireEvent.click(screen.getByLabelText('Plugins'))
+    expect(mockNavigate).toHaveBeenCalledWith('/plugins')
+  })
+
   it('navigates to /snapshots from the drawer', () => {
     tauriRef.current = false
     render(

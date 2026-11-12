@@ -1,9 +1,8 @@
 import type { IpcResult } from '@shared/types/ipc.types'
 import type { PluginError, PluginEvent, PluginInfo } from '@shared/types/plugin.types'
 import { create } from 'zustand'
-import { pluginApi } from '@/features/plugins/plugin-api'
+import { pluginApi, pluginTransportAvailable } from '@/features/plugins/plugin-api'
 import { logFrontendError } from '@/lib/log-api'
-import { isTauriContext } from '@/lib/tauri-runtime'
 
 interface PluginsState {
   plugins: PluginInfo[]
@@ -41,7 +40,7 @@ export const usePluginsStore = create<PluginsState>((set, get) => {
     request: () => Promise<IpcResult<T>>,
     apply: (value: T) => void
   ): Promise<void> {
-    if (!isTauriContext() || get().busy || !get().connected) return
+    if (!pluginTransportAvailable() || get().busy || !get().connected) return
     set({ busy: operation, error: null })
     // An older list must not overwrite this operation's authoritative result.
     ++epoch
@@ -142,7 +141,7 @@ export const usePluginsStore = create<PluginsState>((set, get) => {
     bootId: null,
     seq: 0,
     load: async () => {
-      if (!isTauriContext()) return
+      if (!pluginTransportAvailable()) return
       if (consumers > 0 && !listenersReady) {
         registration ??= registerListeners()
         const currentRegistration = registration
@@ -183,7 +182,7 @@ export const usePluginsStore = create<PluginsState>((set, get) => {
       }
     },
     subscribe: () => {
-      if (!isTauriContext()) return () => {}
+      if (!pluginTransportAvailable()) return () => {}
       consumers += 1
       if (consumers === 1) {
         disconnected = false

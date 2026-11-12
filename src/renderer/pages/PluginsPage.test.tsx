@@ -291,12 +291,21 @@ describe('PluginsPage', () => {
     expect(actions.install).not.toHaveBeenCalled()
   })
 
-  it('browser displays desktop-only fallback without APIs, dialogs or HTTP', () => {
+  it('browser shows the plugin list and view entries without desktop-only management', () => {
     vi.mocked(isTauriContext).mockReturnValue(false)
     const fetch = vi.spyOn(globalThis, 'fetch')
     show()
-    expect(screen.getByRole('status')).toHaveTextContent('manager.unsupported')
+    expect(screen.getByRole('status')).toHaveTextContent('manager.managedOnDesktop')
+    expect(screen.getByRole('heading', { name: 'Demo plugin' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'manager.install' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'manager.reload' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'manager.uninstall' })).not.toBeInTheDocument()
+    openTab('contributions')
+    expect(screen.getByRole('link', { name: 'Demo panel' })).toHaveAttribute(
+      'href',
+      `/plugins/${plugin.id}/views/main`
+    )
     expect(tauriDialogApi.selectFile).not.toHaveBeenCalled()
     for (const action of Object.values(actions)) expect(action).not.toHaveBeenCalled()
     expect(fetch).not.toHaveBeenCalled()

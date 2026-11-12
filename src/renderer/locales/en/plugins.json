@@ -49,7 +49,9 @@
     "emptyDescription": "Plugins extend Se with panels, commands and services. Install a trusted .seplugin package or .dylib, .so or .dll library to get started.",
     "installFirst": "Install your first plugin",
     "noResults": "No plugins match your search and status filter.",
-    "clearFilters": "Clear filters"
+    "clearFilters": "Clear filters",
+    "managedOnDesktop": "Plugin management is available on the desktop. Open a plugin panel here.",
+    "coreUnavailable": "The desktop Plugin Core is unavailable. Plugins cannot be used right now."
   },
   "state": {
     "installed": "Installed",

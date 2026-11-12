@@ -130,7 +130,9 @@ export function PluginWebView({
     if (session) attachBridge.current()
   }, [session])
 
-  const url = session ? new URL(session.url) : null
+  // Absolute capability URLs ignore the base; the browser transport returns a
+  // same-origin relative path (/plugin-ui/…) that must resolve against this origin.
+  const url = session ? new URL(session.url, window.location.origin) : null
   // Capability fragments are not sent in HTTP requests or Referer headers.
   if (url && session)
     url.hash = new URLSearchParams({

@@ -36,6 +36,7 @@
     "chatDescription": "Browse and open agent chat sessions",
     "settings": "Settings",
     "snapshots": "Snapshots",
+    "plugins": "Plugins",
     "gitHistory": "Git history",
     "terminals": "Terminals",
     "terminalBoard": "Terminal board",

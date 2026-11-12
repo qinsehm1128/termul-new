@@ -105,6 +105,17 @@ describe('Project Gitignore append parity', () => {
   })
 })
 
+describe('Plugins web route parity', () => {
+  it('router.rs registers the plugin and plugin-ui routes ahead of the static fallback', () => {
+    const router = readFileSync(join(ROOT_DIR, 'src-tauri/src/web/router.rs'), 'utf-8')
+    const plugins = readFileSync(join(ROOT_DIR, 'src-tauri/src/web/plugins_api.rs'), 'utf-8')
+    expect(router).toContain('.merge(super::plugins_api::routes())')
+    for (const route of ['"/plugins"', '"/plugins/web/open"', '"/plugin-ui/{*rest}"']) {
+      expect(plugins, `plugins_api.rs should register ${route}`).toContain(route)
+    }
+  })
+})
+
 let semanticRepositoryFindingsCache: GuardFinding[] | undefined
 
 function semanticRepositoryFindings(): GuardFinding[] {

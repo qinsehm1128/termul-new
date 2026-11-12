@@ -36,6 +36,7 @@
     "chatDescription": "浏览并打开 Agent 聊天会话",
     "settings": "设置",
     "snapshots": "快照",
+    "plugins": "插件",
     "gitHistory": "Git 历史",
     "terminals": "终端",
     "terminalBoard": "终端看板",

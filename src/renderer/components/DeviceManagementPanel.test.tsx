@@ -72,7 +72,7 @@ describe('DeviceManagementPanel', () => {
     render(<DeviceManagementPanel />)
     const row = await screen.findByRole('listitem', { name: '手机' })
     fireEvent.click(within(row).getByText('设备与权限'))
-    expect(within(row).getAllByRole('checkbox')).toHaveLength(8)
+    expect(within(row).getAllByRole('checkbox')).toHaveLength(REMOTE_DEVICE_SCOPES.length)
     fireEvent.click(within(row).getByLabelText('终端输入'))
     await waitFor(() =>
       expect(api.setPermissions).toHaveBeenCalledWith('phone', ['view', 'terminal.input'])

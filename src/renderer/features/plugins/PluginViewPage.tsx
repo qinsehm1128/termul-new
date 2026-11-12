@@ -19,7 +19,9 @@ export function PluginViewPage(): React.JSX.Element {
     <div className="flex h-full min-h-0 flex-col overflow-auto bg-background text-foreground">
       <div
         className={
-          isWeb ? 'flex h-full min-h-0 w-full flex-1 flex-col' : 'mx-auto w-full max-w-6xl p-6'
+          isWeb
+            ? 'flex h-full min-h-0 w-full flex-1 flex-col'
+            : 'mx-auto w-full max-w-6xl p-3 sm:p-6'
         }
       >
         {pluginId && viewId ? (

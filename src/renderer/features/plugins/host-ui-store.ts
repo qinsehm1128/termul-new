@@ -7,8 +7,7 @@ import type {
   HostUiSnapshot
 } from '@shared/types/plugin.types'
 import { create } from 'zustand'
-import { isTauriContext } from '@/lib/tauri-runtime'
-import { pluginApi, type TauriPluginApi } from './plugin-api'
+import { pluginApi, pluginTransportAvailable, type TauriPluginApi } from './plugin-api'
 
 interface PluginHostUiState {
   snapshot: HostUiSnapshot | null
@@ -27,7 +26,7 @@ interface PluginHostUiState {
 /** Native host owns records and TTLs. This cache is ephemeral and boot/revision scoped. */
 export function createPluginHostUiStore(
   api: TauriPluginApi = pluginApi,
-  isDesktop: () => boolean = isTauriContext
+  isDesktop: () => boolean = pluginTransportAvailable
 ) {
   let epoch = 0
   let consumers = 0

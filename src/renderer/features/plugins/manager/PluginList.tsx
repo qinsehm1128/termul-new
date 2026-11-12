@@ -22,6 +22,8 @@ interface PluginListProps {
   plugins: PluginInfo[]
   selectedId?: string
   disabled: boolean
+  /** The browser/phone client can open views but cannot change host state. */
+  manageable?: boolean
   onSelect: (id: string) => void
   onToggle: (id: string, enabled: boolean) => void
 }
@@ -30,6 +32,7 @@ export function PluginList({
   plugins,
   selectedId,
   disabled,
+  manageable = true,
   onSelect,
   onToggle
 }: PluginListProps): React.JSX.Element {
@@ -69,12 +72,14 @@ export function PluginList({
                 </span>
               </span>
             </button>
-            <Switch
-              checked={plugin.desiredEnabled}
-              disabled={disabled || lifecyclePending(plugin)}
-              aria-label={`${t(plugin.desiredEnabled ? 'manager.disable' : 'manager.enable')} ${plugin.manifest.name}`}
-              onCheckedChange={(enabled) => onToggle(plugin.id, enabled)}
-            />
+            {manageable ? (
+              <Switch
+                checked={plugin.desiredEnabled}
+                disabled={disabled || lifecyclePending(plugin)}
+                aria-label={`${t(plugin.desiredEnabled ? 'manager.disable' : 'manager.enable')} ${plugin.manifest.name}`}
+                onCheckedChange={(enabled) => onToggle(plugin.id, enabled)}
+              />
+            ) : null}
           </li>
         )
       })}

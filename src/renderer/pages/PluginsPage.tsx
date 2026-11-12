@@ -98,140 +98,145 @@ export default function PluginsPage(): React.JSX.Element {
           </div>
           <p className="mt-1 text-sm text-muted-foreground">{t('manager.subtitle')}</p>
         </div>
-        {desktop && (
-          <div className="flex items-center gap-2">
-            <Button variant="outline" disabled={!!busy || loading} onClick={() => void load()}>
-              <RefreshCw size={14} aria-hidden="true" />
-              {t('manager.refresh')}
-            </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" disabled={!!busy || loading} onClick={() => void load()}>
+            <RefreshCw size={14} aria-hidden="true" />
+            {t('manager.refresh')}
+          </Button>
+          {desktop && (
             <Button disabled={disabled} onClick={() => void chooseFile()}>
               <Download size={14} aria-hidden="true" />
               {t('manager.install')}
             </Button>
-          </div>
-        )}
+          )}
+        </div>
       </header>
       <div className="mx-auto w-full max-w-6xl space-y-4 p-6">
-        {!desktop ? (
-          <p role="status" className="text-sm text-muted-foreground">
-            {t('manager.unsupported')}
-          </p>
-        ) : (
-          <>
-            {!connected && (
-              <div
-                role="status"
-                className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-muted/40 p-4 text-sm"
+        <>
+          {!desktop && (
+            <p role="status" className="text-sm text-muted-foreground">
+              {t('manager.managedOnDesktop')}
+            </p>
+          )}
+          {!connected && (
+            <div
+              role="status"
+              className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-muted/40 p-4 text-sm"
+            >
+              <WifiOff size={16} className="shrink-0 text-muted-foreground" aria-hidden="true" />
+              <p className="min-w-0 flex-1">{t('state.disconnected')}</p>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!!busy || loading}
+                onClick={() => void load()}
               >
-                <WifiOff size={16} className="shrink-0 text-muted-foreground" aria-hidden="true" />
-                <p className="min-w-0 flex-1">{t('state.disconnected')}</p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={!!busy || loading}
-                  onClick={() => void load()}
-                >
-                  {t('manager.reconnect')}
-                </Button>
-              </div>
-            )}
-            {loading && (
-              <p role="status" className="text-sm text-muted-foreground">
-                {t('view.loading')}
-              </p>
-            )}
-            {(error || pickerFailed) && (
-              <p role="alert" className="text-sm text-destructive">
-                {t('errors.generic')}
-                {error ? ` (${error.code})` : ''}
-              </p>
-            )}
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="relative min-w-48 flex-1">
-                <Search
-                  size={15}
-                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-                  aria-hidden="true"
-                />
-                <Input
-                  type="search"
-                  aria-label={t('manager.search')}
-                  placeholder={t('manager.search')}
-                  className="pl-9"
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                />
-              </div>
-              <select
-                aria-label={t('manager.statusFilter')}
-                value={status}
-                onChange={(event) => setStatus(event.target.value as StatusFilter)}
-                className="h-9 rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              >
-                {(['all', 'running', 'disabled', 'error'] as const).map((filter) => (
-                  <option key={filter} value={filter}>
-                    {t(`manager.filters.${filter}`)}
-                  </option>
-                ))}
-              </select>
+                {t('manager.reconnect')}
+              </Button>
             </div>
-            {!loading && plugins.length === 0 ? (
-              <div className="flex min-h-80 flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border p-8 text-center">
-                <Puzzle size={32} className="mb-1 text-muted-foreground" aria-hidden="true" />
-                <h2 className="text-base font-medium">{t('manager.empty')}</h2>
-                <p className="max-w-md text-sm leading-relaxed text-muted-foreground">
-                  {t('manager.emptyDescription')}
-                </p>
+          )}
+          {loading && (
+            <p role="status" className="text-sm text-muted-foreground">
+              {t('view.loading')}
+            </p>
+          )}
+          {(error || pickerFailed) && (
+            <p role="alert" className="text-sm text-destructive">
+              {error?.code === 'PLUGIN_CORE_UNAVAILABLE'
+                ? t('manager.coreUnavailable')
+                : t('errors.generic')}
+              {error && error.code !== 'PLUGIN_CORE_UNAVAILABLE' ? ` (${error.code})` : ''}
+            </p>
+          )}
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="relative min-w-48 flex-1">
+              <Search
+                size={15}
+                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+                aria-hidden="true"
+              />
+              <Input
+                type="search"
+                aria-label={t('manager.search')}
+                placeholder={t('manager.search')}
+                className="pl-9"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </div>
+            <select
+              aria-label={t('manager.statusFilter')}
+              value={status}
+              onChange={(event) => setStatus(event.target.value as StatusFilter)}
+              className="h-9 rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              {(['all', 'running', 'disabled', 'error'] as const).map((filter) => (
+                <option key={filter} value={filter}>
+                  {t(`manager.filters.${filter}`)}
+                </option>
+              ))}
+            </select>
+          </div>
+          {!loading && plugins.length === 0 ? (
+            <div className="flex min-h-80 flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border p-8 text-center">
+              <Puzzle size={32} className="mb-1 text-muted-foreground" aria-hidden="true" />
+              <h2 className="text-base font-medium">{t('manager.empty')}</h2>
+              <p className="max-w-md text-sm leading-relaxed text-muted-foreground">
+                {t('manager.emptyDescription')}
+              </p>
+              {desktop && (
                 <Button variant="outline" disabled={disabled} onClick={() => void chooseFile()}>
                   <Download size={14} aria-hidden="true" />
                   {t('manager.installFirst')}
                 </Button>
-              </div>
-            ) : loading && plugins.length === 0 ? null : filtered.length === 0 ? (
-              <div className="rounded-lg border border-border p-10 text-center">
-                <p className="text-sm text-muted-foreground">{t('manager.noResults')}</p>
-                <Button
-                  variant="ghost"
-                  className="mt-2"
-                  onClick={() => {
-                    setQuery('')
-                    setStatus('all')
-                  }}
-                >
-                  {t('manager.clearFilters')}
-                </Button>
-              </div>
-            ) : (
-              <div className="grid overflow-hidden rounded-lg border border-border md:grid-cols-[minmax(15rem,0.8fr)_minmax(0,1.7fr)]">
-                <aside className="max-h-[60vh] overflow-y-auto border-b border-border md:max-h-none md:border-b-0 md:border-r">
-                  <div className="border-b border-border/60 px-4 py-3 text-xs font-medium text-muted-foreground">
-                    {t('manager.installed')} · {filtered.length}
-                  </div>
-                  <PluginList
-                    plugins={filtered}
-                    selectedId={selected?.id}
-                    disabled={disabled}
-                    onSelect={setSelectedId}
-                    onToggle={(id, enabled) => void setEnabled(id, enabled)}
-                  />
-                </aside>
-                {selected && (
-                  <PluginDetails
-                    key={selected.id}
-                    plugin={selected}
-                    plugins={plugins}
-                    connected={connected}
-                    disabled={disabled}
-                    onRetry={() => void setEnabled(selected.id, true)}
-                    onReload={() => void reload(selected.id)}
-                    onUpgrade={() => void chooseFile(selected.id)}
-                    onUninstall={() => setConfirmation({ type: 'uninstall', id: selected.id })}
-                  />
-                )}
-              </div>
-            )}
-          </>
-        )}
+              )}
+            </div>
+          ) : loading && plugins.length === 0 ? null : filtered.length === 0 ? (
+            <div className="rounded-lg border border-border p-10 text-center">
+              <p className="text-sm text-muted-foreground">{t('manager.noResults')}</p>
+              <Button
+                variant="ghost"
+                className="mt-2"
+                onClick={() => {
+                  setQuery('')
+                  setStatus('all')
+                }}
+              >
+                {t('manager.clearFilters')}
+              </Button>
+            </div>
+          ) : (
+            <div className="grid overflow-hidden rounded-lg border border-border md:grid-cols-[minmax(15rem,0.8fr)_minmax(0,1.7fr)]">
+              <aside className="max-h-[60vh] overflow-y-auto border-b border-border md:max-h-none md:border-b-0 md:border-r">
+                <div className="border-b border-border/60 px-4 py-3 text-xs font-medium text-muted-foreground">
+                  {t('manager.installed')} · {filtered.length}
+                </div>
+                <PluginList
+                  plugins={filtered}
+                  selectedId={selected?.id}
+                  disabled={disabled}
+                  manageable={desktop}
+                  onSelect={setSelectedId}
+                  onToggle={(id, enabled) => void setEnabled(id, enabled)}
+                />
+              </aside>
+              {selected && (
+                <PluginDetails
+                  key={selected.id}
+                  plugin={selected}
+                  plugins={plugins}
+                  connected={connected}
+                  disabled={disabled}
+                  manageable={desktop}
+                  onRetry={() => void setEnabled(selected.id, true)}
+                  onReload={() => void reload(selected.id)}
+                  onUpgrade={() => void chooseFile(selected.id)}
+                  onUninstall={() => setConfirmation({ type: 'uninstall', id: selected.id })}
+                />
+              )}
+            </div>
+          )}
+        </>
       </div>
       <AlertDialog
         open={confirmation !== null}
