@@ -33,6 +33,11 @@ enum NocturneWorkspacePresentation {
             // The hub snapshot carries no screen state. An empty note hides the
             // line entirely instead of claiming "view only".
             note = ""
+        case .plugins:
+            detail = destination.detail
+            // Host state (plugin availability) is not in the hub snapshot; no
+            // note beats an invented one.
+            note = ""
         }
         return WorkspaceTool(id: destination.rawValue, title: destination.title,
                              detail: detail, note: note, icon: destination.icon,

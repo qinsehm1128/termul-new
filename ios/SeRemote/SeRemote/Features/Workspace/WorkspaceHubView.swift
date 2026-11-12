@@ -62,8 +62,13 @@ struct WorkspaceHubView: View {
     /// that have not wired a terminal yet; the connected hub always passes the
     /// live scope, which disables the tiles when no terminal is open.
     var toolScope: ToolScope? = nil
+    /// Plugins is host-scoped: it ignores `toolScope` and follows the link's
+    /// `view` grant instead.
+    var pluginsEnabled: Bool = true
+    var pluginsDisabledReason: String = ""
 
     var onOpenTool: (WorkspaceTool) -> Void = { _ in }
+    var onOpenPlugins: () -> Void = {}
     var onOpenProject: (WorkspaceProject) -> Void = { _ in }
     var onSelectHost: () -> Void = {}
     var onOpenCommand: () -> Void = {}
@@ -225,7 +230,7 @@ struct WorkspaceHubView: View {
 
     private func toolTile(_ tool: WorkspaceTool) -> some View {
         Button {
-            onOpenTool(tool)
+            if tool.id == ToolDestination.plugins.rawValue { onOpenPlugins() } else { onOpenTool(tool) }
         } label: {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 6) {
@@ -259,10 +264,19 @@ struct WorkspaceHubView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(NocturnePressStyle(reduceMotion: reduceMotion))
-        .disabled(!tilesEnabled)
-        .opacity(tilesEnabled ? 1 : 0.55)
+        .disabled(!isTileEnabled(tool))
+        .opacity(isTileEnabled(tool) ? 1 : 0.55)
         .accessibilityElement(children: .combine)
-        .accessibilityHint(tilesEnabled ? "" : (toolScope?.disabledReason ?? ""))
+        .accessibilityHint(isTileEnabled(tool) ? "" : disabledReason(tool))
+    }
+
+    private func isTileEnabled(_ tool: WorkspaceTool) -> Bool {
+        tool.id == ToolDestination.plugins.rawValue ? pluginsEnabled : tilesEnabled
+    }
+
+    private func disabledReason(_ tool: WorkspaceTool) -> String {
+        if tool.id == ToolDestination.plugins.rawValue { return pluginsDisabledReason }
+        return toolScope?.disabledReason ?? ""
     }
 
     private func shortTitle(_ tool: WorkspaceTool) -> String {

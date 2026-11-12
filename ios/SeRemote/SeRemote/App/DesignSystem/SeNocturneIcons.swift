@@ -55,6 +55,8 @@ nonisolated enum SeIcon: String, CaseIterable, Sendable {
     case pointer
     /// Cropped frame around a T: screen-text snapshot.
     case textview
+    /// Jigsaw piece: desktop plugins.
+    case plugins
 
     // MARK: Prototype glyphs the first pass missed
 
@@ -413,6 +415,24 @@ nonisolated struct SeIconShape: Shape {
         case .chevronUpDown:
             move(8, 9.5); line(12, 5.5); line(16, 9.5)
             move(8, 14.5); line(12, 18.5); line(16, 14.5)
+
+        case .plugins:
+            // Square body with a raised knob on the top edge and an inward
+            // notch on the right edge: one classic jigsaw piece.
+            move(4, 10)
+            line(4, 6)
+            path.addQuadCurve(to: p(6, 4), control: p(4, 4))
+            line(9, 4)
+            path.addCurve(to: p(13, 4), control1: p(9.8, 1.6), control2: p(12.2, 1.6))
+            line(18, 4)
+            path.addQuadCurve(to: p(20, 6), control: p(20, 4))
+            line(20, 9)
+            path.addCurve(to: p(20, 13), control1: p(17.6, 9.8), control2: p(17.6, 12.2))
+            line(20, 18)
+            path.addQuadCurve(to: p(18, 20), control: p(20, 20))
+            line(6, 20)
+            path.addQuadCurve(to: p(4, 18), control: p(4, 20))
+            path.closeSubpath()
         }
         return path
     }

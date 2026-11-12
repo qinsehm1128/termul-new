@@ -45,7 +45,7 @@ struct NocturneCommandShellTests {
         #expect(entries.count == ToolDestination.allCases.count)
         #expect(Set(entries.map(\.id)).count == entries.count)
         #expect(entries.map(\.target) == ToolDestination.allCases.map { .tool($0) })
-        #expect(entries.map(\.id) == ["tool:git", "tool:scheduledTasks", "tool:search", "tool:screenText"])
+        #expect(entries.map(\.id) == ["tool:git", "tool:scheduledTasks", "tool:search", "tool:screenText", "tool:plugins"])
         #expect(entries.allSatisfy { $0.item.kind == .command })
         // The merged quick-terminal and desktop destinations are gone.
         #expect(!entries.map(\.id).contains("tool:quickTerminals"))

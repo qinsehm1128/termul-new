@@ -15,11 +15,17 @@ struct WorkspaceHubScreen: View {
 
     @Environment(ConnectionStore.self) private var connections
     @Environment(\.sePalette) private var palette
+    @Environment(\.remoteDeviceLink) private var deviceLink
     @State private var path: [ToolDestination] = []
+    @State private var pluginsCover = false
     @State private var selectionTask: Task<Void, Never>?
     @State private var selectingProject = false
 
     private var scope: ToolScope { ToolScopePresentation.scope(for: session) }
+
+    private var pluginsEnabled: Bool {
+        ToolDestination.plugins.browserEntryEnabled(for: deviceLink)
+    }
 
     private var scopedProject: HostProject? {
         guard let id = scope.projectID else { return nil }
@@ -59,10 +65,19 @@ struct WorkspaceHubScreen: View {
                 tools: ToolDestination.hubCases.map { NocturneWorkspacePresentation.tool($0, snapshot: snapshot) },
                 projects: session.projects.projects.map { NocturneWorkspacePresentation.project($0, snapshot: snapshot) },
                 toolScope: scope,
+                pluginsEnabled: pluginsEnabled,
+                pluginsDisabledReason: String(localized: "Plugins are not available for this connection."),
                 onOpenTool: { tool in
-                    guard scope.isEnabled, let destination = ToolDestination(rawValue: tool.id) else { return }
+                    guard let destination = ToolDestination(rawValue: tool.id) else { return }
+                    if destination == .plugins {
+                        guard pluginsEnabled else { return }
+                        pluginsCover = true
+                        return
+                    }
+                    guard scope.isEnabled else { return }
                     path.append(destination)
                 },
+                onOpenPlugins: { if pluginsEnabled { pluginsCover = true } },
                 onOpenProject: openProject,
                 onSelectHost: onSelectHost,
                 onOpenCommand: onOpenCommand,
@@ -77,6 +92,14 @@ struct WorkspaceHubScreen: View {
                 // WorkspaceToolDestinationView forces the system bar visible,
                 // which would draw a second bar above the Nocturne header.
                 toolDestination(destination)
+            }
+            .fullScreenCover(isPresented: $pluginsCover) {
+                PluginBrowserScreen(
+                    origin: session.origin,
+                    token: deviceLink?.pairingToken ?? session.credentials.bearer,
+                    http: session.http
+                )
+                .background(palette.canvas.ignoresSafeArea())
             }
             .toolbar(.hidden, for: .navigationBar)
             .task(id: scope.cwd) {
@@ -113,6 +136,12 @@ struct WorkspaceHubScreen: View {
             })
         case .screenText:
             ScreenFeatureView(session: session)
+        case .plugins:
+            PluginBrowserScreen(
+                origin: session.origin,
+                token: deviceLink?.pairingToken ?? session.credentials.bearer,
+                http: session.http
+            )
         }
     }
 

@@ -20,9 +20,9 @@ struct IAShellNavigationTests {
 
     @Test func toolHubKeepsThePrototypeFourTiles() {
         let hub = ToolDestination.hubCases
-        // 更改 / 定时任务 / 搜索 / 屏幕, in that order.
-        #expect(hub.map(\.rawValue) == ["git", "scheduledTasks", "search", "screenText"])
-        #expect(hub.count == 4)
+        // 更改 / 定时任务 / 搜索 / 屏幕 / 插件, in that order.
+        #expect(hub.map(\.rawValue) == ["git", "scheduledTasks", "search", "screenText", "plugins"])
+        #expect(hub.count == 5)
         // The grid is the whole destination list now.
         #expect(hub == ToolDestination.allCases)
         #expect(hub.map(\.title).allSatisfy { !$0.isEmpty })
@@ -33,7 +33,7 @@ struct IAShellNavigationTests {
     }
 
     @Test func toolHubUsesNocturneGlyphs() {
-        #expect(ToolDestination.hubCases.map(\.icon) == [.git, .clock, .search, .textview])
+        #expect(ToolDestination.hubCases.map(\.icon) == [.git, .clock, .search, .textview, .plugins])
     }
 
     @Test func screenPageSegmentsAreSnapshotThenDesktop() {

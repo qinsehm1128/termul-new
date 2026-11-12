@@ -12,9 +12,9 @@ struct NocturneWorkspacePresentationTests {
             #expect(tile.title == destination.title)
             #expect(tile.detail == destination.detail)
             #expect(tile.icon == destination.icon)
-            // Only the screen tool may leave the note blank: the hub snapshot
-            // carries no screen state to summarize.
-            #expect(tile.note.isEmpty == (destination == .screenText))
+            // Only tools with no host state may leave the note blank: the hub
+            // snapshot carries neither screen text nor plugin availability.
+            #expect(tile.note.isEmpty == (destination == .screenText || destination == .plugins))
         }
     }
 

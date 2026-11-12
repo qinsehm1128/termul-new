@@ -25,7 +25,7 @@ struct ToolScopePresentationTests {
         #expect(!scope.isEnabled)
         #expect(scope.projectLabel == L("No terminal"))
         #expect(scope.scopeDetail == nil)
-        #expect(ToolDestination.hubCases.count == 4)
+        #expect(ToolDestination.hubCases.count == 5)
         #expect(!scope.disabledReason.isEmpty)
     }
 
@@ -58,11 +58,11 @@ struct ToolScopePresentationTests {
 
     @Test func hubTilesMatchAllCasesAndDropMergedDestinations() {
         #expect(ToolDestination.hubCases == ToolDestination.allCases)
-        #expect(ToolDestination.allCases.map(\.rawValue) == ["git", "scheduledTasks", "search", "screenText"])
+        #expect(ToolDestination.allCases.map(\.rawValue) == ["git", "scheduledTasks", "search", "screenText", "plugins"])
         #expect(ToolDestination.hubCases.map(\.title) == [
-            L("Git"), L("Scheduled tasks"), L("Search"), L("Host screen text"),
+            L("Git"), L("Scheduled tasks"), L("Search"), L("Host screen text"), L("Plugins"),
         ])
-        #expect(ToolDestination.hubCases.map(\.icon) == [.git, .clock, .search, .textview])
+        #expect(ToolDestination.hubCases.map(\.icon) == [.git, .clock, .search, .textview, .plugins])
     }
 
     @Test func everyDestinationTalksAboutTheScopeNotAWorkspaceTab() {
