@@ -54,7 +54,10 @@ use crate::web::ws::{ws_upgrade, AppState, HistoryMode};
 
 use super::assets;
 
-fn classified_routes(routes: Router<AppState>, route_class: RemoteRouteClass) -> Router<AppState> {
+pub(super) fn classified_routes(
+    routes: Router<AppState>,
+    route_class: RemoteRouteClass,
+) -> Router<AppState> {
     routes
         .layer(middleware::from_fn(capability_middleware))
         .layer(Extension(route_class))
@@ -111,11 +114,9 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
     .merge(classified_routes(
         Router::<AppState>::new().route(
             "/remote/attachments/stage",
-            post(super::remote_attachments_api::stage).layer(
-                axum::extract::DefaultBodyLimit::max(
-                    super::remote_attachments_api::BODY_LIMIT,
-                ),
-            ),
+            post(super::remote_attachments_api::stage).layer(axum::extract::DefaultBodyLimit::max(
+                super::remote_attachments_api::BODY_LIMIT,
+            )),
         ),
         RemoteRouteClass::RemoteAttachment,
     ))
@@ -503,6 +504,7 @@ fn api_routes(provenance: IngressProvenance) -> Router<AppState> {
             ),
         RemoteRouteClass::Worktree,
     ))
+    .merge(super::plugins_api::routes())
 }
 
 /// Build the ACP web-server Axum router (serves the web client + WS + health).
@@ -552,7 +554,9 @@ pub fn router(
 ) -> Router {
     crate::commands::register_hook_owner_resolver(terminal.clone());
     #[cfg(not(test))]
-    if let (Some(conversation), Some(manifest), Some(store)) = (&conversation, &workspace_manifest, &store) {
+    if let (Some(conversation), Some(manifest), Some(store)) =
+        (&conversation, &workspace_manifest, &store)
+    {
         crate::cli_session::identity_gc::register(crate::cli_session::identity_gc::GcContext {
             repository: Arc::clone(conversation.session_workspace().repository()),
             manifest_root: manifest.root().to_path_buf(),

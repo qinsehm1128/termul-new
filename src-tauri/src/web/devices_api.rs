@@ -312,7 +312,7 @@ mod tests {
         assert_eq!(value["hostId"], identity["hostId"]);
         let token = value["deviceToken"].as_str().unwrap();
         let id = value["deviceId"].as_str().unwrap();
-        assert_eq!(value["scopes"].as_array().unwrap().len(), 8);
+        assert_eq!(value["scopes"].as_array().unwrap().len(), 9);
         let replay = router(authority.clone()).oneshot(request()).await.unwrap();
         assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
         let replay: serde_json::Value =

@@ -167,6 +167,9 @@ pub enum RemoteRouteClass {
     AgentHooksResume,
     AgentHooksManage,
     AgentChat,
+    Plugins,
+    PluginsManage,
+    PluginUi,
     LocalOperator,
 }
 
@@ -203,6 +206,9 @@ impl RemoteRouteClass {
             Self::AgentHooksResume => "agent_hooks_resume",
             Self::AgentHooksManage => "agent_hooks_manage",
             Self::AgentChat => "agent_chat",
+            Self::Plugins => "plugins",
+            Self::PluginsManage => "plugins_manage",
+            Self::PluginUi => "plugin_ui",
             Self::LocalOperator => "local_operator",
         }
     }
@@ -211,11 +217,16 @@ impl RemoteRouteClass {
     pub fn required_scope(self, method: &Method) -> Option<&'static str> {
         let read = matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS);
         match self {
-            Self::Health | Self::Pair => None,
+            Self::Health | Self::Pair | Self::PluginUi => None,
             Self::RemoteAccess | Self::AgentHooksManage | Self::LocalOperator => Some("manage"),
             Self::AgentHooksStatus => Some("view"),
             Self::AgentHooksResume => Some("terminal.create"),
             Self::AgentChat => Some(if read { "view" } else { "terminal.input" }),
+            // Plugin UI and action dispatch need a dedicated, grantable scope;
+            // install/enable/reload/config/processes are manage-only and never
+            // reachable from a paired device.
+            Self::Plugins => Some(if read { "view" } else { "plugins.use" }),
+            Self::PluginsManage => Some("manage"),
             Self::RemoteDesktop => Some(if read {
                 "screen.view"
             } else {
@@ -255,13 +266,34 @@ impl RemoteRouteClass {
                 | Self::AcpWebSocket
                 | Self::TerminalWebSocket
                 | Self::RemoteDesktopWebSocket
+                | Self::PluginUi
         )
     }
 
     /// Compatibility fallback for focused routers outside `web::router`.
     /// Production routes attach the enum directly and never log this path.
     fn from_path(path: &str) -> Option<Self> {
-        if path.starts_with("/remote-desktop/") || path.starts_with("/api/remote-desktop/") {
+        if path.starts_with("/plugin-ui/") {
+            Some(Self::PluginUi)
+        } else if path == "/plugins" || path.starts_with("/plugins/") {
+            // Install/enable/reload/config/processes are local-operator only.
+            if matches!(
+                path,
+                "/plugins/install"
+                    | "/plugins/enabled"
+                    | "/plugins/reload"
+                    | "/plugins/uninstall"
+                    | "/plugins/config/get"
+                    | "/plugins/config/set"
+                    | "/plugins/processes"
+                    | "/plugins/processes/logs"
+                    | "/plugins/processes/control"
+            ) {
+                Some(Self::PluginsManage)
+            } else {
+                Some(Self::Plugins)
+            }
+        } else if path.starts_with("/remote-desktop/") || path.starts_with("/api/remote-desktop/") {
             Some(Self::LocalOperator)
         } else if matches!(
             path,
@@ -1918,20 +1950,31 @@ pub mod test_tracing {
         }
 
         fn log(&self, record: &log::Record<'_>) {
-            let captured = CapturedRecord {
-                scope_id: self.active_id.load(Ordering::Acquire),
-                target: record.target().to_string(),
-                message: record.args().to_string(),
-            };
-            if captured.scope_id != 0 {
-                self.records.lock().unwrap().push(captured);
+            let target = record.target().to_string();
+            let message = record.args().to_string();
+            // Read `active_id` under the same lock the guard's Drop uses to
+            // clear it. Otherwise a record loaded before the clear could be
+            // pushed after the retain, permanently contaminating a dead scope.
+            let mut records = self.records.lock().unwrap();
+            let scope_id = self.active_id.load(Ordering::Acquire);
+            if scope_id != 0 {
+                records.push(CapturedRecord {
+                    scope_id,
+                    target,
+                    message,
+                });
                 return;
             }
+            drop(records);
             let mut forwarded = self.forwarded.lock().unwrap();
             if forwarded.len() == 64 {
                 forwarded.pop_front();
             }
-            forwarded.push_back(captured);
+            forwarded.push_back(CapturedRecord {
+                scope_id: 0,
+                target,
+                message,
+            });
         }
 
         fn flush(&self) {}
@@ -1961,12 +2004,11 @@ pub mod test_tracing {
 
     impl Drop for Guard {
         fn drop(&mut self) {
+            // Clear and prune under one lock so a concurrent `log` can never
+            // observe the old id after the prune (which would strand a record).
+            let mut records = LOGGER.records.lock().unwrap();
             LOGGER.active_id.store(0, Ordering::Release);
-            LOGGER
-                .records
-                .lock()
-                .unwrap()
-                .retain(|record| record.scope_id != self.id);
+            records.retain(|record| record.scope_id != self.id);
         }
     }
 
@@ -2797,7 +2839,10 @@ mod tests {
             ("/cli-sessions", RemoteRouteClass::CliSession),
             ("/memory-index/search", RemoteRouteClass::MemoryIndex),
             ("/conversation-recovery/resolve", RemoteRouteClass::Recovery),
-            ("/remote/attachments/stage", RemoteRouteClass::RemoteAttachment),
+            (
+                "/remote/attachments/stage",
+                RemoteRouteClass::RemoteAttachment,
+            ),
             ("/ws", RemoteRouteClass::AcpWebSocket),
             ("/terminal/ws", RemoteRouteClass::TerminalWebSocket),
             ("/quick-terminals/open", RemoteRouteClass::QuickTerminal),
@@ -2822,6 +2867,98 @@ mod tests {
             Some("terminal.input")
         );
         assert!(RemoteRouteClass::RemoteAttachment.requires_http_bearer());
+    }
+
+    #[test]
+    fn plugin_route_classes_map_scope_and_bearer_per_method() {
+        // Plugins: reads need view, state-changing ops need the dedicated
+        // grantable scope.
+        assert_eq!(
+            RemoteRouteClass::Plugins.required_scope(&Method::GET),
+            Some("view")
+        );
+        assert_eq!(
+            RemoteRouteClass::Plugins.required_scope(&Method::HEAD),
+            Some("view")
+        );
+        for method in [Method::POST, Method::PATCH, Method::DELETE, Method::PUT] {
+            assert_eq!(
+                RemoteRouteClass::Plugins.required_scope(&method),
+                Some("plugins.use")
+            );
+        }
+        assert!(RemoteRouteClass::Plugins.requires_http_bearer());
+
+        // Manage is local-operator only and never grantable to a device.
+        for method in [Method::GET, Method::POST, Method::DELETE] {
+            assert_eq!(
+                RemoteRouteClass::PluginsManage.required_scope(&method),
+                Some("manage")
+            );
+        }
+        assert!(RemoteRouteClass::PluginsManage.requires_http_bearer());
+
+        // PluginUi authorizes by the exact session tuple inside the handler.
+        assert_eq!(
+            RemoteRouteClass::PluginUi.required_scope(&Method::GET),
+            None
+        );
+        assert_eq!(
+            RemoteRouteClass::PluginUi.required_scope(&Method::POST),
+            None
+        );
+        assert!(!RemoteRouteClass::PluginUi.requires_http_bearer());
+
+        assert_eq!(RemoteRouteClass::Plugins.as_str(), "plugins");
+        assert_eq!(RemoteRouteClass::PluginsManage.as_str(), "plugins_manage");
+        assert_eq!(RemoteRouteClass::PluginUi.as_str(), "plugin_ui");
+
+        for path in [
+            "/plugin-ui/org.example.plugin/g/s/ui/index.html",
+            "/plugin-ui/x",
+        ] {
+            assert_eq!(
+                RemoteRouteClass::from_path(path),
+                Some(RemoteRouteClass::PluginUi),
+                "{path}"
+            );
+        }
+        for path in [
+            "/plugins/install",
+            "/plugins/enabled",
+            "/plugins/reload",
+            "/plugins/uninstall",
+            "/plugins/config/get",
+            "/plugins/config/set",
+            "/plugins/processes",
+            "/plugins/processes/logs",
+            "/plugins/processes/control",
+        ] {
+            assert_eq!(
+                RemoteRouteClass::from_path(path),
+                Some(RemoteRouteClass::PluginsManage),
+                "{path}"
+            );
+        }
+        for path in [
+            "/plugins",
+            "/plugins/view",
+            "/plugins/action",
+            "/plugins/command",
+            "/plugins/host-ui",
+            "/plugins/host-ui/dismiss",
+            "/plugins/contribution",
+            "/plugins/web/open",
+            "/plugins/web/request",
+            "/plugins/web/read",
+            "/plugins/web/close",
+        ] {
+            assert_eq!(
+                RemoteRouteClass::from_path(path),
+                Some(RemoteRouteClass::Plugins),
+                "{path}"
+            );
+        }
     }
 
     #[test]

@@ -830,6 +830,9 @@ fn main() -> ExitCode {
             se_manager_lib::web::WebHostServices {
                 service: Some(host_service),
                 store: Some(web_store),
+                // se-server has no desktop Plugin Core; /plugins* degrade to
+                // PLUGIN_CORE_UNAVAILABLE.
+                plugins: None,
             },
         )
         .await

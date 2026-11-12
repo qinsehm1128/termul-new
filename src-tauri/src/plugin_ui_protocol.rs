@@ -6,10 +6,17 @@ use se_plugin_protocol::{
     WebCloseRequest, WebOpenReply, WEB_UI_CSP,
 };
 use std::{collections::VecDeque, sync::Mutex};
-use tauri::http::{Method, Request, Response, StatusCode};
+use tauri::http::{Method, Request, Response, StatusCode, Uri};
 
 /// Reserved within each session root; package bytes cannot replace the trusted bridge.
 pub const SHIM_PATH: &str = "__se__/se-plugin-ui.js";
+/// Web (browser) transport prefix for the same session tuples.
+pub const WEB_UI_PREFIX: &str = "/plugin-ui/";
+/// Extra CSP appended for browser delivery so a top-level navigation to
+/// `/plugin-ui/...` is still an opaque origin and can never touch the app origin.
+pub const WEB_SANDBOX_CSP: &str =
+    "sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads";
+const WEB_REFERRER_POLICY: &str = "no-referrer";
 const SHIM: &str = include_str!("../../src/renderer/features/plugins/web/shim/se-plugin-ui.js");
 const MAX_TRACKED_SESSIONS: usize = 64;
 
@@ -95,6 +102,25 @@ pub fn session_url(reply: &WebOpenReply) -> String {
     url.into()
 }
 
+/// Browser transport URL for the same session. Segments are percent-encoded by
+/// the same path-segment mechanism as [`session_url`], so the desktop and web
+/// adapters agree on escaping.
+pub fn web_session_url(reply: &WebOpenReply) -> String {
+    let mut url = url::Url::parse("http://plugin.local").expect("static plugin origin");
+    url.path_segments_mut()
+        .expect("static hierarchical origin")
+        .extend([
+            "plugin-ui",
+            reply.plugin_id.as_str(),
+            reply.generation.as_str(),
+            reply.session_id.as_str(),
+        ]);
+    url.path_segments_mut()
+        .expect("static hierarchical origin")
+        .extend(package_entry(&reply.entry).split('/'));
+    url.path().to_owned()
+}
+
 #[derive(Debug)]
 struct Route {
     plugin_id: String,
@@ -132,17 +158,8 @@ fn decode_segment(raw: &str) -> Option<String> {
     Some(result)
 }
 
-fn parse_route(request: &Request<Vec<u8>>) -> Option<Route> {
-    let uri = request.uri();
-    // Windows webviews expose custom protocols via their synthetic HTTP origin.
-    match (uri.scheme_str(), uri.authority()?.as_str()) {
-        (Some("se-plugin"), "localhost") | (Some("http"), "se-plugin.localhost") => {}
-        _ => return None,
-    }
-    if uri.query().is_some() {
-        return None;
-    }
-    let mut segments = uri.path().strip_prefix('/')?.split('/');
+fn parse_segments(raw: &str) -> Option<Route> {
+    let mut segments = raw.split('/');
     let plugin_id = decode_segment(segments.next()?)?;
     let generation = decode_segment(segments.next()?)?;
     let session_id = decode_segment(segments.next()?)?;
@@ -166,12 +183,65 @@ fn parse_route(request: &Request<Vec<u8>>) -> Option<Route> {
     })
 }
 
-fn response(status: StatusCode, mime: &str, body: Vec<u8>, head: bool) -> Response<Vec<u8>> {
+fn parse_route(request: &Request<Vec<u8>>) -> Option<Route> {
+    let uri = request.uri();
+    // Windows webviews expose custom protocols via their synthetic HTTP origin.
+    match (uri.scheme_str(), uri.authority()?.as_str()) {
+        (Some("se-plugin"), "localhost") | (Some("http"), "se-plugin.localhost") => {}
+        _ => return None,
+    }
+    if uri.query().is_some() {
+        return None;
+    }
+    parse_segments(uri.path().strip_prefix('/')?)
+}
+
+/// Browser transport route: `/plugin-ui/{plugin}/{generation}/{session}/{path}`.
+/// Query strings are rejected; the exact session tuple must have been opened
+/// through the web route's tracked session set.
+fn parse_web_route(uri: &Uri) -> Option<Route> {
+    if uri.query().is_some() {
+        return None;
+    }
+    parse_segments(uri.path().strip_prefix(WEB_UI_PREFIX)?)
+}
+
+/// Transport origin decides the shim URL injected into the entry document and
+/// which defense-in-depth headers the response carries.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UiOrigin {
+    CustomScheme,
+    Web,
+}
+
+fn extra_headers(origin: UiOrigin) -> &'static [(&'static str, &'static str)] {
+    match origin {
+        UiOrigin::CustomScheme => &[],
+        // The browser-visible page is an opaque origin even on top-level
+        // navigation; it can never read the app origin's storage or DOM.
+        UiOrigin::Web => &[
+            ("Content-Security-Policy", WEB_SANDBOX_CSP),
+            ("Referrer-Policy", WEB_REFERRER_POLICY),
+        ],
+    }
+}
+
+fn response_with(
+    status: StatusCode,
+    mime: &str,
+    body: Vec<u8>,
+    head: bool,
+    origin: UiOrigin,
+) -> Response<Vec<u8>> {
     let length = body.len();
     let mut builder = Response::builder()
         .status(status)
         .header("Content-Type", mime)
-        .header("Content-Security-Policy", WEB_UI_CSP)
+        .header("Content-Security-Policy", WEB_UI_CSP);
+    for &(name, value) in extra_headers(origin) {
+        builder = builder.header(name, value);
+    }
+    builder = builder
         .header("Cache-Control", "no-store")
         .header("X-Content-Type-Options", "nosniff")
         // The iframe has an opaque origin; never enable credentials or reflect arbitrary origins.
@@ -186,6 +256,112 @@ fn response(status: StatusCode, mime: &str, body: Vec<u8>, head: bool) -> Respon
         .expect("static response headers")
 }
 
+fn shim_url(origin: UiOrigin, session: &Session) -> String {
+    match origin {
+        UiOrigin::CustomScheme => format!(
+            "/{}/{}/{}/{}",
+            session.plugin_id, session.generation, session.session_id, SHIM_PATH
+        ),
+        UiOrigin::Web => format!(
+            "{}{}/{}/{}/{}",
+            WEB_UI_PREFIX, session.plugin_id, session.generation, session.session_id, SHIM_PATH
+        ),
+    }
+}
+
+async fn serve<F, Fut>(
+    method: &Method,
+    route: Option<Route>,
+    sessions: &PluginUiSessions,
+    fetch: F,
+    origin: UiOrigin,
+) -> Response<Vec<u8>>
+where
+    F: FnOnce(WebAssetRequest) -> Fut,
+    Fut: std::future::Future<Output = Result<WebAssetReply, PluginError>>,
+{
+    let head = *method == Method::HEAD;
+    if *method != Method::GET && !head {
+        return response_with(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "text/plain",
+            Vec::new(),
+            head,
+            origin,
+        );
+    }
+    let Some(route) = route else {
+        return response_with(
+            StatusCode::NOT_FOUND,
+            "text/plain",
+            Vec::new(),
+            head,
+            origin,
+        );
+    };
+    let Some(session) = sessions.find(&route) else {
+        return response_with(
+            StatusCode::NOT_FOUND,
+            "text/plain",
+            Vec::new(),
+            head,
+            origin,
+        );
+    };
+    let shim = route.path == SHIM_PATH;
+    let fetched = fetch(WebAssetRequest {
+        session_id: route.session_id.clone(),
+        path: if shim {
+            session.entry.clone()
+        } else {
+            route.path.clone()
+        },
+    })
+    .await;
+    let Ok(asset) = fetched else {
+        return response_with(
+            StatusCode::NOT_FOUND,
+            "text/plain",
+            Vec::new(),
+            head,
+            origin,
+        );
+    };
+    if shim {
+        return response_with(
+            StatusCode::OK,
+            "text/javascript",
+            SHIM.as_bytes().to_vec(),
+            head,
+            origin,
+        );
+    }
+    let Ok(mut bytes) = base64::engine::general_purpose::STANDARD.decode(&asset.data_base64) else {
+        return response_with(
+            StatusCode::NOT_FOUND,
+            "text/plain",
+            Vec::new(),
+            head,
+            origin,
+        );
+    };
+    // The package entry is hash-verified by Core first. Append the application-owned bridge;
+    // the nonce is read by the standalone shim from W4's URL fragment, never from HTML.
+    if route.path == session.entry && asset.mime == "text/html" {
+        let script = format!(
+            "\n<script src=\"{}\"></script>\n",
+            shim_url(origin, &session)
+        );
+        // Preserve the doctype and put the shim before package application scripts.
+        let position = bytes
+            .windows(7)
+            .position(|s| s.eq_ignore_ascii_case(b"<script"))
+            .unwrap_or(bytes.len());
+        bytes.splice(position..position, script.bytes());
+    }
+    response_with(StatusCode::OK, &asset.mime, bytes, head, origin)
+}
+
 /// Testable HTTP policy, independent of a real webview. Every asset, including the shim,
 /// is authorized by Plugin Core on the *current authenticated connection*.
 async fn respond_with<F, Fut>(
@@ -197,61 +373,9 @@ where
     F: FnOnce(WebAssetRequest) -> Fut,
     Fut: std::future::Future<Output = Result<WebAssetReply, PluginError>>,
 {
-    let head = request.method() == Method::HEAD;
-    if request.method() != Method::GET && !head {
-        return response(
-            StatusCode::METHOD_NOT_ALLOWED,
-            "text/plain",
-            Vec::new(),
-            head,
-        );
-    }
-    let Some(route) = parse_route(&request) else {
-        return response(StatusCode::NOT_FOUND, "text/plain", Vec::new(), head);
-    };
-    let Some(session) = sessions.find(&route) else {
-        return response(StatusCode::NOT_FOUND, "text/plain", Vec::new(), head);
-    };
-    let shim = route.path == SHIM_PATH;
-    let fetched = fetch(WebAssetRequest {
-        session_id: route.session_id,
-        path: if shim {
-            session.entry.clone()
-        } else {
-            route.path.clone()
-        },
-    })
-    .await;
-    let Ok(asset) = fetched else {
-        return response(StatusCode::NOT_FOUND, "text/plain", Vec::new(), head);
-    };
-    if shim {
-        return response(
-            StatusCode::OK,
-            "text/javascript",
-            SHIM.as_bytes().to_vec(),
-            head,
-        );
-    }
-    let Ok(mut bytes) = base64::engine::general_purpose::STANDARD.decode(&asset.data_base64) else {
-        return response(StatusCode::NOT_FOUND, "text/plain", Vec::new(), head);
-    };
-    // The package entry is hash-verified by Core first. Append the application-owned bridge;
-    // the nonce is read by the standalone shim from W4's URL fragment, never from HTML.
-    if route.path == session.entry && asset.mime == "text/html" {
-        let shim_url = format!(
-            "/{}/{}/{}/{}",
-            session.plugin_id, session.generation, session.session_id, SHIM_PATH
-        );
-        let script = format!("\n<script src=\"{shim_url}\"></script>\n");
-        // Preserve the doctype and put the shim before package application scripts.
-        let position = bytes
-            .windows(7)
-            .position(|s| s.eq_ignore_ascii_case(b"<script"))
-            .unwrap_or(bytes.len());
-        bytes.splice(position..position, script.bytes());
-    }
-    response(StatusCode::OK, &asset.mime, bytes, head)
+    let method = request.method().clone();
+    let route = parse_route(&request);
+    serve(&method, route, sessions, fetch, UiOrigin::CustomScheme).await
 }
 
 pub async fn respond(
@@ -260,6 +384,26 @@ pub async fn respond(
     service: &PluginServiceHandle,
 ) -> Response<Vec<u8>> {
     respond_with(request, sessions, |payload| service.web_asset(payload)).await
+}
+
+/// Browser transport entry point. Only sessions inserted through the web
+/// `/plugins/web/open` route are known to this web-owned session set, so a
+/// desktop-only session tuple 404s here.
+pub async fn respond_web(
+    method: &Method,
+    uri: &Uri,
+    sessions: &PluginUiSessions,
+    service: &PluginServiceHandle,
+) -> Response<Vec<u8>> {
+    let route = parse_web_route(uri);
+    serve(
+        method,
+        route,
+        sessions,
+        |payload| service.web_asset(payload),
+        UiOrigin::Web,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -458,5 +602,121 @@ mod tests {
         .await;
         assert_eq!(shim.status(), StatusCode::OK);
         assert_eq!(shim.body(), SHIM.as_bytes());
+    }
+
+    #[test]
+    fn plugin_protocol_web_session_url_uses_transport_prefix() {
+        let url = web_session_url(&reply());
+        assert_eq!(
+            url,
+            format!("{WEB_UI_PREFIX}{PLUGIN}/{GENERATION}/{SESSION}/ui/dist/index.html")
+        );
+        let mut relative = reply();
+        relative.entry = "index.html".into();
+        assert!(web_session_url(&relative).ends_with(&format!("/{SESSION}/ui/index.html")));
+        // Percent-encoding matches the desktop scheme URL mechanism.
+        let encoded = web_session_url(&reply());
+        assert!(!encoded.contains(char::is_whitespace));
+    }
+
+    async fn web_response<F, Fut>(
+        method: &str,
+        uri: &str,
+        sessions: &PluginUiSessions,
+        fetch: F,
+    ) -> Response<Vec<u8>>
+    where
+        F: FnOnce(WebAssetRequest) -> Fut,
+        Fut: std::future::Future<Output = Result<WebAssetReply, PluginError>>,
+    {
+        let method: Method = method.parse().unwrap();
+        let uri: Uri = uri.parse().unwrap();
+        let route = parse_web_route(&uri);
+        serve(&method, route, sessions, fetch, UiOrigin::Web).await
+    }
+
+    #[tokio::test]
+    async fn plugin_protocol_web_serves_only_web_sessions_with_sandbox_and_referrer() {
+        let sessions = sessions();
+        let entry = format!("{WEB_UI_PREFIX}{PLUGIN}/{GENERATION}/{SESSION}/ui/dist/index.html");
+        let get = web_response("GET", &entry, &sessions, asset).await;
+        assert_eq!(get.status(), StatusCode::OK);
+        assert_eq!(get.headers()["Referrer-Policy"], WEB_REFERRER_POLICY);
+        assert_eq!(get.headers()["Content-Security-Policy"], WEB_UI_CSP);
+        assert!(
+            get.headers()
+                .get_all("Content-Security-Policy")
+                .iter()
+                .any(|value| value
+                    .to_str()
+                    .unwrap()
+                    .contains("sandbox allow-scripts allow-forms")),
+            "web responses must append the sandbox CSP"
+        );
+        let body = String::from_utf8_lossy(get.body());
+        assert!(
+            body.contains(&format!(
+                "{WEB_UI_PREFIX}{PLUGIN}/{GENERATION}/{SESSION}/{SHIM_PATH}"
+            )),
+            "web entry must inject the /plugin-ui shim path: {body}"
+        );
+        let shim = web_response(
+            "GET",
+            &format!("{WEB_UI_PREFIX}{PLUGIN}/{GENERATION}/{SESSION}/{SHIM_PATH}"),
+            &sessions,
+            asset,
+        )
+        .await;
+        assert_eq!(shim.headers()["Content-Type"], "text/javascript");
+        assert_eq!(shim.body(), SHIM.as_bytes());
+        let head = web_response("HEAD", &entry, &sessions, asset).await;
+        assert_eq!(head.status(), StatusCode::OK);
+        assert!(head.body().is_empty());
+        let rejected = |_: WebAssetRequest| async { panic!("must not reach Core") };
+        assert_eq!(
+            web_response("POST", &entry, &sessions, rejected)
+                .await
+                .status(),
+            StatusCode::METHOD_NOT_ALLOWED
+        );
+    }
+
+    #[tokio::test]
+    async fn plugin_protocol_web_rejects_query_unknown_and_traversal() {
+        let sessions = sessions();
+        let base = format!("{WEB_UI_PREFIX}{PLUGIN}/{GENERATION}/{SESSION}");
+        let rejected = |_: WebAssetRequest| async { panic!("must not reach Core") };
+        for path in [
+            format!("{base}/ui/dist/index.html?q=x"),
+            format!("{WEB_UI_PREFIX}{PLUGIN}/{GENERATION}/unknown/ui/dist/index.html"),
+            format!("{base}/../secret"),
+            format!("{base}/dist/%2fsecret"),
+            format!("{base}/dist/%5csecret"),
+            format!("{base}/dist/%252e%252e/secret"),
+            format!("{base}/dist/%00"),
+            format!("{base}/dist//x"),
+            format!("{WEB_UI_PREFIX}../secret"),
+        ] {
+            assert_eq!(
+                web_response("GET", &path, &sessions, rejected)
+                    .await
+                    .status(),
+                StatusCode::NOT_FOUND,
+                "{path}"
+            );
+        }
+        // A session only present in the desktop registry (never inserted here) is unknown.
+        let desktop_only = PluginUiSessions::default();
+        assert_eq!(
+            web_response(
+                "GET",
+                &format!("{base}/ui/dist/index.html"),
+                &desktop_only,
+                rejected
+            )
+            .await
+            .status(),
+            StatusCode::NOT_FOUND
+        );
     }
 }

@@ -846,10 +846,15 @@ fn hook_event_is_forwardable(event: &SequencedEvent, authenticated: bool) -> boo
     if event.type_ == "agent-hook-event" {
         return false;
     }
-    if event.type_ != "agent-hooks-state" {
-        return true;
+    // Plugin Core state describes the operator's host; unauthenticated WS
+    // clients must never observe it before the first authenticated frame.
+    if event.type_ == "agent-hooks-state"
+        || event.type_ == "plugins:changed"
+        || event.type_ == "plugins:connection_changed"
+    {
+        return authenticated;
     }
-    authenticated
+    true
 }
 
 /// Device attachment hints also accept the proposal's notification form
@@ -10590,6 +10595,22 @@ mod tests {
             &SequencedEvent::new(None, 0, "projects_changed", json!({})),
             true
         ));
+    }
+
+    #[test]
+    fn plugin_events_are_authenticated_only() {
+        for type_ in ["plugins:changed", "plugins:connection_changed"] {
+            for authenticated in [true, false] {
+                assert_eq!(
+                    hook_event_is_forwardable(
+                        &SequencedEvent::new(None, 0, type_, json!({})),
+                        authenticated
+                    ),
+                    authenticated,
+                    "{type_} authenticated={authenticated}"
+                );
+            }
+        }
     }
 
     #[tokio::test]

@@ -12,7 +12,7 @@ use std::{
 };
 use subtle::ConstantTimeEq;
 
-pub const GRANTABLE_SCOPES: [&str; 8] = [
+pub const GRANTABLE_SCOPES: [&str; 9] = [
     "view",
     "terminal.input",
     "terminal.create",
@@ -21,6 +21,7 @@ pub const GRANTABLE_SCOPES: [&str; 8] = [
     "git.write",
     "screen.view",
     "screen.control",
+    "plugins.use",
 ];
 const MAX_DEVICES: usize = 32;
 const INACTIVE_SECONDS: u64 = 30 * 24 * 60 * 60;
@@ -602,7 +603,7 @@ mod tests {
                 platform: "ios".into(),
             })
             .unwrap();
-        assert_eq!(first.scopes.len(), 8);
+        assert_eq!(first.scopes.len(), 9);
         assert!(matches!(
             authority.pair_device(PairRequest {
                 code,
@@ -682,6 +683,8 @@ mod tests {
             RemoteRouteClass::RemoteAccess,
             RemoteRouteClass::AgentHooksStatus,
             RemoteRouteClass::AgentHooksManage,
+            RemoteRouteClass::Plugins,
+            RemoteRouteClass::PluginsManage,
             RemoteRouteClass::LocalOperator,
         ];
         for class in classes {

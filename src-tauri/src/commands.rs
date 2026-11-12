@@ -540,7 +540,11 @@ pub(crate) fn register_hook_owner_resolver(terminal: TerminalServiceHandle) {
                 let agent: &str = found[0].agent_id.as_ref();
                 match agent {
                     "qin-code" => found[0].self_dev.map(|self_dev| {
-                        if self_dev { "self-dev".into() } else { "default".into() }
+                        if self_dev {
+                            "self-dev".into()
+                        } else {
+                            "default".into()
+                        }
                     }),
                     _ => None,
                 }
@@ -553,7 +557,9 @@ pub(crate) fn register_hook_owner_resolver(terminal: TerminalServiceHandle) {
     crate::agent_hooks::server::register_owner_resolver(hook_owner_resolver(terminal));
 }
 
-pub(crate) fn hook_owner_resolver(terminal: TerminalServiceHandle) -> crate::agent_hooks::server::OwnerResolver {
+pub(crate) fn hook_owner_resolver(
+    terminal: TerminalServiceHandle,
+) -> crate::agent_hooks::server::OwnerResolver {
     Arc::new(move |id, generation| {
         let terminal = terminal.clone();
         Box::pin(async move {
@@ -4879,6 +4885,11 @@ pub async fn remote_server_start(
     let host_capabilities = app
         .try_state::<Arc<crate::mcp_core::host_service::HostCapabilityService>>()
         .map(|state| state.inner().clone());
+    // Desktop Plugin Core is managed even before it connects; `None` (e.g. a
+    // headless build) makes every `/plugins*` route answer PLUGIN_CORE_UNAVAILABLE.
+    let plugin_service = app
+        .try_state::<crate::core::PluginServiceHandle>()
+        .map(|state| state.inner().clone());
     let named_tunnel_port = tunnel_config.preferred_bind_port().filter(|_| start_tunnel);
     let preferred_port =
         listener_port_plan(publish_mode, named_tunnel_port, stored_intent.lan_port);
@@ -4899,6 +4910,7 @@ pub async fn remote_server_start(
             memory_index.clone(),
             skills_hub.clone(),
             host_capabilities.clone(),
+            plugin_service.clone(),
             port,
         )
     };

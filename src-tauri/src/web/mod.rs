@@ -14,17 +14,17 @@
 //! Auth / sandbox land in later stories. The WS relay protocol (envelope, seq,
 //! event log, cursor, tiers) is [`ws`] (Story 1.4).
 
-pub mod assets;
 pub mod agent_chat_api;
 pub mod agent_hooks_api;
+pub mod assets;
 pub mod auth;
-pub mod devices;
-pub mod devices_api;
 pub mod catalog_api;
 pub mod cli_session_api;
 pub mod config;
 pub mod conversation_api;
 pub mod conversation_lifecycle_api;
+pub mod devices;
+pub mod devices_api;
 pub mod editor_workspaces_api;
 #[path = "../file_preview.rs"]
 pub mod file_preview;
@@ -48,12 +48,18 @@ pub mod mcp_servers_api;
 pub struct WebHostServices {
     pub service: Option<Arc<crate::mcp_core::host_service::HostCapabilityService>>,
     pub store: Option<Arc<store::WebStore>>,
+    /// Desktop Plugin Core handle. `None` on standalone `se-server` (no Plugin
+    /// Core); `/plugins*` then degrade to `PLUGIN_CORE_UNAVAILABLE`.
+    pub plugins: Option<crate::core::PluginServiceHandle>,
 }
 pub mod operation_policy;
 pub mod permissions;
+pub mod plugins_api;
 pub mod project_registry;
 pub mod projects_api;
 pub mod quick_terminal_api;
+pub mod remote_attachments_api;
+pub mod remote_desktop;
 pub mod router;
 pub mod scheduled_tasks_api;
 pub mod search_api;
@@ -61,8 +67,6 @@ pub mod session_workspace_api;
 pub mod sink;
 pub mod skills_api;
 pub mod store;
-pub mod remote_attachments_api;
-pub mod remote_desktop;
 pub mod terminal_ws;
 pub mod upgraded_connections;
 pub mod workspace_api;
@@ -528,7 +532,12 @@ pub async fn serve_router(
     // dir (same resolution posture as workspace-manifests / acp-catalog). The
     // desktop shared-live host passes `store_file: None`, so it lands on the
     // same default and gets a durable store too.
-    let store = Some(host_services.store.unwrap_or_else(|| {
+    let WebHostServices {
+        service: host_service,
+        store: host_store,
+        plugins: host_plugins,
+    } = host_services;
+    let store = Some(host_store.unwrap_or_else(|| {
         Arc::new(WebStore::open(cfg.store_file.clone().unwrap_or_else(
             || cfg.service_account_state_dir().join("store.json"),
         )))
@@ -560,10 +569,22 @@ pub async fn serve_router(
         store,
         authority,
     );
-    let app = match host_services.service {
+    // Web-owned plugin UI session set: separate from the desktop protocol's
+    // managed `PluginUiSessions`, so only sessions opened through `/plugins/web/open`
+    // are servable from `/plugin-ui`.
+    let plugin_ui_sessions = Arc::new(crate::plugin_ui_protocol::PluginUiSessions::default());
+    let app = app
+        .layer(axum::Extension(plugin_ui_sessions))
+        // Always inject the (possibly absent) Plugin Core so handlers can answer
+        // `PLUGIN_CORE_UNAVAILABLE` without an optional-extractor failure.
+        .layer(axum::Extension(host_plugins.clone()));
+    let app = match host_service {
         Some(service) => app.layer(axum::Extension(service)),
         None => app,
     };
+    if let Some(plugins) = host_plugins {
+        spawn_plugin_event_bridge(&ws_relay, plugins);
+    }
 
     let handle = tokio::spawn(async move {
         // Patch D: `into_make_service_with_connect_info::<SocketAddr>()` so
@@ -584,6 +605,82 @@ pub async fn serve_router(
     });
 
     Ok((addr, handle))
+}
+
+/// Forward the desktop Plugin Core's events into the web WS relay.
+///
+/// Payloads are exactly the desktop `plugins:changed` /
+/// `plugins:connection_changed` values. Delivery stays authenticated-only via
+/// the WS forward filter (`ws::hook_event_is_forwardable`). The task ends when
+/// the relay is dropped (`Weak` upgrade fails).
+fn spawn_plugin_event_bridge(
+    ws_relay: &Arc<crate::web::sink::WsRelaySink>,
+    service: crate::core::PluginServiceHandle,
+) {
+    use crate::core::plugin::PluginClientEvent;
+
+    let relay = Arc::downgrade(ws_relay);
+    let mut events = service.subscribe_events();
+    tokio::spawn(async move {
+        loop {
+            match events.recv().await {
+                Ok(PluginClientEvent::Changed(event)) => {
+                    let Ok(payload) = serde_json::to_value(event) else {
+                        continue;
+                    };
+                    if !forward_plugin_event(&relay, "plugins:changed", &payload) {
+                        break;
+                    }
+                }
+                Ok(PluginClientEvent::ConnectionChanged(event)) => {
+                    let Ok(payload) = serde_json::to_value(event) else {
+                        continue;
+                    };
+                    if !forward_plugin_event(&relay, "plugins:connection_changed", &payload) {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    // Force consumers to discard stale views and recover a snapshot.
+                    let disconnected = se_plugin_protocol::PluginConnectionEvent {
+                        state: se_plugin_protocol::ConnectionState::Disconnected,
+                        boot_id: service.boot_id(),
+                    };
+                    if let Ok(payload) = serde_json::to_value(disconnected) {
+                        if !forward_plugin_event(&relay, "plugins:connection_changed", &payload) {
+                            break;
+                        }
+                    }
+                    if service.is_connected() {
+                        let connected = se_plugin_protocol::PluginConnectionEvent {
+                            state: se_plugin_protocol::ConnectionState::Connected,
+                            boot_id: service.boot_id(),
+                        };
+                        if let Ok(payload) = serde_json::to_value(connected) {
+                            if !forward_plugin_event(&relay, "plugins:connection_changed", &payload)
+                            {
+                                break;
+                            }
+                        }
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+}
+
+fn forward_plugin_event(
+    relay: &std::sync::Weak<crate::web::sink::WsRelaySink>,
+    type_: &'static str,
+    payload: &serde_json::Value,
+) -> bool {
+    let Some(relay) = relay.upgrade() else {
+        return false;
+    };
+    let sinks: Vec<Arc<dyn crate::web::sink::EventSink>> = vec![relay];
+    let _ = crate::web::sink::fan_out(&sinks, None, type_, payload);
+    true
 }
 
 /// Build the shutdown-signal future for the standalone binary path.

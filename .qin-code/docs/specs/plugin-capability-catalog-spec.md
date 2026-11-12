@@ -80,28 +80,29 @@ Conventions: `confirm=none` (read or harmless), `grant` (install-time grant is e
 
 | op id | source cmd (file:line) | class | scope | confirm | exposure | notes |
 |---|---|---|---|---|---|---|
-| se.plugins.uiOpen | plugin_web_open `plugin_commands.rs:231` | W | pluginSelf | grant | OPEN | in `{sessionId, pluginId, entry, size}`; out `{sessionId, url}`; opens a plugin webview on a per-session scheme origin; requires the `main` window |
-| se.plugins.uiClose | plugin_web_close `plugin_commands.rs:257` | W | pluginSelf | none | OPEN | in `{sessionId}`; out `WebCloseReply`; also drops the `PluginUiSessions` entry; main-window only |
-| se.plugins.webRead | plugin_web_read `plugin_commands.rs:302` | R | pluginSelf | none | OPEN | in `{sessionId, path}`; out `WebReadReply` bytes; path is served from the plugin bundle (confinement unverified — see open issues) |
-| se.plugins.webRequest | plugin_web_request `plugin_commands.rs:308` | W | pluginSelf | grant | OPEN | in `{sessionId, method, url, headers, body}`; out raw JSON; plugin-supplied headers/body may carry its own secrets; SSRF/egress surface |
-| se.plugins.processList | plugin_process_list `plugin_commands.rs:315` | R | pluginSelf | none | OPEN | in `{}`; out `ProcessListReply` (pid, plugin, state) |
-| se.plugins.processLogs | plugin_process_logs `plugin_commands.rs:321` | R | pluginSelf | none | OPEN | in `{processId, lines}`; out `HostProcessLogsReply`; log text can echo plugin env |
-| se.plugins.processControl | plugin_process_control `plugin_commands.rs:327` | D | pluginSelf | per-call | OPEN | in `{processId, action}`; stops/starts a plugin host process |
-| se.plugins.list | plugin_list `plugin_commands.rs:33` | R | global | none | OPEN | out `PluginSnapshot` (plugins, enabled, Core connection) |
-| se.plugins.install | plugin_install `plugin_commands.rs:51` | W | global | per-call | OPEN | in `InstallRequest{source}`; loads third-party native code; network + disk |
-| se.plugins.setEnabled | plugin_set_enabled `plugin_commands.rs:52` | W | global | grant | OPEN | in `{pluginId, enabled}`; out `PluginInfo` |
-| se.plugins.reload | plugin_reload `plugin_commands.rs:58` | W | global | grant | OPEN | in `{pluginId}`; restarts the plugin, out `PluginInfo` |
-| se.plugins.uninstall | plugin_uninstall `plugin_commands.rs:59` | D | global | per-call | OPEN | in `{pluginId}`; out `UninstallResult`; deletes installed files |
-| se.plugins.getView | plugin_get_view `plugin_commands.rs:65` | R | pluginSelf | none | OPEN | in `{pluginId, viewId}`; out `ViewSnapshot` |
-| se.plugins.dispatchAction | plugin_dispatch_action `plugin_commands.rs:71` | W | pluginSelf | grant | OPEN | in `ActionEvent{pluginId, actionId, payload}`; out `ViewSnapshot` |
-| se.plugins.executeCommand | plugin_execute_command `plugin_commands.rs:77` | W | pluginSelf | per-call | OPEN | in `{pluginId, command, args}`; out `CommandReply`; can mutate host state |
-| se.plugins.getConfig | plugin_get_config `plugin_commands.rs:83` | R | pluginSelf | none | OPEN | in `{pluginId}`; out `ConfigSnapshot`; redact any field the manifest marks secret |
-| se.plugins.setConfig | plugin_set_config `plugin_commands.rs:89` | W | pluginSelf | grant | OPEN | in `{pluginId, values}`; input may hold plugin secrets — never echo |
+| se.plugins.uiOpen | plugin_web_open `plugin_commands.rs:231`; POST /plugins/web/open (`web/plugins_api.rs`) | W | pluginSelf | grant | OPEN | in `{sessionId, pluginId, entry, size}`; out `{sessionId, url}`; opens a plugin webview on a per-session scheme origin; requires the `main` window |
+| se.plugins.uiClose | plugin_web_close `plugin_commands.rs:257`; POST /plugins/web/close (`web/plugins_api.rs`) | W | pluginSelf | none | OPEN | in `{sessionId}`; out `WebCloseReply`; also drops the `PluginUiSessions` entry; main-window only |
+| se.plugins.uiAsset | GET+HEAD /plugin-ui/{*rest} — `web/plugins_api.rs`; `plugin_ui_protocol.rs` | R | pluginSelf | none | OPEN | session-tuple only (no bearer); serves only sessions opened via POST /plugins/web/open; query/traversal/unknown tuple 404; WEB_UI_CSP + `sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads` + `Referrer-Policy: no-referrer`; shim `.../__se__/se-plugin-ui.js` |
+| se.plugins.webRead | plugin_web_read `plugin_commands.rs:302`; POST /plugins/web/read (`web/plugins_api.rs`) | R | pluginSelf | none | OPEN | in `{sessionId, path}`; out `WebReadReply` bytes; path is served from the plugin bundle (confinement unverified — see open issues) |
+| se.plugins.webRequest | plugin_web_request `plugin_commands.rs:308`; POST /plugins/web/request (`web/plugins_api.rs`) | W | pluginSelf | grant | OPEN | in `{sessionId, method, url, headers, body}`; out raw JSON; plugin-supplied headers/body may carry its own secrets; SSRF/egress surface |
+| se.plugins.processList | plugin_process_list `plugin_commands.rs:315`; POST /plugins/processes (`web/plugins_api.rs`) | R | pluginSelf | none | OPEN | in `{}`; out `ProcessListReply` (pid, plugin, state) |
+| se.plugins.processLogs | plugin_process_logs `plugin_commands.rs:321`; POST /plugins/processes/logs (`web/plugins_api.rs`) | R | pluginSelf | none | OPEN | in `{processId, lines}`; out `HostProcessLogsReply`; log text can echo plugin env |
+| se.plugins.processControl | plugin_process_control `plugin_commands.rs:327`; POST /plugins/processes/control (`web/plugins_api.rs`) | D | pluginSelf | per-call | OPEN | in `{processId, action}`; stops/starts a plugin host process |
+| se.plugins.list | plugin_list `plugin_commands.rs:33`; GET /plugins (`web/plugins_api.rs`) | R | global | none | OPEN | out `PluginSnapshot` (plugins, enabled, Core connection) |
+| se.plugins.install | plugin_install `plugin_commands.rs:51`; POST /plugins/install (`web/plugins_api.rs`) | W | global | per-call | OPEN | in `InstallRequest{source}`; loads third-party native code; network + disk |
+| se.plugins.setEnabled | plugin_set_enabled `plugin_commands.rs:52`; POST /plugins/enabled (`web/plugins_api.rs`) | W | global | grant | OPEN | in `{pluginId, enabled}`; out `PluginInfo` |
+| se.plugins.reload | plugin_reload `plugin_commands.rs:58`; POST /plugins/reload (`web/plugins_api.rs`) | W | global | grant | OPEN | in `{pluginId}`; restarts the plugin, out `PluginInfo` |
+| se.plugins.uninstall | plugin_uninstall `plugin_commands.rs:59`; POST /plugins/uninstall (`web/plugins_api.rs`) | D | global | per-call | OPEN | in `{pluginId}`; out `UninstallResult`; deletes installed files |
+| se.plugins.getView | plugin_get_view `plugin_commands.rs:65`; POST /plugins/view (`web/plugins_api.rs`) | R | pluginSelf | none | OPEN | in `{pluginId, viewId}`; out `ViewSnapshot` |
+| se.plugins.dispatchAction | plugin_dispatch_action `plugin_commands.rs:71`; POST /plugins/action (`web/plugins_api.rs`) | W | pluginSelf | grant | OPEN | in `ActionEvent{pluginId, actionId, payload}`; out `ViewSnapshot` |
+| se.plugins.executeCommand | plugin_execute_command `plugin_commands.rs:77`; POST /plugins/command (`web/plugins_api.rs`) | W | pluginSelf | per-call | OPEN | in `{pluginId, command, args}`; out `CommandReply`; can mutate host state |
+| se.plugins.getConfig | plugin_get_config `plugin_commands.rs:83`; POST /plugins/config/get (`web/plugins_api.rs`) | R | pluginSelf | none | OPEN | in `{pluginId}`; out `ConfigSnapshot`; redact any field the manifest marks secret |
+| se.plugins.setConfig | plugin_set_config `plugin_commands.rs:89`; POST /plugins/config/set (`web/plugins_api.rs`) | W | pluginSelf | grant | OPEN | in `{pluginId, values}`; input may hold plugin secrets — never echo |
 | se.plugins.publishHostContext | plugin_publish_host_context `plugin_commands.rs:158` | W | pluginSelf | grant | OPEN | in parsed host context (project/session/selection); out `HostContextAck`; main-window only |
 | se.plugins.heartbeatHostContext | plugin_heartbeat_host_context `plugin_commands.rs:168` | W | pluginSelf | none | OPEN | in `{sourceId, …}`; lease renewal, out `HostContextAck`; main-window only |
-| se.plugins.getHostUi | plugin_get_host_ui `plugin_commands.rs:178` | R | pluginSelf | none | OPEN | in parsed get request; out `HostUiSnapshot` |
-| se.plugins.dismissHostUi | plugin_dismiss_host_ui `plugin_commands.rs:209` | W | pluginSelf | none | OPEN | in parsed dismiss request; out `HostUiDismissResult` |
-| se.plugins.executeContribution | plugin_execute_contribution `plugin_commands.rs:215` | W | pluginSelf | grant | OPEN | in execute-contribution request (menu/command contribution); out `CommandReply` |
+| se.plugins.getHostUi | plugin_get_host_ui `plugin_commands.rs:178`; GET /plugins/host-ui (`web/plugins_api.rs`) | R | pluginSelf | none | OPEN | in parsed get request; out `HostUiSnapshot` |
+| se.plugins.dismissHostUi | plugin_dismiss_host_ui `plugin_commands.rs:209`; POST /plugins/host-ui/dismiss (`web/plugins_api.rs`) | W | pluginSelf | none | OPEN | in parsed dismiss request; out `HostUiDismissResult` |
+| se.plugins.executeContribution | plugin_execute_contribution `plugin_commands.rs:215`; POST /plugins/contribution (`web/plugins_api.rs`) | W | pluginSelf | grant | OPEN | in execute-contribution request (menu/command contribution); out `CommandReply` |
 
 ---
 
@@ -295,8 +296,8 @@ Conventions: `confirm=none` (read or harmless), `grant` (install-time grant is e
 | se.remote.rotateCredential | remote_server_rotate_credential `commands.rs:4941` | W | profile | per-call | OPEN-REDACTED | rotates the remote bearer; out `RemoteStatus` — strip the new token |
 | se.remote.devices.list | remote_devices_list `web/devices_api.rs` | R | profile | none | OPEN | local operator/manage only; host-wide device metadata and connection counts, never credential digests |
 | se.remote.devices.rename | remote_device_rename `web/devices_api.rs` | W | profile | grant | OPEN | local operator/manage only; in id,name |
-| se.remote.devices.setScopes | remote_device_set_permissions `web/devices_api.rs` | W | profile | per-call | OPEN | local operator/manage only; eight grantable scopes; remote devices can never receive manage |
-| se.remote.devices.grantAll | remote_device_grant_all `web/devices_api.rs` | W | profile | per-call | OPEN | local operator/manage only; grants eight scopes, excludes manage |
+| se.remote.devices.setScopes | remote_device_set_permissions `web/devices_api.rs` | W | profile | per-call | OPEN | local operator/manage only; nine grantable scopes; remote devices can never receive manage |
+| se.remote.devices.grantAll | remote_device_grant_all `web/devices_api.rs` | W | profile | per-call | OPEN | local operator/manage only; grants nine scopes, excludes manage |
 | se.remote.devices.disconnect | remote_device_disconnect `web/devices_api.rs` | W | profile | grant | OPEN | local operator/manage only; closes this device's connections without invalidating credential |
 | se.remote.devices.revoke | remote_device_revoke `web/devices_api.rs` | W | profile | per-call | OPEN | local operator/manage only; durable credential revocation and WS policy close 1008; re-pair required |
 | se.remote.devices.disconnectAll | remote_devices_disconnect_all `web/devices_api.rs` | W | profile | per-call | OPEN | local operator/manage only; force revokes all paired devices and legacy host bearer |
@@ -369,8 +370,8 @@ Conventions: `confirm=none` (read or harmless), `grant` (install-time grant is e
 | se.events.conversationHostStatus | `commands.rs:7606` | `()` invalidation | global |
 | se.events.conversationAggregate | `commands.rs:7673` (also `7726`, `7793`) | `ConversationAggregateMutationOutcome` data | session |
 | se.events.conversationLifecycle | `commands.rs:7809` (also `7835`, `7871`, `7907`, `7948`, `8077`, `8128`) | `ConversationLifecycleOutcome` | session |
-| se.events.pluginsChanged | `lib.rs:2558` | plugin snapshot/state event | profile |
-| se.events.pluginsConnectionChanged | `lib.rs:2537` (also `2561`) | Core connection state | profile |
+| se.events.pluginsChanged | `lib.rs:2558`; web bridge `web/mod.rs` | plugin snapshot/state event; web WS forwards `plugins:changed` to authenticated sockets only | profile |
+| se.events.pluginsConnectionChanged | `lib.rs:2537` (also `2561`); `web/mod.rs` | Core connection state; web WS forwards `plugins:connection_changed` (Lagged → disconnected then connected with current boot id) to authenticated sockets only | profile |
 | se.events.skillsOperationProgress | `skills/commands.rs:117` | `SkillsOperationStatus{jobId, phase, …}` | project |
 | se.events.mcpOauthCompleted | `commands.rs:5456` | `{serverId, success}` | profile |
 
