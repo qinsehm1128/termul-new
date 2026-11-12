@@ -50,5 +50,10 @@
   "backToList": "Back to list",
   "fileLoadFailed": "This file is missing or could not be read. Retry or close this tab.",
   "retryFile": "Retry loading file",
-  "fileBusy": "Save unsaved changes and wait for file operations before closing this tab."
+  "fileBusy": "Save unsaved changes and wait for file operations before closing this tab.",
+  "unsavedCloseTitle": "Unsaved Changes",
+  "unsavedCloseMessage": "Save changes to \"{{name}}\" before closing? Don't Save discards them and leaves the file on disk unchanged.",
+  "discardAndClose": "Don't Save",
+  "closeBusy": "This file is still saving or reloading. Close it again in a moment.",
+  "saveFailedClose": "Could not save the file. The tab stays open."
 }

@@ -50,5 +50,10 @@
   "backToList": "返回列表",
   "fileLoadFailed": "文件不存在或无法读取。请重试或关闭此标签页。",
   "retryFile": "重新加载文件",
-  "fileBusy": "请先保存未保存的修改，并等待文件操作完成后再关闭标签。"
+  "fileBusy": "请先保存未保存的修改，并等待文件操作完成后再关闭标签。",
+  "unsavedCloseTitle": "未保存的更改",
+  "unsavedCloseMessage": "关闭前保存对“{{name}}”的更改吗？不保存会丢弃这些修改，磁盘上的文件保持不变。",
+  "discardAndClose": "不保存",
+  "closeBusy": "该文件正在保存或重新加载，请稍后再关闭。",
+  "saveFailedClose": "保存失败，标签仍保持打开。"
 }

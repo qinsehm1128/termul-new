@@ -3,6 +3,7 @@ import { Plus, Terminal, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Button } from '@/components/ui/button'
 import { TAB_STRIP_CLASS, tabCloseButtonClass, tabToneClass } from '@/components/workspace/tab-tone'
 import { flushEditorContent } from '@/lib/editor-content-flush'
@@ -66,6 +67,10 @@ export function QuickTerminalWorkspace({
   const activeTab = layout?.tabs.find((tab) => tab.id === layout.activeTabId)
 
   useQuickEditorDraftPersistence(record.id)
+  const [dirtyCloseTab, setDirtyCloseTab] = useState<QuickWorkspaceTab | null>(null)
+  const [dirtyCloseSaving, setDirtyCloseSaving] = useState(false)
+  const dirtyCloseName =
+    dirtyCloseTab?.type === 'editor' ? (dirtyCloseTab.filePath.split(/[\\/]/).pop() ?? '') : ''
   const [loadError, setLoadError] = useState<string | null>(null)
   const [loadAttempt, setLoadAttempt] = useState(0)
   const initialRecord = useRef(record)
@@ -136,8 +141,36 @@ export function QuickTerminalWorkspace({
       lastTerminalTabId: tab.type === 'terminal' ? tab.id : previous.lastTerminalTabId
     }))
   }
+  const removeTab = (tabId: string): void => {
+    update(record.id, (previous) => {
+      const tabs = previous.tabs.filter((item) => item.id !== tabId)
+      const terminal =
+        tabs.find((item) => item.id === previous.lastTerminalTabId && item.type === 'terminal') ??
+        [...tabs].reverse().find((item) => item.type === 'terminal')
+      return {
+        tabs,
+        lastTerminalTabId: terminal?.id ?? null,
+        activeTabId:
+          previous.activeTabId === tabId || !tabs.some((item) => item.id === previous.activeTabId)
+            ? (terminal?.id ?? tabs[0]?.id ?? null)
+            : previous.activeTabId
+      }
+    })
+  }
+  const finishEditorClose = (tab: QuickWorkspaceTab): void => {
+    if (tab.type !== 'editor') return
+    // Respect project panes and other quick workspaces that also own this buffer.
+    const otherOwner = Object.entries(useQuickWorkspaceStore.getState().layouts).some(
+      ([id, value]) =>
+        id !== record.id &&
+        value.tabs.some((item) => item.type === 'editor' && item.filePath === tab.filePath)
+    )
+    if (!otherOwner) releaseShownFile(tab.filePath)
+    removeTab(tab.id)
+  }
   const closeTab = async (tab: QuickWorkspaceTab): Promise<void> => {
-    if (closing) return
+    // One pending decision at a time: a repeated close command must not stack dialogs.
+    if (closing || dirtyCloseTab) return
     if (tab.type === 'editor') {
       try {
         await flushEditorContent(tab.filePath)
@@ -147,20 +180,16 @@ export function QuickTerminalWorkspace({
         return
       }
       const file = useEditorStore.getState().openFiles.get(tab.filePath)
-      if (
-        file &&
-        (file.isDirty || file.operationStatus === 'saving' || file.operationStatus === 'reloading')
-      ) {
-        toast.error(t('fileBusy'))
+      if (file?.operationStatus === 'saving' || file?.operationStatus === 'reloading') {
+        toast.error(t('closeBusy'))
         return
       }
-      // Respect project panes and other quick workspaces that also own this buffer.
-      const otherOwner = Object.entries(useQuickWorkspaceStore.getState().layouts).some(
-        ([id, value]) =>
-          id !== record.id &&
-          value.tabs.some((item) => item.type === 'editor' && item.filePath === tab.filePath)
-      )
-      if (!otherOwner) releaseShownFile(tab.filePath)
+      // Never drop edits silently: the user chooses save, discard or cancel.
+      if (file?.isDirty) {
+        setDirtyCloseTab(tab)
+        return
+      }
+      finishEditorClose(tab)
     } else if (tab.terminalId) {
       setClosing(tab.id)
       const result = await useQuickTerminalStore.getState().closeTerminal(record.id, tab.terminalId)
@@ -169,21 +198,43 @@ export function QuickTerminalWorkspace({
         toast.error(failureMessage(result, t('closeFailed')))
         return
       }
+      removeTab(tab.id)
     } else return // Do not discard a pending spawn; its result still belongs to this tab.
-    update(record.id, (previous) => {
-      const tabs = previous.tabs.filter((item) => item.id !== tab.id)
-      const terminal =
-        tabs.find((item) => item.id === previous.lastTerminalTabId && item.type === 'terminal') ??
-        [...tabs].reverse().find((item) => item.type === 'terminal')
-      return {
-        tabs,
-        lastTerminalTabId: terminal?.id ?? null,
-        activeTabId:
-          previous.activeTabId === tab.id || !tabs.some((item) => item.id === previous.activeTabId)
-            ? (terminal?.id ?? tabs[0]?.id ?? null)
-            : previous.activeTabId
+  }
+  const saveAndCloseDirty = async (): Promise<void> => {
+    const tab = dirtyCloseTab
+    if (tab?.type !== 'editor' || dirtyCloseSaving) return
+    setDirtyCloseSaving(true)
+    try {
+      const saved = await useEditorStore.getState().saveFile(tab.filePath)
+      if (!saved) {
+        // Keep the tab (and its dialog) so the user can retry, discard or cancel.
+        warnEditor('close-save')
+        toast.error(t('saveFailedClose'))
+        return
       }
-    })
+      finishEditorClose(tab)
+      setDirtyCloseTab(null)
+    } finally {
+      setDirtyCloseSaving(false)
+    }
+  }
+  const discardAndCloseDirty = (): void => {
+    const tab = dirtyCloseTab
+    if (tab?.type !== 'editor' || dirtyCloseSaving) return
+    const file = useEditorStore.getState().openFiles.get(tab.filePath)
+    if (file) {
+      // Drop the draft without touching the file on disk. Resetting the shared
+      // buffer (rather than deleting it) also clears the persisted quick draft,
+      // so reopening the tab cannot resurrect the discarded changes.
+      useEditorStore.getState().updateContent(tab.filePath, file.originalContent)
+    }
+    finishEditorClose(tab)
+    setDirtyCloseTab(null)
+  }
+  const cancelDirtyClose = (): void => {
+    if (dirtyCloseSaving) return
+    setDirtyCloseTab(null)
   }
   const closeRef = useRef(closeTab)
   closeRef.current = closeTab
@@ -333,6 +384,17 @@ export function QuickTerminalWorkspace({
           </div>
         ) : null}
       </div>
+      <ConfirmDialog
+        isOpen={dirtyCloseTab !== null}
+        title={t('unsavedCloseTitle')}
+        message={t('unsavedCloseMessage', { name: dirtyCloseName })}
+        confirmLabel={t('save')}
+        cancelLabel={t('cancel')}
+        secondaryAction={{ label: t('discardAndClose'), onClick: discardAndCloseDirty }}
+        isLoading={dirtyCloseSaving}
+        onConfirm={() => void saveAndCloseDirty()}
+        onCancel={cancelDirtyClose}
+      />
     </div>
   )
 }
