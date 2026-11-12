@@ -8,6 +8,17 @@
 let remoteAccessCredential: string | null = null
 let remoteAccessCredentialConsumed = false
 
+const LANDING_ROUTE = /^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/
+
+/**
+ * A native client may add `route=/plugins` next to the credential so the app
+ * opens on that page. Only plain in-app paths are honoured.
+ */
+export function remoteAccessLandingRoute(value: string | null): string | null {
+  if (!value || value.length > 128 || !LANDING_ROUTE.test(value)) return null
+  return value
+}
+
 /**
  * Consume the QR-delivered credential fragment exactly once. Fragments are not
  * sent to the server; clearing it immediately keeps the credential out of
@@ -24,7 +35,12 @@ export function getRemoteAccessCredential(): string {
   const fragment = new URLSearchParams(rawHash)
   remoteAccessCredential = fragment.get('access_token') ?? fragment.get('token')
   if (fragment.has('access_token') || fragment.has('token')) {
-    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`)
+    const route = remoteAccessLandingRoute(fragment.get('route'))
+    window.history.replaceState(
+      null,
+      '',
+      `${window.location.pathname}${window.location.search}${route ? `#${route}` : ''}`
+    )
   }
   return remoteAccessCredential ?? ''
 }

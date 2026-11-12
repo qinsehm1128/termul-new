@@ -81,6 +81,25 @@ describe('browser pairing bootstrap', () => {
     expect(window.location.hash).toBe('')
     expect(fetchMock).not.toHaveBeenCalled()
   })
+  it('opens the requested in-app page after consuming a native client credential', async () => {
+    window.history.replaceState(null, '', '/#access_token=DEVICE_TOKEN&route=/plugins')
+    await initializeRemoteAuth()
+    expect(getRemoteAccessCredential()).toBe('DEVICE_TOKEN')
+    expect(window.location.hash).toBe('#/plugins')
+    expect(window.location.href).not.toContain('DEVICE_TOKEN')
+  })
+  it.each([
+    'https://evil.example',
+    '//evil.example',
+    '/plugins?x=1',
+    '/plugins#a',
+    '/../x',
+    'plugins'
+  ])('drops unsafe landing route %s', async (route) => {
+    window.history.replaceState(null, '', `/#access_token=T&route=${encodeURIComponent(route)}`)
+    await initializeRemoteAuth()
+    expect(window.location.hash).toBe('')
+  })
   it('keeps an existing in-memory credential on normal navigation', async () => {
     setRemoteAccessCredential('EXISTING')
     window.history.replaceState(null, '', '/#section')
