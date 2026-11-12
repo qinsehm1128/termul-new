@@ -7,11 +7,13 @@ import type {
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import { runtimeT } from '@/i18n/runtime'
+import { logFrontendError } from '@/lib/log-api'
 import { hasActiveTerminalSessions } from '@/lib/tauri-safe-update'
 import {
   getUpdateChannel,
   setUpdateChannel as tauriSetUpdateChannel
 } from '@/lib/tauri-update-channel'
+import { loadPendingUpdatePlan } from '@/lib/tauri-update-plan-api'
 import {
   clearPendingUpdate,
   DEFAULT_UPDATE_CHANNEL,
@@ -37,7 +39,11 @@ const RETRY_DELAYS_MS = [5000, 30000, 300000] as const
 const BASE_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000
 const CHECK_STAGGER_MS = 2 * 60 * 60 * 1000
 
+/** How often an unfinished update plan is re-read while Cores reconnect. */
+export const PENDING_PLAN_REFRESH_MS = 5000
+
 let periodicCheckTimer: ReturnType<typeof setTimeout> | null = null
+let pendingPlanTimer: ReturnType<typeof setTimeout> | null = null
 let activeTauriUpdaterUnsubscribe: (() => void) | null = null
 let isInitialized = false
 let initializationPromise: Promise<void> | null = null
@@ -49,6 +55,17 @@ function clearPeriodicCheckTimer(): void {
     clearTimeout(periodicCheckTimer)
     periodicCheckTimer = null
   }
+}
+
+function clearPendingPlanTimer(): void {
+  if (pendingPlanTimer) {
+    clearTimeout(pendingPlanTimer)
+    pendingPlanTimer = null
+  }
+}
+
+function isUnfinishedPlan(plan: PendingUpdatePlan | null): boolean {
+  return plan?.status === 'prepared' || plan?.status === 'reconciling'
 }
 
 function getPeriodicDelayMs(): number {
@@ -104,6 +121,8 @@ export interface UpdaterStoreState {
   _setDownloadProgress: (progress: DownloadProgress) => void
   _setUpdaterError: (error: string, code?: string) => void
   _initializeState: (state: UpdateState) => void
+  /** Internal: re-read an unfinished update plan until the backend settles it. */
+  _watchPendingUpdatePlan: (generation: number) => void
 }
 
 /**
@@ -487,6 +506,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
         if (currentGeneration !== updaterLifecycleGeneration) return
         if (stateResult.success) {
           get()._initializeState(stateResult.data)
+          get()._watchPendingUpdatePlan(currentGeneration)
         } else {
           get()._setUpdaterError(
             stateResult.error ??
@@ -566,9 +586,36 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
     }
   },
 
+  _watchPendingUpdatePlan: (generation: number): void => {
+    clearPendingPlanTimer()
+    if (generation !== updaterLifecycleGeneration) return
+    if (!isUnfinishedPlan(get().pendingUpdatePlan)) return
+
+    // The backend finishes the plan (and deletes it) after the Cores reconnect.
+    // Nothing notifies the renderer, so re-read it until it is no longer in
+    // progress; otherwise the status bar keeps spinning after completion.
+    pendingPlanTimer = setTimeout(async () => {
+      pendingPlanTimer = null
+      if (generation !== updaterLifecycleGeneration) return
+      const result = await loadPendingUpdatePlan()
+      if (generation !== updaterLifecycleGeneration) return
+      if (!result.success) {
+        void logFrontendError({
+          level: 'warn',
+          message: `Pending update plan refresh failed code=${result.code ?? 'unknown'}`,
+          source: 'updater-store:pending-plan'
+        })
+      } else {
+        set({ pendingUpdatePlan: result.data })
+      }
+      get()._watchPendingUpdatePlan(generation)
+    }, PENDING_PLAN_REFRESH_MS)
+  },
+
   stopPeriodicChecks: (): void => {
     updaterLifecycleGeneration += 1
     clearPeriodicCheckTimer()
+    clearPendingPlanTimer()
     activeTauriUpdaterUnsubscribe?.()
     activeTauriUpdaterUnsubscribe = null
     initializationPromise = null

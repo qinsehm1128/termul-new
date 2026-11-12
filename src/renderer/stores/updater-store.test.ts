@@ -2,9 +2,10 @@ import type { DownloadProgress, UpdateInfo, UpdateState } from '@shared/types/up
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as tauriSafeUpdate from '@/lib/tauri-safe-update'
 import * as tauriUpdateChannel from '@/lib/tauri-update-channel'
+import * as tauriUpdatePlanApi from '@/lib/tauri-update-plan-api'
 import * as tauriUpdaterApi from '@/lib/tauri-updater-api'
 import * as tauriVersionSkip from '@/lib/tauri-version-skip'
-import { useUpdaterStore } from './updater-store'
+import { PENDING_PLAN_REFRESH_MS, useUpdaterStore } from './updater-store'
 
 vi.mock('@/lib/tauri-updater-api', async () => {
   const actual =
@@ -21,6 +22,13 @@ vi.mock('@/lib/tauri-updater-api', async () => {
     clearPendingUpdate: vi.fn(),
     isUpdateDownloaded: vi.fn(() => false)
   }
+})
+
+vi.mock('@/lib/tauri-update-plan-api', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/tauri-update-plan-api')>(
+    '@/lib/tauri-update-plan-api'
+  )
+  return { ...actual, loadPendingUpdatePlan: vi.fn() }
 })
 
 vi.mock('@/lib/tauri-version-skip', async () => {
@@ -388,6 +396,58 @@ describe('updater-store', () => {
       expect(state.updateAvailable).toBe(true)
       expect(state.version).toBe('2.0.0')
       expect(state.lastChecked).toBeInstanceOf(Date)
+    })
+
+    it('re-reads a reconnecting update plan until the backend finishes it', async () => {
+      vi.useFakeTimers()
+      try {
+        const reconciling = { schemaVersion: 1, targetVersion: '0.15.55', status: 'reconciling' }
+        vi.mocked(tauriUpdaterApi.getUpdaterState).mockResolvedValue({
+          success: true,
+          data: { ...INITIAL_UPDATER_STATE, pendingUpdatePlan: reconciling as never }
+        })
+        vi.mocked(tauriUpdatePlanApi.loadPendingUpdatePlan)
+          .mockResolvedValueOnce({ success: true, data: reconciling as never })
+          .mockResolvedValueOnce({ success: true, data: null })
+        useUpdaterStore.setState({ autoUpdateEnabled: false })
+        vi.mocked(tauriUpdaterApi.getAutoUpdateEnabled).mockResolvedValue({
+          success: true,
+          data: false
+        })
+
+        await useUpdaterStore.getState().initializeUpdater({ autoCheck: false })
+        expect(useUpdaterStore.getState().pendingUpdatePlan?.status).toBe('reconciling')
+
+        await vi.advanceTimersByTimeAsync(PENDING_PLAN_REFRESH_MS)
+        expect(useUpdaterStore.getState().pendingUpdatePlan?.status).toBe('reconciling')
+
+        // The backend deleted the plan: the status bar spinner must go away.
+        await vi.advanceTimersByTimeAsync(PENDING_PLAN_REFRESH_MS)
+        expect(useUpdaterStore.getState().pendingUpdatePlan).toBeNull()
+
+        await vi.advanceTimersByTimeAsync(PENDING_PLAN_REFRESH_MS * 3)
+        expect(tauriUpdatePlanApi.loadPendingUpdatePlan).toHaveBeenCalledTimes(2)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('does not poll a deferred or absent update plan', async () => {
+      vi.useFakeTimers()
+      try {
+        vi.mocked(tauriUpdaterApi.getUpdaterState).mockResolvedValue({
+          success: true,
+          data: {
+            ...INITIAL_UPDATER_STATE,
+            pendingUpdatePlan: { schemaVersion: 1, status: 'deferred' } as never
+          }
+        })
+        await useUpdaterStore.getState().initializeUpdater({ autoCheck: false })
+        await vi.advanceTimersByTimeAsync(PENDING_PLAN_REFRESH_MS * 3)
+        expect(tauriUpdatePlanApi.loadPendingUpdatePlan).not.toHaveBeenCalled()
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it('should run startup auto-check after non-auto initialization if requested later', async () => {
