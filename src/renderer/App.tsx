@@ -14,6 +14,7 @@ import { WhatsNewModal } from '@/components/WhatsNewModal'
 import { ConversationHostStatus } from '@/features/agent-session/conversation/ConversationHostStatus'
 import { ConversationRecoveryPanel } from '@/features/agent-session/conversation/ConversationRecoveryPanel'
 import { useWhatsNew } from '@/hooks/use-whats-new'
+import { InAppConfirmHost } from '@/lib/in-app-confirm'
 import { isWindows } from '@/lib/platform'
 import { isTauriContext } from '@/lib/tauri-runtime'
 
@@ -65,6 +66,8 @@ const App = () => {
             <ConversationRecoveryPanel />
             <Toaster />
             <Sonner />
+            {/* In-app confirmations (never native NSAlert sheets: they deadlock macOS). */}
+            <InAppConfirmHost />
             {/* Browser/remote mode provides an in-app picker instead of the native dialog. */}
             {!isTauriContext() && <DirectoryPicker />}
             <RouterProvider router={router} future={{ v7_startTransition: true }} />

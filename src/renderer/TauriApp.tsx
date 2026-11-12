@@ -16,6 +16,7 @@ import { ConversationRecoveryPanel } from '@/features/agent-session/conversation
 import { usePreventDevToolsShortcuts } from '@/hooks/use-prevent-devtools-shortcuts'
 import { useWhatsNew } from '@/hooks/use-whats-new'
 import { useWindowState } from '@/hooks/use-window-state'
+import { InAppConfirmHost } from '@/lib/in-app-confirm'
 import { getCurrentWindow } from '@/lib/tauri-window'
 
 const queryClient = new QueryClient()
@@ -56,6 +57,8 @@ export default function TauriApp(): React.JSX.Element {
             <BrandMigrationBanner />
             <Toaster />
             <Sonner />
+            {/* In-app confirmations (never native NSAlert sheets: they deadlock macOS). */}
+            <InAppConfirmHost />
             <RouterProvider router={router} future={{ v7_startTransition: true }} />
             <WhatsNewModal
               isOpen={whatsNew.isOpen}

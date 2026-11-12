@@ -7,10 +7,11 @@ import type {
 } from '@shared/types/updater.types'
 import { legacyUpdateComponentPolicy } from '@shared/types/updater.types'
 import { invoke } from '@tauri-apps/api/core'
-import { confirm } from '@tauri-apps/plugin-dialog'
+import { confirm as nativeConfirm } from '@tauri-apps/plugin-dialog'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { InAppConfirmHost, resetInAppConfirm } from '@/lib/in-app-confirm'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import { DEFAULT_APP_SETTINGS, type TerminalUrlOpenMode } from '@/types/settings'
@@ -186,8 +187,17 @@ function renderPage(): ReturnType<typeof render> {
   return render(
     <MemoryRouter>
       <AppPreferences />
+      <InAppConfirmHost />
     </MemoryRouter>
   )
+}
+
+/** The confirm panel is the `tabIndex={-1}` container ConfirmDialog renders. */
+async function findConfirmDialog(title: string): Promise<HTMLElement> {
+  const heading = await screen.findByRole('heading', { name: title })
+  const panel = heading.closest('[tabindex="-1"]')
+  if (!(panel instanceof HTMLElement)) throw new Error(`confirm dialog "${title}" has no panel`)
+  return panel
 }
 
 function policyWith(
@@ -223,10 +233,11 @@ function pendingPlan(
 
 describe('AppPreferences settings controls', () => {
   beforeEach(() => {
+    resetInAppConfirm()
     vi.clearAllMocks()
     isAurUpdateMode.mockReturnValue(false)
     hasActiveTerminalSessions.mockReturnValue(false)
-    vi.mocked(confirm).mockResolvedValue(false)
+    vi.mocked(nativeConfirm).mockResolvedValue(false)
     updaterFixture.isChecking = false
     updaterFixture.updateAvailable = false
     updaterFixture.downloaded = false
@@ -266,7 +277,7 @@ describe('AppPreferences settings controls', () => {
   })
 
   afterEach(() => {
-    vi.mocked(confirm).mockReset()
+    vi.mocked(nativeConfirm).mockReset()
   })
 
   it('hides local runtime controls in a browser without querying or restarting Cores', async () => {
@@ -488,34 +499,59 @@ describe('AppPreferences settings controls', () => {
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Safe Install & Restart' }))
-    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1))
-    const matchingMessage = vi.mocked(confirm).mock.calls[0]?.[0] as string
-    expect(matchingMessage).toContain('The app window always restarts.')
-    expect(matchingMessage).toContain(
+    const firstDialog = await findConfirmDialog('Safe update installation')
+    expect(firstDialog).toHaveTextContent('The app window always restarts.')
+    expect(firstDialog).toHaveTextContent(
       'Restarting the app window itself does not stop terminals owned by Terminal Core.'
     )
-    expect(matchingMessage).toContain(
+    expect(firstDialog).toHaveTextContent(
       'Kept and reconnected because the build matches: ACP Core, Terminal Core.'
     )
-    expect(matchingMessage).toContain('This is not a zero-interruption swap.')
-    expect(matchingMessage).not.toContain('Replacement waits while a terminal is active.')
+    expect(firstDialog).toHaveTextContent('This is not a zero-interruption swap.')
+    expect(firstDialog).not.toHaveTextContent('Replacement waits while a terminal is active.')
     expect(updaterActions.installAndRestart).not.toHaveBeenCalled()
+    expect(nativeConfirm).not.toHaveBeenCalled()
 
-    vi.mocked(confirm).mockClear()
+    fireEvent.click(within(firstDialog).getByRole('button', { name: 'Not now' }))
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('heading', { name: 'Safe update installation' })
+      ).not.toBeInTheDocument()
+    )
+    cleanup()
+
     updaterFixture.componentPolicy = policyWith({
       acpCore: 'preserve',
       terminalCore: 'defer-if-active'
     })
     renderPage()
-    fireEvent.click(screen.getAllByRole('button', { name: 'Safe Install & Restart' }).at(-1)!)
-    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1))
-    const deferredMessage = vi.mocked(confirm).mock.calls[0]?.[0] as string
-    expect(deferredMessage).toContain(
+    fireEvent.click(screen.getByRole('button', { name: 'Safe Install & Restart' }))
+    const deferredDialog = await findConfirmDialog('Safe update installation')
+    expect(deferredDialog).toHaveTextContent(
       'Terminal Core build identity is checked. If it differs, replacement waits while a terminal is active.'
     )
-    expect(deferredMessage).toContain('Kept and reconnected because the build matches: ACP Core.')
-    expect(deferredMessage).not.toContain('No terminal is active')
+    expect(deferredDialog).toHaveTextContent(
+      'Kept and reconnected because the build matches: ACP Core.'
+    )
+    expect(deferredDialog).not.toHaveTextContent('No terminal is active')
     expect(updaterActions.installAndRestart).not.toHaveBeenCalled()
+    expect(nativeConfirm).not.toHaveBeenCalled()
+  })
+
+  it('installs only after the in-app confirmation is accepted, never through the native dialog', async () => {
+    updaterFixture.downloaded = true
+    updaterFixture.version = '1.2.3'
+    updaterFixture.componentPolicy = policyWith({ acpCore: 'preserve', terminalCore: 'preserve' })
+    renderPage()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Safe Install & Restart' }))
+    const dialog = await findConfirmDialog('Safe update installation')
+    expect(updaterActions.installAndRestart).not.toHaveBeenCalled()
+    expect(nativeConfirm).not.toHaveBeenCalled()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Safe Install & Restart' }))
+    await waitFor(() => expect(updaterActions.installAndRestart).toHaveBeenCalledTimes(1))
+    expect(nativeConfirm).not.toHaveBeenCalled()
   })
 
   it('shows durable plan states, the failed error, and a check that does not install', () => {
@@ -535,6 +571,7 @@ describe('AppPreferences settings controls', () => {
     view.rerender(
       <MemoryRouter>
         <AppPreferences />
+        <InAppConfirmHost />
       </MemoryRouter>
     )
     expect(
@@ -550,6 +587,7 @@ describe('AppPreferences settings controls', () => {
     view.rerender(
       <MemoryRouter>
         <AppPreferences />
+        <InAppConfirmHost />
       </MemoryRouter>
     )
     expect(
@@ -563,6 +601,7 @@ describe('AppPreferences settings controls', () => {
     view.rerender(
       <MemoryRouter>
         <AppPreferences />
+        <InAppConfirmHost />
       </MemoryRouter>
     )
     expect(
@@ -576,6 +615,7 @@ describe('AppPreferences settings controls', () => {
     view.rerender(
       <MemoryRouter>
         <AppPreferences />
+        <InAppConfirmHost />
       </MemoryRouter>
     )
     expect(screen.queryByText('Pending component migration')).not.toBeInTheDocument()
@@ -606,11 +646,12 @@ describe('AppPreferences update component diff and forced install', () => {
   const tauriWindow = window as unknown as Record<string, unknown>
 
   beforeEach(() => {
+    resetInAppConfirm()
     vi.clearAllMocks()
     tauriWindow.__TAURI_INTERNALS__ = {}
     isAurUpdateMode.mockReturnValue(false)
     hasActiveTerminalSessions.mockReturnValue(true)
-    vi.mocked(confirm).mockResolvedValue(false)
+    vi.mocked(nativeConfirm).mockResolvedValue(false)
     updaterFixture.updateAvailable = true
     updaterFixture.downloaded = true
     updaterFixture.version = '1.2.3'
@@ -637,7 +678,8 @@ describe('AppPreferences update component diff and forced install', () => {
 
   afterEach(() => {
     delete tauriWindow.__TAURI_INTERNALS__
-    vi.mocked(confirm).mockReset()
+    resetInAppConfirm()
+    vi.mocked(nativeConfirm).mockReset()
   })
 
   it('lists each component with its running and new build ID', async () => {
@@ -660,17 +702,35 @@ describe('AppPreferences update component diff and forced install', () => {
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Force Update' }))
-    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1))
-    const message = vi.mocked(confirm).mock.calls[0]?.[0] as string
-    expect(message).toContain('This ends 3 running terminal(s) and 0 agent session(s).')
-    expect(message).toContain('their private runtime state resets')
-    expect(message).toContain('plugin installation records and configuration are preserved')
+    const dialog = await findConfirmDialog('Force update')
+    expect(dialog).toHaveTextContent('This ends 3 running terminal(s) and 0 agent session(s).')
+    expect(dialog).toHaveTextContent('their private runtime state resets')
+    expect(dialog).toHaveTextContent('plugin installation records and configuration are preserved')
     expect(updaterActions.forceInstallAndRestart).not.toHaveBeenCalled()
+    expect(nativeConfirm).not.toHaveBeenCalled()
+    // Ending running terminals/agents is destructive: danger styling, not default.
+    expect(within(dialog).getByRole('button', { name: 'Force Update' })).toHaveClass(
+      'bg-destructive'
+    )
 
-    vi.mocked(confirm).mockResolvedValue(true)
-    fireEvent.click(screen.getByRole('button', { name: 'Force Update' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Force Update' }))
     await waitFor(() => expect(updaterActions.forceInstallAndRestart).toHaveBeenCalledTimes(1))
     expect(updaterActions.installAndRestart).not.toHaveBeenCalled()
+    expect(nativeConfirm).not.toHaveBeenCalled()
+  })
+
+  it('does not force install when the in-app confirmation is cancelled', async () => {
+    renderPage()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Force Update' }))
+    const dialog = await findConfirmDialog('Force update')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Not now' }))
+
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Force update' })).not.toBeInTheDocument()
+    )
+    expect(updaterActions.forceInstallAndRestart).not.toHaveBeenCalled()
+    expect(nativeConfirm).not.toHaveBeenCalled()
   })
 
   it('offers a download with progress before the update is downloaded', () => {
@@ -705,7 +765,11 @@ describe('AppPreferences update component diff and forced install', () => {
 
     fireEvent.click(safe)
     fireEvent.click(force)
-    expect(confirm).not.toHaveBeenCalled()
+    expect(nativeConfirm).not.toHaveBeenCalled()
+    expect(
+      screen.queryByRole('heading', { name: 'Safe update installation' })
+    ).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Force update' })).not.toBeInTheDocument()
     expect(updaterActions.installAndRestart).not.toHaveBeenCalled()
     expect(updaterActions.forceInstallAndRestart).not.toHaveBeenCalled()
   })

@@ -53,11 +53,11 @@ import { formatDateTime, formatNumber } from '@/i18n/format'
 import { acpApi, logApi, shellApi, terminalApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { scheduleAllDirtyAutoSaves } from '@/lib/editor-auto-save'
+import { requestConfirm } from '@/lib/in-app-confirm'
 import { logFrontendError } from '@/lib/log-api'
 import { isMac } from '@/lib/platform'
 import { isSettingsCategoryAvailable } from '@/lib/settings-categories'
 import type { SettingsSearchEntry } from '@/lib/settings-search'
-import { confirm } from '@/lib/tauri-dialog'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { hasActiveTerminalSessions } from '@/lib/tauri-safe-update'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
@@ -562,20 +562,19 @@ export default function AppPreferences(): React.JSX.Element {
     if (!downloaded || isInstallingUpdate) return
 
     const activeTerminals = hasActiveTerminalSessions()
-    const confirmed = await confirm(
-      buildUpdateInstallConfirmation({
+    // In-app dialog, never the native one: a native NSAlert sheet self-deadlocks
+    // the macOS main thread while tao holds its event-loop mutex.
+    const confirmed = await requestConfirm({
+      title: tShell('updates.safeInstallTitle'),
+      message: buildUpdateInstallConfirmation({
         policy: componentPolicy,
         hasActiveTerminalSessions: activeTerminals,
         version: version ?? '',
         translate: translateUpdateCopy
       }),
-      {
-        title: tShell('updates.safeInstallTitle'),
-        kind: 'warning',
-        okLabel: tShell('updates.safeInstallRestart'),
-        cancelLabel: tShell('updates.notNow')
-      }
-    )
+      confirmLabel: tShell('updates.safeInstallRestart'),
+      cancelLabel: tShell('updates.notNow')
+    })
     if (!confirmed) return
 
     setIsInstallingUpdate(true)
@@ -606,19 +605,19 @@ export default function AppPreferences(): React.JSX.Element {
         message: `code=RUNTIME_IDENTITIES_UNAVAILABLE ${error instanceof Error ? error.message : String(error)}`
       })
     }
-    const confirmed = await confirm(
-      tShell('updates.forceInstallConfirm', {
+    // Casualty counts are read before the dialog opens so the user confirms
+    // current numbers. In-app danger dialog, never the native one.
+    const confirmed = await requestConfirm({
+      title: tShell('updates.forceInstallTitle'),
+      message: tShell('updates.forceInstallConfirm', {
         version: version ?? '',
         terminals,
         agents
       }),
-      {
-        title: tShell('updates.forceInstallTitle'),
-        kind: 'warning',
-        okLabel: tShell('updates.forceInstall'),
-        cancelLabel: tShell('updates.notNow')
-      }
-    )
+      confirmLabel: tShell('updates.forceInstall'),
+      cancelLabel: tShell('updates.notNow'),
+      variant: 'danger'
+    })
     if (!confirmed) return
 
     setIsInstallingUpdate(true)

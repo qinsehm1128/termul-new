@@ -74,9 +74,19 @@ vi.mock('@/lib/tauri-updater-api', () => ({
   isAurUpdateMode: vi.fn(() => false)
 }))
 
-const confirmMock = vi.fn(async (_message: string, _options?: unknown) => true)
+const requestConfirmMock = vi.fn(
+  async (_options: { title: string; message: string; confirmLabel?: string }) => true
+)
+vi.mock('@/lib/in-app-confirm', () => ({
+  requestConfirm: (options: { title: string; message: string; confirmLabel?: string }) =>
+    requestConfirmMock(options)
+}))
+
+// Regression guard: install/restart confirmations must never reach the native
+// plugin-dialog `confirm` (NSAlert sheet self-deadlocks the macOS main thread).
+const nativeConfirmMock = vi.fn()
 vi.mock('@tauri-apps/plugin-dialog', () => ({
-  confirm: (message: string, options?: unknown) => confirmMock(message, options)
+  confirm: (...args: unknown[]) => nativeConfirmMock(...args)
 }))
 
 const navigateToPath = vi.fn()
@@ -109,7 +119,7 @@ describe('UpdateAvailableToast error surfacing', () => {
     storePolicy = null
     downloadUpdate.mockResolvedValue(undefined)
     installAndRestart.mockResolvedValue(undefined)
-    confirmMock.mockResolvedValue(false)
+    requestConfirmMock.mockResolvedValue(false)
     hasActiveTerminalSessions.mockReturnValue(false)
     vi.mocked(isAurUpdateMode).mockReturnValue(false)
   })
@@ -139,14 +149,14 @@ describe('UpdateAvailableToast error surfacing', () => {
   })
 
   it('shows an error toast when install/restart fails (store error set)', async () => {
-    confirmMock.mockResolvedValue(true)
+    requestConfirmMock.mockResolvedValue(true)
     storeError = 'relaunch failed'
     showUpdateDownloadedToast('0.3.8')
     const action = lastToastAction(vi.mocked(toast.success))
 
     await action.onClick()
 
-    expect(confirmMock).toHaveBeenCalledTimes(1)
+    expect(requestConfirmMock).toHaveBeenCalledTimes(1)
     expect(installAndRestart).toHaveBeenCalledTimes(1)
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
       'Update install failed',
@@ -155,38 +165,78 @@ describe('UpdateAvailableToast error surfacing', () => {
   })
 
   it('does not show an error toast when install/restart succeeds', async () => {
-    confirmMock.mockResolvedValue(true)
+    requestConfirmMock.mockResolvedValue(true)
     showUpdateDownloadedToast('0.3.8')
     const action = lastToastAction(vi.mocked(toast.success))
 
     await action.onClick()
 
-    expect(confirmMock).toHaveBeenCalledTimes(1)
+    expect(requestConfirmMock).toHaveBeenCalledTimes(1)
     expect(installAndRestart).toHaveBeenCalledTimes(1)
     expect(vi.mocked(toast.error)).not.toHaveBeenCalled()
   })
 
   it('does not install when the user cancels the confirmation dialog', async () => {
-    confirmMock.mockResolvedValue(false)
+    requestConfirmMock.mockResolvedValue(false)
     showUpdateDownloadedToast('0.3.8')
     const action = lastToastAction(vi.mocked(toast.success))
 
     await action.onClick()
 
-    expect(confirmMock).toHaveBeenCalledTimes(1)
+    expect(requestConfirmMock).toHaveBeenCalledTimes(1)
     expect(installAndRestart).not.toHaveBeenCalled()
     expect(vi.mocked(toast.error)).not.toHaveBeenCalled()
   })
 
-  it('does not treat active terminals as a Core defer when metadata is missing', async () => {
-    hasActiveTerminalSessions.mockReturnValue(true)
-    confirmMock.mockResolvedValue(false)
+  it('asks the in-app confirm host with the install copy and never the native dialog', async () => {
+    requestConfirmMock.mockResolvedValue(false)
     showUpdateDownloadedToast('0.3.8')
     const action = lastToastAction(vi.mocked(toast.success))
 
     await action.onClick()
 
-    const message = confirmMock.mock.calls[0][0] as string
+    expect(requestConfirmMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Safe update installation',
+        confirmLabel: 'Safe Install & Restart',
+        cancelLabel: 'Not now',
+        message: expect.stringContaining('Install version 0.3.8?')
+      })
+    )
+    expect(nativeConfirmMock).not.toHaveBeenCalled()
+  })
+
+  it('does not install until the in-app confirmation resolves true', async () => {
+    let settleConfirm: (confirmed: boolean) => void = () => {}
+    requestConfirmMock.mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          settleConfirm = resolve
+        })
+    )
+    showUpdateDownloadedToast('0.3.8')
+    const action = lastToastAction(vi.mocked(toast.success))
+
+    const clicked = action.onClick()
+    await Promise.resolve()
+    expect(requestConfirmMock).toHaveBeenCalledTimes(1)
+    expect(installAndRestart).not.toHaveBeenCalled()
+
+    settleConfirm(true)
+    await clicked
+    expect(installAndRestart).toHaveBeenCalledTimes(1)
+    expect(nativeConfirmMock).not.toHaveBeenCalled()
+  })
+
+  it('does not treat active terminals as a Core defer when metadata is missing', async () => {
+    hasActiveTerminalSessions.mockReturnValue(true)
+    requestConfirmMock.mockResolvedValue(false)
+    showUpdateDownloadedToast('0.3.8')
+    const action = lastToastAction(vi.mocked(toast.success))
+
+    await action.onClick()
+
+    const message = requestConfirmMock.mock.calls[0][0].message
     expect(message).toContain('The app window always restarts.')
     expect(message).toContain(
       'Restarting the app window itself does not stop terminals owned by Terminal Core.'
@@ -209,7 +259,7 @@ describe('UpdateAvailableToast error surfacing', () => {
     let action = lastToastAction(vi.mocked(toast.success))
     await action.onClick()
 
-    const matching = confirmMock.mock.calls[0][0] as string
+    const matching = requestConfirmMock.mock.calls[0][0].message
     expect(matching).toContain(
       'Kept and reconnected because the build matches: ACP Core, Terminal Core.'
     )
@@ -217,7 +267,7 @@ describe('UpdateAvailableToast error surfacing', () => {
     expect(matching).toContain('This is not a zero-interruption swap.')
     expect(installAndRestart).not.toHaveBeenCalled()
 
-    confirmMock.mockClear()
+    requestConfirmMock.mockClear()
     storePolicy = policyWith({
       acpCore: 'preserve',
       terminalCore: 'defer-if-active'
@@ -226,7 +276,7 @@ describe('UpdateAvailableToast error surfacing', () => {
     action = lastToastAction(vi.mocked(toast.success))
     await action.onClick()
 
-    const deferred = confirmMock.mock.calls[0][0] as string
+    const deferred = requestConfirmMock.mock.calls[0][0].message
     expect(deferred).toContain(
       'Terminal Core build identity is checked. If it differs, replacement waits while a terminal is active.'
     )
@@ -242,7 +292,7 @@ describe('UpdateAvailableToast error surfacing', () => {
 
     await action.onClick()
 
-    const message = confirmMock.mock.calls[0][0] as string
+    const message = requestConfirmMock.mock.calls[0][0].message
     expect(message).toContain('no terminal is active, so it can be replaced')
     expect(message).toContain(
       'Build identity is checked for ACP Core. A Core is replaced only if its identity differs'

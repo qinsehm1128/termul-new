@@ -17,6 +17,8 @@ interface ConfirmDialogProps {
   }
   variant?: 'default' | 'danger'
   isLoading?: boolean
+  /** Extra classes for the message paragraph, e.g. `whitespace-pre-line`. */
+  messageClassName?: string
   onConfirm: () => void
   onCancel: () => void
 }
@@ -31,6 +33,7 @@ export function ConfirmDialog({
   secondaryAction,
   variant = 'default',
   isLoading = false,
+  messageClassName,
   onConfirm,
   onCancel
 }: ConfirmDialogProps): React.JSX.Element {
@@ -97,7 +100,7 @@ export function ConfirmDialog({
                   <h3 className="mb-1 text-xs font-semibold tracking-[-0.01em] text-foreground">
                     {title}
                   </h3>
-                  <p className="text-sm text-muted-foreground">{message}</p>
+                  <p className={cn('text-sm text-muted-foreground', messageClassName)}>{message}</p>
                   {children && <div className="mt-3">{children}</div>}
                 </div>
               </div>

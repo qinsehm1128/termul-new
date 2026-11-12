@@ -2,8 +2,8 @@ import { Clock, Download, Terminal } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 import { i18n } from '@/i18n'
+import { requestConfirm } from '@/lib/in-app-confirm'
 import { navigateToPath } from '@/lib/router-navigate'
-import { confirm } from '@/lib/tauri-dialog'
 import { hasActiveTerminalSessions } from '@/lib/tauri-safe-update'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
 import { buildUpdateInstallConfirmation, translateUpdateCopy } from '@/lib/updater-status'
@@ -42,21 +42,23 @@ function setReminderForTomorrow(): void {
   localStorage.setItem(UPDATE_REMINDER_KEY, now.toISOString())
 }
 
+/**
+ * The toast lives outside the React tree, so it cannot hold dialog state; it
+ * awaits the app-level `InAppConfirmHost`. Never the native dialog: an NSAlert
+ * sheet self-deadlocks the macOS main thread (see `lib/in-app-confirm.tsx`).
+ */
 function confirmUpdateInstall(version: string, hasActiveTerminals: boolean): Promise<boolean> {
-  return confirm(
-    buildUpdateInstallConfirmation({
+  return requestConfirm({
+    title: i18n.t('updates.safeInstallTitle', { ns: 'shell' }),
+    message: buildUpdateInstallConfirmation({
       policy: updaterStore.getState().componentPolicy,
       hasActiveTerminalSessions: hasActiveTerminals,
       version,
       translate: translateUpdateCopy
     }),
-    {
-      title: i18n.t('updates.safeInstallTitle', { ns: 'shell' }),
-      kind: 'warning',
-      okLabel: i18n.t('updates.safeInstallRestart', { ns: 'shell' }),
-      cancelLabel: i18n.t('updates.notNow', { ns: 'shell' })
-    }
-  )
+    confirmLabel: i18n.t('updates.safeInstallRestart', { ns: 'shell' }),
+    cancelLabel: i18n.t('updates.notNow', { ns: 'shell' })
+  })
 }
 
 /**
