@@ -18,7 +18,7 @@
   let lastRefresh = null;
   let projectPath = null;
   let followProject = true;     // select the project dir once data arrives
-  let prefs = { dir: null, filter: 'all', todoOpen: true };
+  let prefs = { dir: null, filter: 'active', todoOpen: true };
   let prefsRevision = null;
   let prefsTimer = null;
   let toastTimer = null;
