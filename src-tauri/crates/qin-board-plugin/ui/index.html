@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark light">
+    <title>qin-code 看板</title>
+    <link rel="stylesheet" href="./app.css">
+    <!-- Host-owned classic shim; must load before the view scripts. -->
+    <script src="../__se__/se-plugin-ui.js"></script>
+    <script src="./js/render.js" defer></script>
+    <script src="./js/transport.js" defer></script>
+    <script src="./js/api.js" defer></script>
+    <script src="./js/refresh.js" defer></script>
+    <script src="./js/board.js" defer></script>
+    <script src="./js/chat.js" defer></script>
+    <script src="./js/app.js" defer></script>
+  </head>
+  <body data-page="board">
+    <header class="topbar">
+      <div class="topbar-left">
+        <button id="back" class="icon-btn back" type="button" title="返回看板" aria-label="返回看板">←</button>
+        <span class="brand">qin-code</span>
+        <span id="conn" class="conn" data-tone="wait" role="status" aria-live="polite">
+          <span class="dot" aria-hidden="true"></span><span id="conn-text">连接中</span>
+        </span>
+      </div>
+      <div id="board-tools" class="board-tools">
+        <input id="search" class="search" type="search" placeholder="搜索标题、目录、任务" aria-label="搜索会话" autocomplete="off" spellcheck="false">
+        <div class="seg" role="group" aria-label="筛选">
+          <button id="filter-active" type="button" aria-pressed="false">活跃</button>
+          <button id="filter-all" type="button" aria-pressed="true">全部</button>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <span id="last-refresh" class="last-refresh"></span>
+        <button id="refresh" class="icon-btn" type="button" title="刷新" aria-label="刷新"><span class="spin" aria-hidden="true">↻</span></button>
+      </div>
+    </header>
+
+    <main id="page-board" class="page board">
+      <nav class="dirs" aria-label="目录">
+        <div id="dirs" class="dir-list"></div>
+      </nav>
+      <div id="board-groups" class="groups" aria-live="polite"></div>
+    </main>
+
+    <main id="page-chat" class="page chat" hidden>
+      <section class="chat-main">
+        <header class="chat-head">
+          <div class="chat-head-main">
+            <div class="chat-title-row">
+              <h1 id="chat-title" class="chat-title"></h1>
+              <span id="chat-sub" class="chip" hidden></span>
+            </div>
+            <div class="chat-meta">
+              <span id="chat-state" class="chat-state"></span>
+              <span id="chat-dir" class="chat-dir"></span>
+              <span id="chat-model" class="chat-model" hidden></span>
+              <button id="chat-parent" class="link-btn" type="button" hidden></button>
+            </div>
+          </div>
+          <button id="todo-toggle" class="icon-btn todo-toggle" type="button" title="todo" aria-label="切换 todo 面板" aria-expanded="true" aria-controls="todo-panel">☰</button>
+        </header>
+        <div id="perms" class="perms" hidden></div>
+        <div id="chat-banner" class="chat-banner" role="status" hidden></div>
+        <div id="chat-scroll" class="chat-scroll">
+          <div class="chat-flow">
+            <div id="chat-list" class="chat-list"></div>
+            <div id="chat-thinking" class="thinking" hidden></div>
+            <div id="chat-empty" class="chat-empty" hidden></div>
+          </div>
+        </div>
+        <button id="to-bottom" class="to-bottom" type="button" hidden>回到底部 ↓</button>
+        <footer class="composer">
+          <div class="composer-box">
+            <textarea id="composer-input" rows="1" placeholder="发消息…" aria-label="消息" disabled></textarea>
+            <div class="composer-actions">
+              <button id="composer-stop" class="btn danger" type="button" hidden>停止</button>
+              <button id="composer-send" class="btn primary" type="button" disabled>发送</button>
+            </div>
+          </div>
+        </footer>
+      </section>
+      <aside id="todo-panel" class="todo-panel" aria-label="todo">
+        <div class="todo-head"><span>Todo</span><span class="todo-head-right"><span id="todo-count" class="todo-count"></span><button id="todo-close" class="icon-btn todo-close" type="button" title="收起" aria-label="收起 todo 面板">×</button></span></div>
+        <ol id="todo-list" class="todo-list"></ol>
+      </aside>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  </body>
+</html>
