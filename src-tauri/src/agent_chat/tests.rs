@@ -16,7 +16,24 @@ fn hook(kind: HookKind) -> AgentHookEvent {
         ok: None,
     }
 }
+/// Records one entry per submission: the separate Enter write that follows a
+/// text write is folded into it. `raw_writer` keeps every write.
 fn writer() -> (Writer, Arc<Mutex<Vec<String>>>) {
+    let writes = Arc::new(Mutex::new(Vec::<String>::new()));
+    let sink = writes.clone();
+    (
+        Box::new(move |_, bytes| {
+            let mut writes = sink.lock().unwrap();
+            match (bytes, writes.last_mut()) {
+                ("\r", Some(last)) if !last.ends_with('\r') => last.push('\r'),
+                _ => writes.push(bytes.into()),
+            }
+            Ok(())
+        }),
+        writes,
+    )
+}
+fn raw_writer() -> (Writer, Arc<Mutex<Vec<String>>>) {
     let writes = Arc::new(Mutex::new(vec![]));
     let sink = writes.clone();
     (
@@ -91,6 +108,70 @@ fn matching_new_user_echo_is_the_only_delivery_ack() {
     append(
         &path,
         json!({"type":"user","uuid":"new","message":{"role":"user","content":"hello"}}),
+    );
+    s.read();
+    assert_eq!(s.pending[0].delivery.status, "delivered");
+}
+#[test]
+fn enter_is_a_separate_write_after_the_text() {
+    let (writer, writes) = raw_writer();
+    let mut s = Session::new(hook(HookKind::Idle));
+    s.enqueue("hello".into(), None, &writer).unwrap();
+    assert_eq!(
+        *writes.lock().unwrap(),
+        vec!["\x1b[200~hello\x1b[201~", "\r"]
+    );
+}
+#[test]
+fn slash_commands_are_typed_and_do_not_block_the_queue() {
+    let (writer, writes) = raw_writer();
+    let mut s = Session::new(hook(HookKind::Idle));
+    let first = s.enqueue("/compact".into(), None, &writer).unwrap();
+    assert_eq!(first.status, "pending");
+    assert_eq!(*writes.lock().unwrap(), vec!["/compact", "\r"]);
+    // The TUI handles it locally; no prompt hook may follow, so the next
+    // message is still sent at once instead of waiting forever.
+    let second = s.enqueue("/model sonnet".into(), None, &writer).unwrap();
+    assert_eq!(second.status, "pending");
+    let third = s.enqueue("hello".into(), None, &writer).unwrap();
+    assert_eq!(third.status, "pending");
+    assert_eq!(writes.lock().unwrap().len(), 6);
+    // An ordinary prompt still holds the queue until the agent is ready.
+    assert_eq!(
+        s.enqueue("next".into(), None, &writer).unwrap().status,
+        "queued"
+    );
+}
+#[test]
+fn paths_and_multiline_text_are_not_slash_commands() {
+    for text in [
+        "/Users/me/file.rs",
+        "/compact\nmore",
+        "/",
+        "/ x",
+        "/1abc",
+        "hello /x",
+    ] {
+        assert!(!is_slash_command(text), "{text:?}");
+    }
+    for text in [
+        "/compact",
+        "/model sonnet",
+        " /clear ",
+        "/mcp:tool arg",
+        "/review-pr 5",
+    ] {
+        assert!(is_slash_command(text), "{text:?}");
+    }
+}
+#[test]
+fn claude_command_echo_confirms_a_slash_command() {
+    let (_dir, path, mut s) = transcript();
+    let (writer, _) = writer();
+    s.enqueue("/compact".into(), None, &writer).unwrap();
+    append(
+        &path,
+        json!({"type":"user","uuid":"cmd","message":{"role":"user","content":"<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args></command-args>"}}),
     );
     s.read();
     assert_eq!(s.pending[0].delivery.status, "delivered");
@@ -836,12 +917,18 @@ fn expected_absence_has_stable_codes_and_generic_messages() {
     assert_eq!(failed.code(), "AGENT_CHAT_ERROR");
     assert!(!failed.is_expected());
     assert!(!failed.message().contains("terminal-fixture"));
-    assert_eq!(ChatError::from("boom".to_string()).code(), "AGENT_CHAT_ERROR");
+    assert_eq!(
+        ChatError::from("boom".to_string()).code(),
+        "AGENT_CHAT_ERROR"
+    );
 }
 
 #[test]
 fn logged_failure_reasons_withhold_paths_and_ids() {
-    assert_eq!(super::loggable_reason("chat worker busy"), "chat worker busy");
+    assert_eq!(
+        super::loggable_reason("chat worker busy"),
+        "chat worker busy"
+    );
     assert_eq!(
         super::loggable_reason("chat worker timeout; delivery must not be retried automatically"),
         "chat worker timeout; delivery must not be retried automatically"

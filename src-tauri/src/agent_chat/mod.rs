@@ -107,6 +107,12 @@ impl From<String> for ChatError {
 }
 
 const ACK_TIMEOUT: Duration = Duration::from_secs(15);
+/// Gap between the text and its Enter; longer than qin-code's 150 ms paste guard.
+const ENTER_DELAY: Duration = if cfg!(test) {
+    Duration::ZERO
+} else {
+    Duration::from_millis(200)
+};
 const MAX_QUEUE: usize = 64;
 const MAX_RECEIPTS: usize = 64;
 const MAX_PENDING_BYTES: usize = 512 * 1024;
@@ -486,7 +492,7 @@ impl Session {
                 p.delivery.status == "pending"
                     && record_offset >= p.baseline_offset
                     && self.cursor > p.baseline
-                    && normalize(&p.raw) == normalize(text)
+                    && (normalize(&p.raw) == normalize(text) || slash_echo_matches(&p.raw, text))
             }) {
                 item.delivery.status = "delivered".into();
                 item.raw = String::new();
@@ -557,7 +563,11 @@ impl Session {
         if !self.ready_credit || matches!(self.hook.kind, HookKind::SessionEnd) {
             return;
         }
-        if self.pending.iter().any(|p| p.delivery.status == "pending") {
+        if self
+            .pending
+            .iter()
+            .any(|p| p.delivery.status == "pending" && !is_slash_command(&p.raw))
+        {
             return;
         }
         let Some(index) = self
@@ -616,9 +626,14 @@ impl Session {
             self.cursor = next_cursor();
             return Err("terminal.input scope denied".into());
         }
-        self.known_busy = true;
-        self.ready_credit = false; // one prompt per idle/turn_done, never flood the TUI
-        self.hook_state = "prompt_submitted".into();
+        let slash = is_slash_command(&self.pending[index].raw);
+        if !slash {
+            // A slash command is handled by the TUI itself and may never emit a
+            // prompt/turn hook, so it must not consume the ready credit.
+            self.known_busy = true;
+            self.ready_credit = false; // one prompt per idle/turn_done, never flood the TUI
+            self.hook_state = "prompt_submitted".into();
+        }
         let item = &mut self.pending[index];
         item.baseline = self.cursor;
         item.baseline_offset = self
@@ -628,9 +643,20 @@ impl Session {
             .map_or(self.offset, |m| m.len());
         item.sent = Some(Instant::now());
         item.delivery.status = "pending".into();
-        // Paste and Enter are one atomic runtime write. No retry, including partial failures.
-        let data = format!("\x1b[200~{}\x1b[201~\r", item.raw);
-        if writer(&self.hook.terminal_id, &data).is_err() {
+        // Text, then Enter as a separate write after a short pause: TUIs drop an
+        // Enter that arrives with a paste (qin-code's paste guard), and a slash
+        // command must be typed, not pasted, to reach the command parser.
+        // No retry, including partial failures.
+        let body = if slash {
+            item.raw.clone()
+        } else {
+            format!("\x1b[200~{}\x1b[201~", item.raw)
+        };
+        let written = writer(&self.hook.terminal_id, &body).is_ok() && {
+            std::thread::sleep(ENTER_DELAY);
+            writer(&self.hook.terminal_id, "\r").is_ok()
+        };
+        if !written {
             item.delivery.status = "unconfirmed".into();
             item.raw = String::new();
             item.guard = None;
@@ -641,7 +667,11 @@ impl Session {
         } else {
             tracing::info!(
                 event = "agent_chat_send",
-                kind = "bracketed_paste",
+                kind = if slash {
+                    "slash_command"
+                } else {
+                    "bracketed_paste"
+                },
                 count = 1
             );
         }
@@ -763,6 +793,30 @@ impl Session {
     }
 }
 
+/// A single-line `/name [args]` command for the agent's TUI. Paths such as
+/// `/Users/me/file` are ordinary text.
+fn is_slash_command(text: &str) -> bool {
+    let text = text.trim();
+    let Some(name) = text.split_whitespace().next() else {
+        return false;
+    };
+    !text.contains('\n')
+        && name.len() > 1
+        && name.starts_with('/')
+        && name[1..].starts_with(|c: char| c.is_ascii_alphabetic())
+        && name[1..]
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':'))
+}
+/// Claude Code records a slash command as `<command-name>/name</command-name>`
+/// rather than the typed text.
+fn slash_echo_matches(raw: &str, echo: &str) -> bool {
+    is_slash_command(raw)
+        && raw
+            .split_whitespace()
+            .next()
+            .is_some_and(|name| echo.contains(&format!("<command-name>{name}</command-name>")))
+}
 fn normalize(s: &str) -> String {
     s.replace("\r\n", "\n")
         .replace('\r', "\n")
