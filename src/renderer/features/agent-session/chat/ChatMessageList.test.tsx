@@ -162,6 +162,30 @@ describe('ChatMessageList', () => {
     expect(screen.getByText('Final response')).toBeInTheDocument()
   })
 
+  it('keeps rendering when the session id changes and a row re-renders on its own', () => {
+    const { rerender } = render(
+      <ChatMessageList
+        items={[userItem, completedToolItem, finalAgentItem]}
+        sessionId="terminal:pty-1"
+        agentId="agent-1"
+        showRunningIndicator={false}
+      />
+    )
+    rerender(
+      <ChatMessageList
+        items={[userItem, completedToolItem, finalAgentItem]}
+        sessionId="session-1"
+        agentId="agent-1"
+        showRunningIndicator={false}
+      />
+    )
+
+    const trigger = screen.getByRole('button', { name: 'Worked for 3s' })
+    fireEvent.click(trigger)
+    expect(trigger).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('Final response')).toBeInTheDocument()
+  })
+
   it('allows keyboard-accessible reopening after completion', () => {
     render(
       <ChatMessageList

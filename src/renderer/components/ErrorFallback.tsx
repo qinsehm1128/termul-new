@@ -20,7 +20,8 @@ export function ErrorFallback({
   const contextKeys = {
     appRoot: 'error.locations.appRoot',
     terminalPane: 'error.locations.terminalPane',
-    editorPane: 'error.locations.editorPane'
+    editorPane: 'error.locations.editorPane',
+    agentChat: 'error.locations.agentChat'
   } as const
   const contextLabel = context ? t('error.context', { location: t(contextKeys[context]) }) : ''
 

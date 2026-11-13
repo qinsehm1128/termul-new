@@ -15,7 +15,8 @@ const mocks = vi.hoisted(() => ({
   send: vi.fn(),
   control: vi.fn(),
   mount: vi.fn(),
-  unmount: vi.fn()
+  unmount: vi.fn(),
+  chatThrows: false
 }))
 vi.mock('../../hooks/use-terminal-agent-chat', () => ({
   useTerminalAgentChat: () => ({
@@ -36,9 +37,10 @@ vi.mock('../../stores/terminal-store', () => ({
   useTerminalStore: (select: (state: unknown) => unknown) => select({ terminals: [] })
 }))
 vi.mock('../../features/agent-session/chat/ChatMessageList', () => ({
-  ChatMessageList: ({ items }: { items: unknown[] }) => (
-    <div data-testid="shared-timeline" data-count={items.length} />
-  )
+  ChatMessageList: ({ items }: { items: unknown[] }) => {
+    if (mocks.chatThrows) throw new Error('chat render failed')
+    return <div data-testid="shared-timeline" data-count={items.length} />
+  }
 }))
 function Pty({ visible }: { visible: boolean }) {
   useEffect(() => {
@@ -86,6 +88,7 @@ beforeEach(() => {
   mocks.refresh.mockResolvedValue(undefined)
   mocks.send.mockResolvedValue({})
   mocks.control.mockResolvedValue({})
+  mocks.chatThrows = false
   localStorage.clear()
 })
 afterEach(cleanup)
@@ -105,6 +108,20 @@ describe('terminal agent surface', () => {
     expect(pty).toHaveAttribute('data-visible', 'true')
     expect(mocks.unmount).not.toHaveBeenCalled()
   })
+  it('contains a conversation render error so the terminal survives', () => {
+    mocks.chatThrows = true
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    render(surface())
+    const pty = screen.getByTestId('pty')
+    openChat()
+    expect(screen.getByText('chat render failed')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '终端', exact: true }))
+    expect(screen.getByTestId('pty')).toBe(pty)
+    expect(pty).toBeVisible()
+    expect(mocks.unmount).not.toHaveBeenCalled()
+    consoleError.mockRestore()
+  })
+
   it('remembers view per terminal tab rather than leaking across tabs', () => {
     const first = `remember-${++nextId}`
     const mounted = render(surface(first))

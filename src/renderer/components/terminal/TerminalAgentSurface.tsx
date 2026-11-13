@@ -7,6 +7,7 @@ import { agentChatApi } from '../../lib/agent-chat-api'
 import { logFrontendError } from '../../lib/log-api'
 import { agentHookStateKey, useAgentHookStateStore } from '../../stores/agent-hook-state-store'
 import { useTerminalStore } from '../../stores/terminal-store'
+import { ErrorBoundary } from '../ErrorBoundary'
 
 type View = 'terminal' | 'chat'
 const storagePrefix = 'se:terminal-agent-view:'
@@ -310,7 +311,9 @@ export function TerminalAgentSurface({
       {view === 'chat' && (
         <div className="min-h-0 flex-1">
           {ptyId ? (
-            <TerminalAgentChat key={ptyId} terminalId={ptyId} />
+            <ErrorBoundary key={ptyId} context="agentChat">
+              <TerminalAgentChat terminalId={ptyId} />
+            </ErrorBoundary>
           ) : (
             <p role="status" className="p-3 text-sm text-muted-foreground">
               终端尚未就绪，请切回终端启动会话。

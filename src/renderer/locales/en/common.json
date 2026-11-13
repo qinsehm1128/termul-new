@@ -41,7 +41,8 @@
     "locations": {
       "appRoot": "App Root",
       "terminalPane": "Terminal Pane",
-      "editorPane": "Editor Pane"
+      "editorPane": "Editor Pane",
+      "agentChat": "Conversation"
     }
   },
   "status": {

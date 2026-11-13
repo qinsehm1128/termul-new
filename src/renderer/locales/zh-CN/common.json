@@ -41,7 +41,8 @@
     "locations": {
       "appRoot": "应用根节点",
       "terminalPane": "终端窗格",
-      "editorPane": "编辑器窗格"
+      "editorPane": "编辑器窗格",
+      "agentChat": "对话"
     }
   },
   "status": {

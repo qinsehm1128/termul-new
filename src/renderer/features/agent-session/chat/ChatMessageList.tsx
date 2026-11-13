@@ -152,20 +152,16 @@ function timelineItemId(it: TimelineItem): string {
  */
 function useAnimateEnter(sessionId: SessionId, items: TimelineItem[]): (id: string) => boolean {
   const sessionRef = useRef(sessionId)
-  const initialIdsRef = useRef<Set<string> | null>(null)
+  const initialIdsRef = useRef<Set<string>>(new Set(items.map(timelineItemId)))
 
-  useEffect(() => {
-    if (sessionRef.current !== sessionId) {
-      sessionRef.current = sessionId
-      initialIdsRef.current = null
-    }
-  }, [sessionId])
-
-  if (initialIdsRef.current === null) {
+  // Reset during render, not in an effect: virtualized rows call the returned
+  // function after commit, and must never observe a cleared snapshot.
+  if (sessionRef.current !== sessionId) {
+    sessionRef.current = sessionId
     initialIdsRef.current = new Set(items.map(timelineItemId))
   }
 
-  return (id: string) => !initialIdsRef.current!.has(id)
+  return (id: string) => !initialIdsRef.current.has(id)
 }
 
 /** Props shared between the list and its virtualized inner timeline. */

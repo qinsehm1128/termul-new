@@ -2,7 +2,7 @@ import { Component, type ErrorInfo, type ReactNode } from 'react'
 import { logFrontendError } from '@/lib/log-api'
 import { ErrorFallback } from './ErrorFallback'
 
-export type ErrorBoundaryContext = 'appRoot' | 'terminalPane' | 'editorPane'
+export type ErrorBoundaryContext = 'appRoot' | 'terminalPane' | 'editorPane' | 'agentChat'
 
 interface ErrorBoundaryProps {
   children: ReactNode
