@@ -305,22 +305,31 @@ export function TerminalAgentSurface({
           对话
         </button>
       </fieldset>
-      <div className="min-h-0 flex-1" hidden={view !== 'terminal'}>
-        {children(isVisible && view === 'terminal')}
-      </div>
-      {view === 'chat' && (
-        <div className="min-h-0 flex-1">
-          {ptyId ? (
-            <ErrorBoundary key={ptyId} context="agentChat">
-              <TerminalAgentChat terminalId={ptyId} />
-            </ErrorBoundary>
-          ) : (
-            <p role="status" className="p-3 text-sm text-muted-foreground">
-              终端尚未就绪，请切回终端启动会话。
-            </p>
-          )}
+      {/* The terminal keeps its layout box while the conversation is shown:
+          display:none collapses xterm to 0x0, and on return its cell metrics
+          stay wrong until the next width change. visibility:hidden keeps the
+          size, like inactive workspace tabs. */}
+      <div className="relative min-h-0 flex-1">
+        <div
+          className="absolute inset-0"
+          style={view === 'terminal' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}
+        >
+          {children(isVisible && view === 'terminal')}
         </div>
-      )}
+        {view === 'chat' && (
+          <div className="absolute inset-0 bg-background">
+            {ptyId ? (
+              <ErrorBoundary key={ptyId} context="agentChat">
+                <TerminalAgentChat terminalId={ptyId} />
+              </ErrorBoundary>
+            ) : (
+              <p role="status" className="p-3 text-sm text-muted-foreground">
+                终端尚未就绪，请切回终端启动会话。
+              </p>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

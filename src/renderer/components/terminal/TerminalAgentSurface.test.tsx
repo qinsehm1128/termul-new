@@ -100,6 +100,12 @@ describe('terminal agent surface', () => {
     openChat()
     expect(pty).not.toBeVisible()
     expect(pty).toHaveAttribute('data-visible', 'false')
+    // Keeps its layout box (visibility, not display:none) so xterm's cell
+    // metrics survive the round trip.
+    const holder = pty.parentElement as HTMLElement
+    expect(holder).not.toHaveAttribute('hidden')
+    expect(holder.style.display).not.toBe('none')
+    expect(holder.style.visibility).toBe('hidden')
     expect(mocks.mount).toHaveBeenCalledTimes(1)
     expect(mocks.unmount).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: '终端', exact: true }))
