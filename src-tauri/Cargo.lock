@@ -4603,6 +4603,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
+name = "qin-board-plugin"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "getrandom 0.2.17",
+ "libc",
+ "se-plugin-abi",
+ "se-plugin-protocol",
+ "serde",
+ "serde_json",
+ "tungstenite 0.28.0",
+]
+
+[[package]]
 name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "id": "org.qincode.board",
+  "name": "qin-code 看板",
+  "version": "0.1.0",
+  "abi": {
+    "min": 1,
+    "max": 1
+  },
+  "contributes": {
+    "commands": [
+      {
+        "id": "endpoint",
+        "title": "qin-code 看板：读取服务端点"
+      },
+      {
+        "id": "restart-service",
+        "title": "qin-code 看板：重启服务"
+      },
+      {
+        "id": "open-board",
+        "title": "qin-code 看板：打开"
+      }
+    ],
+    "configuration": {
+      "title": "qin-code 看板",
+      "properties": {}
+    },
+    "views": [
+      {
+        "id": "qin-board",
+        "title": "qin-code 看板",
+        "kind": "web",
+        "entry": "index.html",
+        "location": "sidebar",
+        "icon": "list-checks",
+        "allow": [
+          "commands",
+          "context.read",
+          "context.events",
+          "storage.read",
+          "storage.write",
+          "feedback"
+        ]
+      }
+    ],
+    "eventSubscriptions": [
+      {
+        "id": "project",
+        "topic": "project.activeChanged",
+        "scope": "window"
+      }
+    ],
+    "processes": [
+      {
+        "id": "board-service",
+        "command": "native/qin-board-service",
+        "args": [
+          "--port",
+          "0"
+        ],
+        "autostart": true,
+        "restart": "always"
+      }
+    ]
+  },
+  "services": {
+    "provides": [],
+    "requires": [
+      {
+        "name": "se.host.context",
+        "version": 1
+      },
+      {
+        "name": "se.host.events",
+        "version": 1
+      },
+      {
+        "name": "se.host.storage",
+        "version": 1
+      },
+      {
+        "name": "se.host.feedback",
+        "version": 1
+      },
+      {
+        "name": "se.host.ui",
+        "version": 1
+      },
+      {
+        "name": "se.host.process",
+        "version": 1
+      }
+    ]
+  }
+}

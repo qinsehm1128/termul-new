@@ -1,0 +1,29 @@
+[package]
+name = "qin-board-plugin"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+description = "qin-code board plugin: native cdylib, WebSocket sidecar and packer"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "qin-board-service"
+path = "src/bin/qin-board-service.rs"
+
+[[bin]]
+name = "qin-board-pack"
+path = "src/bin/qin-board-pack.rs"
+
+[dependencies]
+se-plugin-abi = { path = "../se-plugin-abi" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tungstenite = "0.28"
+getrandom = "0.2"
+dirs = "6"
+libc = "0.2"
+
+[dev-dependencies]
+se-plugin-protocol = { path = "../se-plugin-protocol" }
