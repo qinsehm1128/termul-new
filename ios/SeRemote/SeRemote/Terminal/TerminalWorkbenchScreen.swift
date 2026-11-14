@@ -26,6 +26,9 @@ struct TerminalWorkbenchScreen: View {
 
     @State private var focusToken: UInt64 = 0
     @State private var blurToken: UInt64 = 0
+    @State private var scrollToken: UInt64 = 0
+    @State private var scrollCommand: TerminalScrollCommand = .bottom
+    @State private var isScrolledBack = false
     @State private var textScale = TerminalTextScale.current
     @State private var keyboardHeight: CGFloat = 0
     @State private var controlModifier = TerminalControlModifier()
@@ -38,18 +41,27 @@ struct TerminalWorkbenchScreen: View {
         TerminalWorkbenchChrome(
             model: model,
             keyboardVisible: TerminalKeyboard.isVisible(keyboardHeight),
+            allowsInput: allowsInput,
+            isScrolledBack: isScrolledBack,
             canvas: canvas,
             onBack: {
                 onBack()
                 Task { await model.back() }
             },
-            onFocusKeyboard: { focusToken &+= 1 },
+            onFocusKeyboard: {
+                if allowsInput { focusToken &+= 1 }
+            },
+            onScroll: triggerScroll,
+            onDismissError: { model.clearError() },
             onToggleFit: toggleFit,
             onNudgeTextScale: nudgeTextScale,
             onSelectTab: { id in
+                let keepKeyboard = TerminalKeyboard.isVisible(keyboardHeight)
                 Task {
                     await model.select(id)
-                    focusToken &+= 1
+                    if keepKeyboard, allowsInput {
+                        focusToken &+= 1
+                    }
                 }
             },
             onSpawnTerminal: { Task { await spawnTerminal() } }
@@ -117,9 +129,15 @@ struct TerminalWorkbenchScreen: View {
                 },
                 focusToken: focusToken,
                 blurToken: blurToken,
+                scrollToken: scrollToken,
+                scrollCommand: scrollCommand,
+                onScrolledBackChange: { scrolledBack in
+                    isScrolledBack = scrolledBack
+                },
                 inputAccessory: allowsInput ? AnyView(accessoryBar) : nil
             )
             .id(id)
+            .onChange(of: id) { _, _ in isScrolledBack = false }
             .transaction { $0.animation = nil }
         } else {
             emptyState
@@ -134,6 +152,9 @@ struct TerminalWorkbenchScreen: View {
                 guard allowsInput, let host = model.canvasHost else { return }
                 host.sendCanvasInput(text)
             },
+            onPageScroll: { up in
+                triggerScroll(up ? .pageUp : .pageDown)
+            },
             onAttach: {
                 blurToken &+= 1
                 model.present(.attach)
@@ -143,6 +164,11 @@ struct TerminalWorkbenchScreen: View {
                 session.dismissTerminalKeyboard()
             }
         )
+    }
+
+    private func triggerScroll(_ command: TerminalScrollCommand) {
+        scrollCommand = command
+        scrollToken &+= 1
     }
 
     private var emptyState: some View {

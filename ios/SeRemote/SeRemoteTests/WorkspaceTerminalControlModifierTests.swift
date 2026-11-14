@@ -87,8 +87,9 @@ struct WorkspaceTerminalControlModifierTests {
         let bytes = TerminalAccessoryCatalog.keys.map(\.bytes)
         #expect(bytes == [
             "\u{1b}", "\t", "\r", "\u{7f}", "\u{1b}[A", "\u{1b}[B", "\u{1b}[D", "\u{1b}[C",
+            "\u{1b}[5~", "\u{1b}[6~",
             "\u{03}", "\u{04}", "\u{1a}", "\u{0c}", "\u{12}", "\u{01}", "\u{05}", "\u{17}", "\u{15}"
         ])
-        #expect(TerminalAccessoryCatalog.keys.filter(\.repeatable).count == 5)
+        #expect(TerminalAccessoryCatalog.keys.filter(\.repeatable).count == 7)
     }
 }

@@ -123,7 +123,9 @@ struct SettingsScreen: View {
                     info: String(localized: "Git and files are read-only")
                 )
                 SeGroupCard {
-                    SeRowItem(icon: .lock, title: String(localized: "Credentials"), detail: String(localized: "Stored in this device keychain, never uploaded"), value: "Face ID") {
+                    // No `value:` here — Face ID unlock is not implemented, so
+                    // the row must not advertise it.
+                    SeRowItem(icon: .lock, title: String(localized: "Credentials"), detail: String(localized: "Stored in this device keychain, never uploaded"), value: nil) {
                         EmptyView()
                     }
                     if let host = store?.activeLink ?? store?.savedLinks.first {

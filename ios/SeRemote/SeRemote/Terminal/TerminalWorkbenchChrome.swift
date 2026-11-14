@@ -8,9 +8,13 @@ import SwiftUI
 struct TerminalWorkbenchChrome<Canvas: View>: View {
     @Bindable var model: TerminalWorkbenchModel
     var keyboardVisible = false
+    var allowsInput = true
+    var isScrolledBack = false
     var canvas: Canvas
     var onBack: () -> Void
     var onFocusKeyboard: () -> Void
+    var onScroll: (TerminalScrollCommand) -> Void = { _ in }
+    var onDismissError: (() -> Void)? = nil
     var onToggleFit: () -> Void
     var onNudgeTextScale: (Int) -> Void
     var onSelectTab: (String) -> Void
@@ -50,15 +54,8 @@ struct TerminalWorkbenchChrome<Canvas: View>: View {
             }
 
             if let error = model.displayError {
-                Text(error)
-                    .font(SeNocturneType.font(10.5, weight: .medium))
-                    .foregroundStyle(palette.ink)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .overlay { Capsule().strokeBorder(palette.danger.opacity(0.5), lineWidth: 1) }
+                errorCapsule(error)
                     .padding(.top, Self.topInset + 8)
-                    .allowsHitTesting(false)
                     .zIndex(3)
             }
         }
@@ -433,38 +430,186 @@ struct TerminalWorkbenchChrome<Canvas: View>: View {
         .accessibilityLabel(Text(label))
     }
 
-    // MARK: - Floating cluster
+    // MARK: - Error & Floating cluster
+
+    @ViewBuilder
+    private func errorCapsule(_ error: String) -> some View {
+        if let onDismissError {
+            Button(action: onDismissError) {
+                HStack(spacing: 6) {
+                    Text(error)
+                        .font(SeNocturneType.font(10.5, weight: .medium))
+                        .foregroundStyle(palette.ink)
+                        .lineLimit(2)
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(palette.inkSecondary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .frame(minHeight: 34)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay { Capsule().strokeBorder(palette.danger.opacity(0.5), lineWidth: 1) }
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text(error))
+            .accessibilityHint(Text("Dismiss"))
+        } else {
+            Text(error)
+                .font(SeNocturneType.font(10.5, weight: .medium))
+                .foregroundStyle(palette.ink)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay { Capsule().strokeBorder(palette.danger.opacity(0.5), lineWidth: 1) }
+                .allowsHitTesting(false)
+        }
+    }
 
     private var cluster: some View {
-        HStack(spacing: 0) {
-            Button(action: { model.present(.attach) }) {
-                Image(systemName: "plus")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(palette.ink)
-                    .frame(width: 46, height: 44)
-                    .contentShape(Rectangle())
+        VStack(alignment: .trailing, spacing: 8) {
+            if isScrolledBack {
+                Button {
+                    onScroll(.bottom)
+                } label: {
+                    Image(systemName: "arrow.down.to.line")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(palette.ink)
+                        .frame(width: 40, height: 40)
+                        .background(.ultraThinMaterial, in: Circle())
+                        .background(palette.card.opacity(0.55), in: Circle())
+                        .overlay { Circle().strokeBorder(mode.insetStroke, lineWidth: 1) }
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("Jump to bottom"))
+                .accessibilityIdentifier("terminal-jump-bottom")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Text("Attach"))
 
-            Rectangle()
-                .fill(mode.insetStroke)
-                .frame(width: 1, height: 18)
+            HStack(spacing: 0) {
+                TerminalFloatingRepeatButton(
+                    systemImage: "chevron.up",
+                    accessibilityLabel: String(localized: "Scroll up"),
+                    accessibilityIdentifier: "terminal-scroll-up",
+                    action: { onScroll(.stepUp) },
+                    repeatAction: { onScroll(.pageUp) }
+                )
 
-            Button(action: onFocusKeyboard) {
-                Image(systemName: "keyboard")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(palette.ink)
-                    .frame(width: 46, height: 44)
-                    .contentShape(Rectangle())
+                clusterDivider
+
+                TerminalFloatingRepeatButton(
+                    systemImage: "chevron.down",
+                    accessibilityLabel: String(localized: "Scroll down"),
+                    accessibilityIdentifier: "terminal-scroll-down",
+                    action: { onScroll(.stepDown) },
+                    repeatAction: { onScroll(.pageDown) }
+                )
+
+                if allowsInput {
+                    clusterDivider
+
+                    Button(action: { model.present(.attach) }) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(palette.ink)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Text("Attach"))
+
+                    clusterDivider
+
+                    Button(action: onFocusKeyboard) {
+                        Image(systemName: "keyboard")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(palette.ink)
+                            .frame(width: 46, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Text("Keyboard"))
+                    .accessibilityIdentifier("terminal-open-keyboard")
+                }
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Text("Keyboard"))
+            .background(.ultraThinMaterial, in: Capsule(style: .continuous))
+            .background(palette.card.opacity(0.55), in: Capsule(style: .continuous))
+            .overlay {
+                Capsule(style: .continuous).strokeBorder(mode.insetStroke, lineWidth: 1)
+            }
         }
-        .background(.ultraThinMaterial, in: Capsule(style: .continuous))
-        .background(palette.card.opacity(0.55), in: Capsule(style: .continuous))
-        .overlay {
-            Capsule(style: .continuous).strokeBorder(mode.insetStroke, lineWidth: 1)
+    }
+
+    private var clusterDivider: some View {
+        Rectangle()
+            .fill(mode.insetStroke)
+            .frame(width: 1, height: 18)
+    }
+}
+
+private struct TerminalFloatingRepeatButton: View {
+    @Environment(\.sePalette) private var palette
+
+    let systemImage: String
+    let accessibilityLabel: String
+    let accessibilityIdentifier: String
+    let action: () -> Void
+    let repeatAction: () -> Void
+
+    @State private var repeatTask: Task<Void, Never>?
+    @State private var didRepeat = false
+
+    var body: some View {
+        Button {
+            if !didRepeat { action() }
+            didRepeat = false
+        } label: {
+            Image(systemName: systemImage)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(palette.ink)
+                .frame(width: 42, height: 44)
+                .contentShape(Rectangle())
         }
+        .buttonStyle(TerminalRepeatClusterStyle { pressed in
+            if pressed {
+                didRepeat = false
+                startRepeat()
+            } else {
+                stopRepeat()
+            }
+        })
+        .accessibilityLabel(Text(accessibilityLabel))
+        .accessibilityIdentifier(accessibilityIdentifier)
+    }
+
+    private func startRepeat() {
+        stopRepeat()
+        repeatTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(360))
+            guard !Task.isCancelled else { return }
+            while !Task.isCancelled {
+                didRepeat = true
+                repeatAction()
+                try? await Task.sleep(for: .milliseconds(110))
+            }
+        }
+    }
+
+    private func stopRepeat() {
+        repeatTask?.cancel()
+        repeatTask = nil
+    }
+}
+
+private struct TerminalRepeatClusterStyle: ButtonStyle {
+    var onPressChanged: (Bool) -> Void
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.6 : 1)
+            .onChange(of: configuration.isPressed) { _, pressed in
+                onPressChanged(pressed)
+            }
     }
 }

@@ -22,6 +22,13 @@ final class TerminalPTYViewer {
     private(set) var isAttached = false
     private(set) var isClosed = false
     private(set) var hasExited = false
+    /// Connection generation this viewer's attach/watch succeeded on. Host
+    /// authorization is per-connection, so a mismatch means this PTY is no
+    /// longer authorized for `write`/`set_display_mode` until it re-attaches.
+    private(set) var attachedGeneration: Int?
+    /// Host sequence cursor for this PTY's stream. Recovery resumes replay
+    /// here instead of seq 0, so a reconnect does not repaint the backlog.
+    private(set) var lastSeq: Int = 0
     /// Set when the host refuses the phone fit; the canvas then mirrors the
     /// host grid instead of pushing viewport dimensions.
     private(set) var locksToHostCols = false
@@ -50,15 +57,24 @@ final class TerminalPTYViewer {
         self.rows = max(rows, 4)
     }
 
+    /// True when this viewer's attach/watch is still authorized on the live
+    /// socket connection. A reconnect mints a new `connectionGeneration` with
+    /// an empty server-side authorization map, so this is the gate every
+    /// outbound request must pass.
+    var isLiveOnCurrentConnection: Bool {
+        isAttached && !isClosed && !hasExited
+            && socket.isConnected && attachedGeneration == socket.connectionGeneration
+    }
+
     /// Attach the existing host PTY. `claim` is nil for a PTY this device did
     /// not start, and the host mints no replacement, so `watch` is the only
     /// remaining route (it fails when Terminal Core owns the shell).
     func attach(claim: String?) async throws {
         let reply: TerminalAttachResult
         if let claim, !claim.isEmpty {
-            reply = try await socket.attach(terminalId: terminalId, claim: claim, lastSeq: 0)
+            reply = try await socket.attach(terminalId: terminalId, claim: claim, lastSeq: lastSeq)
         } else {
-            reply = try await socket.watch(terminalId: terminalId, lastSeq: 0)
+            reply = try await socket.watch(terminalId: terminalId, lastSeq: lastSeq)
         }
         guard !isClosed else {
             // The cover closed while the request was in flight: the host now
@@ -73,15 +89,57 @@ final class TerminalPTYViewer {
             rows = replyRows
         }
         replayGrid = TerminalReplayGrid(cols: reply.cols, rows: reply.rows)
+        if let seq = reply.latestSeq {
+            lastSeq = max(lastSeq, seq)
+        }
         isAttached = true
+        attachedGeneration = socket.connectionGeneration
+        errorMessage = nil
         HostLog.session.info("Attached standalone host PTY")
+    }
+
+    /// Re-authorize this PTY on a fresh terminal-socket connection. The host
+    /// keeps no per-viewer authorization across connections, so after a
+    /// reconnect every `write`/`set_display_mode` would fail `UNAUTHORIZED`
+    /// until this runs. Replay resumes at the tracked cursor, not seq 0.
+    func reattachAfterReconnect(claim: String?) async {
+        guard !isClosed, !hasExited, !isLiveOnCurrentConnection else { return }
+        do {
+            if let claim, !claim.isEmpty {
+                try await attach(claim: claim)
+            } else {
+                let reply = try await socket.watch(terminalId: terminalId, lastSeq: lastSeq)
+                guard !isClosed else {
+                    await socket.detach(terminalId: terminalId)
+                    return
+                }
+                if let replyCols = reply.cols, replyCols > 1 { cols = replyCols }
+                if let replyRows = reply.rows, replyRows > 1 { rows = replyRows }
+                if let seq = reply.latestSeq {
+                    lastSeq = max(lastSeq, seq)
+                }
+                isAttached = true
+                attachedGeneration = socket.connectionGeneration
+                errorMessage = nil
+                HostLog.session.info("Re-watched standalone host PTY after reconnect")
+            }
+        } catch {
+            guard !isClosed else { return }
+            errorMessage = error.localizedDescription
+            HostLog.session.error("Standalone PTY re-authorization failed after reconnect")
+        }
     }
 
     /// Host output for this PTY, already coalesced by `TerminalStore`.
     /// `reset` marks a gapped replay: the stream starts mid-sequence, so the
     /// pre-gap backlog is discarded and the canvas is told to reset first.
-    func receive(_ data: Data, reset: Bool = false) {
+    /// `latestSeq` is the host cursor this frame was authored at, recorded so
+    /// a later reconnect resumes replay exactly here.
+    func receive(_ data: Data, reset: Bool = false, latestSeq: Int? = nil) {
         guard !isClosed, !hasExited else { return }
+        if let latestSeq {
+            lastSeq = max(lastSeq, latestSeq)
+        }
         if let feed {
             feed(data, reset)
             return
@@ -116,6 +174,7 @@ final class TerminalPTYViewer {
         Task {
             do {
                 try await socket.write(terminalId: terminalId, data: text)
+                errorMessage = nil
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -136,6 +195,11 @@ final class TerminalPTYViewer {
     }
 
     private func pushPhoneFit(cols: Int, rows: Int) async {
+        // A reconnect mints a fresh connection with an empty server-side
+        // authorization map: pushing a fit before re-attach is answered with
+        // UNAUTHORIZED and would strand the "Un…" banner. Recovery re-attaches
+        // first; the armed refit then lands on an authorized socket.
+        guard isLiveOnCurrentConnection else { return }
         do {
             let state = try await socket.setDisplayMode(
                 terminalId: terminalId,
@@ -154,6 +218,7 @@ final class TerminalPTYViewer {
                 self.cols = state.cols
                 self.rows = state.rows
             }
+            errorMessage = nil
         } catch {
             guard !isClosed else { return }
             // Another viewer owns the phone lease; mirror the host grid.

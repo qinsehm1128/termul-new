@@ -20,6 +20,9 @@ struct TerminalScreen: UIViewRepresentable {
     var onTextScaleChange: (CGFloat, Bool) -> Void
     var focusToken: UInt64 = 0
     var blurToken: UInt64 = 0
+    var scrollToken: UInt64 = 0
+    var scrollCommand: TerminalScrollCommand = .bottom
+    var onScrolledBackChange: ((Bool) -> Void)? = nil
     /// The workbench's keyboard accessory row. `nil` keeps the historical
     /// behavior (no accessory); the hosting controller is retained by the
     /// coordinator so the row cannot be deallocated while the keyboard is up.
@@ -31,9 +34,15 @@ struct TerminalScreen: UIViewRepresentable {
 
     func makeUIView(context: Context) -> PhoneTerminalView {
         let view = PhoneTerminalView(frame: .zero)
+        view.configureMobileModeIfNeeded()
         applyTheme(to: view, coordinator: context.coordinator)
         view.allowsInput = allowsInput
         context.coordinator.allowsInput = allowsInput
+        context.coordinator.onScrolledBackChange = onScrolledBackChange
+        view.onSendRawInput = { [weak coordinator = context.coordinator] text in
+            guard let coordinator, coordinator.allowsInput else { return }
+            coordinator.onSend(text)
+        }
         view.terminalDelegate = context.coordinator
         view.inputAccessoryView = nil
         context.coordinator.installAccessory(inputAccessory, on: view)
@@ -79,11 +88,17 @@ struct TerminalScreen: UIViewRepresentable {
         // forever; a laid-out view is enough to interpret it at its own width.
         context.coordinator.flushFeedIfFitted(uiView)
         applyTheme(to: uiView, coordinator: context.coordinator)
+        uiView.configureMobileModeIfNeeded()
         uiView.allowsInput = allowsInput
         context.coordinator.allowsInput = allowsInput
         context.coordinator.onSend = onSend
         context.coordinator.onResize = onResize
         context.coordinator.onTextScaleChange = onTextScaleChange
+        context.coordinator.onScrolledBackChange = onScrolledBackChange
+        uiView.onSendRawInput = { [weak coordinator = context.coordinator] text in
+            guard let coordinator, coordinator.allowsInput else { return }
+            coordinator.onSend(text)
+        }
         uiView.terminalDelegate = context.coordinator
         // hostCols only drives the desktop column fit; assigning it in phone
         // mode would invalidate the fit on every host reply for no gain.
@@ -109,6 +124,10 @@ struct TerminalScreen: UIViewRepresentable {
             context.coordinator.lastFocusToken = focusToken
             _ = uiView.becomeFirstResponder()
         }
+        if scrollToken != context.coordinator.lastScrollToken {
+            context.coordinator.lastScrollToken = scrollToken
+            uiView.performScrollCommand(scrollCommand)
+        }
     }
 
     @MainActor
@@ -116,9 +135,12 @@ struct TerminalScreen: UIViewRepresentable {
         var onSend: (String) -> Void
         var onResize: (Int, Int) -> Void
         var onTextScaleChange: (CGFloat, Bool) -> Void
+        var onScrolledBackChange: ((Bool) -> Void)?
         var lastFocusToken: UInt64 = 0
         var allowsInput = true
         var lastBlurToken: UInt64 = 0
+        var lastScrollToken: UInt64 = 0
+        private var lastScrolledBack: Bool?
         var appliedThemeMode: SeThemeMode?
         private var lastCols = 0
         private var lastRows = 0
@@ -290,7 +312,12 @@ struct TerminalScreen: UIViewRepresentable {
             onSend(String(decoding: data, as: UTF8.self))
         }
 
-        func scrolled(source: TerminalView, position: Double) {}
+        func scrolled(source: TerminalView, position: Double) {
+            let scrolledBack = source.isScrolledBackInHistory
+            guard scrolledBack != lastScrolledBack else { return }
+            lastScrolledBack = scrolledBack
+            onScrolledBackChange?(scrolledBack)
+        }
 
         func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
             guard let url = URL(string: link) else { return }
@@ -320,6 +347,15 @@ final class PhoneTerminalView: TerminalView {
     }
 
     override var canBecomeFirstResponder: Bool { allowsInput && super.canBecomeFirstResponder }
+
+    override func canSendMouseEvents() -> Bool { allowsInput }
+
+    override func mouseModeChanged(source: Terminal) {
+        // Never install SwiftTerm's 1-finger mouse-drag pan on phone/iPad:
+        // vertical drags must scroll the TUI (via SGR wheel 64/65) instead of
+        // sending left-button drag events.
+        disableMousePanGesture()
+    }
 
     override func paste(_ sender: Any?) {
         guard allowsInput else { return }
@@ -351,6 +387,7 @@ final class PhoneTerminalView: TerminalView {
     }
 
     var onTextScaleChange: ((CGFloat, Bool) -> Void)?
+    var onSendRawInput: ((String) -> Void)?
 
     private var lastFitKey = ""
     /// The fit the current bounds resolved to. Phone mode uses its font size
@@ -358,20 +395,60 @@ final class PhoneTerminalView: TerminalView {
     /// its column count onto the terminal.
     private var pendingFit: TerminalGridFit.Fit?
     private var pinchStart: CGFloat = TerminalTextScale.defaultValue
+    private var didConfigureMobileMode = false
     private var didInstallPinch = false
     private var didInstallDismissDrag = false
+    private var didInstallTUIScroll = false
     private var dismissDragFired = false
+    private weak var dismissDragGesture: UIPanGestureRecognizer?
+    private weak var tuiScrollGesture: UIPanGestureRecognizer?
+    private var panAccumulator = VerticalPanAccumulator()
+    private var lastTUIPanTranslationY: CGFloat = 0
+    private var tuiAnchorPoint: CGPoint = .zero
+    private var momentumTask: Task<Void, Never>?
 
     /// Downward travel that reads as "swipe the keyboard away".
     private static let dismissDragDistance: CGFloat = 24
 
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
+    func configureMobileModeIfNeeded() {
+        guard !didConfigureMobileMode else { return }
+        didConfigureMobileMode = true
+        tapFocusesKeyboardWhenUnfocused = false
+        disableMousePanGesture()
         installPinchIfNeeded()
+        installTUIScrollIfNeeded()
         installDismissDragIfNeeded()
     }
 
+    var currentScrollRoute: TerminalScrollRoute {
+        let terminal = getTerminal()
+        return TerminalScrollController.route(
+            isAlternateBuffer: isShowingAlternateBuffer,
+            mouseModeActive: allowMouseReporting && terminal.mouseMode != .off,
+            allowsInput: allowsInput,
+            selectionActive: isSelectionActive
+        )
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        configureMobileModeIfNeeded()
+    }
+
+    override func willMove(toWindow newWindow: UIWindow?) {
+        if newWindow == nil {
+            cancelMomentumScroll()
+        }
+        super.willMove(toWindow: newWindow)
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        cancelMomentumScroll()
+        super.touchesBegan(touches, with: event)
+    }
+
     override func layoutSubviews() {
+        configureMobileModeIfNeeded()
         applyColumnFit()
         super.layoutSubviews()
         lockGridIfNeeded()
@@ -473,11 +550,139 @@ final class PhoneTerminalView: TerminalView {
         }
     }
 
+    // MARK: - Vertical TUI scrolling & programmatic scroll
+
+    private func installTUIScrollIfNeeded() {
+        guard !didInstallTUIScroll else { return }
+        didInstallTUIScroll = true
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handleTUIScroll))
+        pan.maximumNumberOfTouches = 1
+        pan.cancelsTouchesInView = true
+        pan.delegate = self
+        addGestureRecognizer(pan)
+        tuiScrollGesture = pan
+    }
+
+    private func cancelMomentumScroll() {
+        momentumTask?.cancel()
+        momentumTask = nil
+    }
+
+    @objc
+    private func handleTUIScroll(_ gesture: UIPanGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            cancelMomentumScroll()
+            panAccumulator.reset()
+            lastTUIPanTranslationY = 0
+            tuiAnchorPoint = gesture.location(in: self)
+        case .changed:
+            let currentY = gesture.translation(in: self).y
+            let deltaY = currentY - lastTUIPanTranslationY
+            lastTUIPanTranslationY = currentY
+            tuiAnchorPoint = gesture.location(in: self)
+            if let batch = panAccumulator.consume(deltaY: deltaY, cellHeight: cellHeightPoints) {
+                emitScrollTicks(up: batch.up, count: batch.count, at: tuiAnchorPoint)
+            }
+        case .ended:
+            let velocityY = gesture.velocity(in: self).y
+            let anchor = tuiAnchorPoint
+            let batches = VerticalPanAccumulator.momentumTicks(
+                velocityY: velocityY,
+                cellHeight: cellHeightPoints
+            )
+            panAccumulator.reset()
+            guard !batches.isEmpty else { return }
+            momentumTask = Task { @MainActor [weak self] in
+                for batch in batches {
+                    try? await Task.sleep(for: .milliseconds(42))
+                    guard let self, !Task.isCancelled else { return }
+                    self.emitScrollTicks(up: batch.up, count: batch.count, at: anchor)
+                }
+                self?.momentumTask = nil
+            }
+        case .cancelled, .failed:
+            cancelMomentumScroll()
+            panAccumulator.reset()
+        default:
+            break
+        }
+    }
+
+    func emitScrollTicks(up: Bool, count: Int, at point: CGPoint) {
+        guard count > 0 else { return }
+        switch currentScrollRoute {
+        case .mouseWheel:
+            for _ in 0 ..< count {
+                sendMouseWheel(up: up, at: point)
+            }
+        case .alternateCursorKeys:
+            let key = TerminalScrollController.cursorSequence(
+                up: up,
+                applicationCursor: getTerminal().applicationCursor
+            )
+            let repeated = String(repeating: key, count: count)
+            if let onSendRawInput {
+                onSendRawInput(repeated)
+            } else {
+                send(txt: repeated)
+            }
+        case .nativeScrollView:
+            if up {
+                scrollUp(lines: count)
+            } else {
+                scrollDown(lines: count)
+            }
+        case .none:
+            break
+        }
+    }
+
+    func performScrollCommand(_ command: TerminalScrollCommand) {
+        cancelMomentumScroll()
+        let center = CGPoint(x: max(1, bounds.midX), y: max(1, bounds.midY))
+        let rows = max(4, getTerminal().rows)
+        switch command {
+        case .stepUp:
+            emitScrollTicks(up: true, count: 4, at: center)
+        case .stepDown:
+            emitScrollTicks(up: false, count: 4, at: center)
+        case .pageUp:
+            switch currentScrollRoute {
+            case .nativeScrollView:
+                scrollUp(lines: max(1, rows - 2))
+            case .mouseWheel:
+                emitScrollTicks(up: true, count: 8, at: center)
+            case .alternateCursorKeys:
+                pageUp()
+            case .none:
+                break
+            }
+        case .pageDown:
+            switch currentScrollRoute {
+            case .nativeScrollView:
+                scrollDown(lines: max(1, rows - 2))
+            case .mouseWheel:
+                emitScrollTicks(up: false, count: 8, at: center)
+            case .alternateCursorKeys:
+                pageDown()
+            case .none:
+                break
+            }
+        case .bottom:
+            if !isShowingAlternateBuffer {
+                scrollToLatestBottom()
+            } else if currentScrollRoute == .mouseWheel {
+                emitScrollTicks(up: false, count: 16, at: center)
+            }
+        }
+    }
+
     // MARK: - Keyboard dismissal
 
-    /// A downward drag over the canvas drops the keyboard, matching the
-    /// `scrollDismissesKeyboard` gesture the rest of the app uses. Recognition
-    /// runs alongside SwiftTerm's scroll/selection pans and the dock's field.
+    /// A downward drag over a short, non-scrollable shell prompt drops the
+    /// keyboard. When scrollback or a TUI owns vertical scrolling, this
+    /// gesture yields so scrolling never dismisses the keyboard or reflows the PTY.
     private func installDismissDragIfNeeded() {
         guard !didInstallDismissDrag else { return }
         didInstallDismissDrag = true
@@ -485,6 +690,7 @@ final class PhoneTerminalView: TerminalView {
         drag.cancelsTouchesInView = false
         drag.delegate = self
         addGestureRecognizer(drag)
+        dismissDragGesture = drag
     }
 
     @objc
@@ -494,6 +700,11 @@ final class PhoneTerminalView: TerminalView {
             dismissDragFired = false
         case .changed:
             guard !dismissDragFired else { return }
+            guard TerminalScrollController.allowsSwipeDownKeyboardDismiss(
+                isFirstResponder: isFirstResponder,
+                route: currentScrollRoute,
+                hasNormalScrollback: hasNormalScrollback
+            ) else { return }
             let translation = gesture.translation(in: self)
             // Vertical-only: a horizontal pan belongs to SwiftTerm selection or
             // to the accessory strip, never to keyboard dismissal.
@@ -520,12 +731,36 @@ final class PhoneTerminalView: TerminalView {
 }
 
 extension PhoneTerminalView: UIGestureRecognizerDelegate {
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer === tuiScrollGesture, let pan = gestureRecognizer as? UIPanGestureRecognizer {
+            let velocity = pan.velocity(in: self)
+            guard abs(velocity.y) > abs(velocity.x) * 1.15 else { return false }
+            switch currentScrollRoute {
+            case .mouseWheel, .alternateCursorKeys:
+                return true
+            case .nativeScrollView, .none:
+                return false
+            }
+        }
+        if gestureRecognizer === dismissDragGesture, let pan = gestureRecognizer as? UIPanGestureRecognizer {
+            let velocity = pan.velocity(in: self)
+            guard velocity.y > 0, abs(velocity.y) > 2 * abs(velocity.x) else { return false }
+            return TerminalScrollController.allowsSwipeDownKeyboardDismiss(
+                isFirstResponder: isFirstResponder,
+                route: currentScrollRoute,
+                hasNormalScrollback: hasNormalScrollback
+            )
+        }
+        return super.gestureRecognizerShouldBegin(gestureRecognizer)
+    }
+
     func gestureRecognizer(
         _ gestureRecognizer: UIGestureRecognizer,
         shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
     ) -> Bool {
-        // SwiftTerm scrolls scrollback with its own pans; dismissing on a
-        // downward drag must not steal those touches.
-        true
+        if gestureRecognizer === tuiScrollGesture || otherGestureRecognizer === tuiScrollGesture {
+            return false
+        }
+        return true
     }
 }

@@ -24,6 +24,9 @@ struct TerminalsHubScreen: View {
     var onOpenDrawer: () -> Void
     var onOpenCommand: () -> Void
     var onOpen: (TerminalOpenRequest) -> Void
+    /// Forwards a notice dismissal to the shell so cross-tab notices (deep
+    /// links, ⌘K misses) clear at their source, not only locally.
+    var onDismissNotice: (() -> Void)? = nil
 
     @State private var showsProjectPicker = false
     @State private var spawning = false
@@ -61,6 +64,16 @@ struct TerminalsHubScreen: View {
     private var displayedNotice: String? { localNotice ?? notice }
     private var displayedError: String? { localError ?? store.errorMessage }
 
+    /// True until the first host answer lands: `idle`/`loading` with an empty
+    /// list means "unknown", and must not render a "no running terminals" claim.
+    static func isLoading(state: TerminalsHubStore.State, summaryCount: Int) -> Bool {
+        (state == .idle || state == .loading) && summaryCount == 0
+    }
+
+    private var isLoading: Bool {
+        TerminalsHubScreen.isLoading(state: store.state, summaryCount: store.summaries.count)
+    }
+
     var body: some View {
         TerminalLandingScreen(
             hostName: hostName,
@@ -91,7 +104,13 @@ struct TerminalsHubScreen: View {
                 quickTitle = ""
                 localError = nil
                 showsCreateQuick = true
-            }
+            },
+            isLoading: isLoading,
+            onDismissNotice: {
+                localNotice = nil
+                onDismissNotice?()
+            },
+            onDismissError: { localError = nil }
         )
         .sheet(isPresented: $showsProjectPicker) { projectPicker }
         .sheet(isPresented: $showsCreateQuick) { createQuickSheet }
@@ -225,7 +244,9 @@ struct TerminalsHubScreen: View {
                             .strokeBorder(palette.stroke, lineWidth: 1)
                     }
                 if let localError {
-                    NocturneNotice(message: localError, isError: true)
+                    // `self.localError`: the shadowed `localError` is an immutable
+                    // binding, so the closure must target the state property.
+                    NocturneNotice(message: localError, isError: true, onDismiss: { self.localError = nil })
                 }
                 Spacer(minLength: 0)
                 HStack(spacing: 8) {

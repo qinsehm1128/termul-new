@@ -9,7 +9,7 @@ upstream refresh:
 |------|--------|--------|
 | `Sources/SwiftTerm/Apple/AppleTerminalView.swift` | dropped tautological `cellDimension != nil` in `glyphSlotFit` guard | warning cleanup; CellDimension (CGSize) is non-optional |
 | `Sources/SwiftTerm/Apple/Metal/MetalTerminalRenderer.swift` | `_ =` discard on two `vertices.withUnsafeBytes` memcpy blocks | warning cleanup; result was already ignored semantically |
-| `Sources/SwiftTerm/iOS/iOSTerminalView.swift` | `var`→`let` in accessibility helpers (startingLine/endingLine/rect/verticalWidth/start/end), removed dead `lineWidth`/`text` bindings, dropped redundant `?? false` after non-optional Bool (`terminalAccessory?.controlModifier ?? controlModifier`), `let items` in showContextMenu | warning cleanup only; zero behavior change |
+| `Sources/SwiftTerm/iOS/iOSTerminalView.swift` | `var`→`let` in accessibility helpers (startingLine/endingLine/rect/verticalWidth/start/end), removed dead `lineWidth`/`text` bindings, dropped redundant `?? false` after non-optional Bool (`terminalAccessory?.controlModifier ?? controlModifier`), `let items` in showContextMenu; added opt-in `tapFocusesKeyboardWhenUnfocused` (default `true`), `canSendMouseEvents()`, `isShowingAlternateBuffer`, `isSelectionActive`, `isScrolledBackInHistory`, `hasNormalScrollback`, `cellHeightPoints`, `scrollToLatestBottom()`, `sendMouseWheel(up:at:)`, and continued `yDisp` sync during `userScrolling && isDecelerating` | warning cleanup + mobile TUI click/scroll hooks without altering default upstream behavior |
 | `Sources/SwiftTerm/iOS/iOSTextInput.swift` | explicit `String(describing:)` interpolation for optional `_markedTextRange` log | warning cleanup |
 
 All four files were made writable (`chmod u+w`) for these edits; the rest of

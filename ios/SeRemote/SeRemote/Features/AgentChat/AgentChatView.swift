@@ -7,6 +7,18 @@ struct AgentChatView: View {
     @FocusState private var composerFocused: Bool
     @State private var confirmStop = false
     @State private var isNearBottom = true
+    /// Materialized once per transcript change (mirrors `ChatView`), never per
+    /// `body` evaluation: `body` binds `$store.draft`, so rebuilding here would
+    /// re-walk and re-diff the whole transcript on every keystroke.
+    @State private var renderedTimeline: [ChatTimelineItem] = []
+
+    private func rebuildTimeline() {
+        renderedTimeline = ChatTimeline.build(
+            messages: store.messages,
+            tools: store.toolCalls.map(\.card),
+            activeTurn: false
+        )
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -34,6 +46,12 @@ struct AgentChatView: View {
             }
         }
         .background(palette.canvas)
+        // `initial: true` materializes the timeline on first render, so no
+        // separate onAppear pass is needed. `AgentChatToolCall` itself is not
+        // Equatable; the card projection is, and it carries exactly the fields
+        // the timeline reads.
+        .onChange(of: store.messages, initial: true) { _, _ in rebuildTimeline() }
+        .onChange(of: store.toolCalls.map(\.card), initial: true) { _, _ in rebuildTimeline() }
         .confirmationDialog("Stop this agent?", isPresented: $confirmStop, titleVisibility: .visible) {
             Button("Stop agent", role: .destructive) { Task { await store.control(.stop) } }
         } message: {
@@ -65,7 +83,7 @@ struct AgentChatView: View {
                     if store.messages.isEmpty {
                         emptyState
                     }
-                    ForEach(ChatTimeline.build(messages: store.messages, tools: store.toolCalls.map(\.card), activeTurn: false)) { item in
+                    ForEach(renderedTimeline) { item in
                         switch item {
                         case .user(let message), .agent(let message):
                             MessageBubble(message: message, agentName: store.agent, sourceLabel: "HOOK")

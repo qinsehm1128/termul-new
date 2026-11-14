@@ -60,7 +60,11 @@ struct HomeView: View {
                                     name: link.title,
                                     meta: meta(for: link),
                                     latency: nil,
-                                    online: store.activeLink?.id == link.id,
+                                    // Pre-connection there is no active link, so
+                                    // `activeLink == link` is always false here and
+                                    // would paint every saved host offline. The dot
+                                    // only belongs to surfaces with a live probe.
+                                    online: nil,
                                     onTap: { open(link) },
                                     onMore: { actionLink = link }
                                 )

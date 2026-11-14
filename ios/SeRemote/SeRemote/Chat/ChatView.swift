@@ -16,6 +16,10 @@ struct ChatView: View {
     @Bindable var session: WorkspaceSession
     private var allowsAgentRun: Bool { (deviceLink?.allows("agent.run") ?? true) }
     var embedded = false
+    /// Optional close control in the top row (full-screen cover usage). The
+    /// ribbon truncates before it instead of being overlaid by a floating
+    /// ZStack button.
+    var onClose: (() -> Void)? = nil
     @State private var draft = ""
     @State private var isAtBottom = true
     @State private var unreadCount = 0
@@ -62,9 +66,25 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            SessionStatusRibbon(status: status, detail: ribbonDetail)
-                .padding(.horizontal, 18)
-                .padding(.top, 12)
+            HStack(spacing: 8) {
+                SessionStatusRibbon(status: status, detail: ribbonDetail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let onClose {
+                    Button(action: onClose) {
+                        SeIconView(icon: .close, size: 13, stroke: 1.7, color: palette.inkSecondary)
+                            .frame(width: 32, height: 32)
+                            .background(.ultraThinMaterial, in: Circle())
+                            .overlay { Circle().strokeBorder(palette.stroke, lineWidth: 1) }
+                            .frame(width: SeSpace.hitTarget, height: SeSpace.hitTarget)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(String(localized: "Close"))
+                    .fixedSize()
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 12)
             messageList
             if let error = session.chat.errorMessage, !error.isEmpty {
                 SeErrorBanner(message: error)
@@ -132,9 +152,9 @@ struct ChatView: View {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if !session.chat.hasVisibleTranscript && !session.chat.isLoading {
                         SeEmptyState(
-                            title: String(localized: "Continue the conversation"),
+                            title: String(localized: "Ready for your message"),
                             systemImage: "bubble.left.and.bubble.right",
-                            message: String(localized: "Pull to refresh desktop history.")
+                            message: String(localized: "Send a prompt below to start.")
                         )
                         .frame(maxWidth: .infinity, minHeight: 180)
                     }

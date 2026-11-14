@@ -17,6 +17,7 @@ struct TerminalKeyboardAccessoryBar: View {
     @Binding var controlModifier: TerminalControlModifier
     var isEnabled = true
     var onSend: (String) -> Void
+    var onPageScroll: ((Bool) -> Void)? = nil
     var onAttach: () -> Void
     var onHide: () -> Void
 
@@ -56,6 +57,18 @@ struct TerminalKeyboardAccessoryBar: View {
                             accessibilityLabel: key.accessibilityLabel,
                             action: { send(key.bytes) },
                             repeatAction: { send(key.bytes) }
+                        )
+                    }
+                    ForEach(TerminalAccessoryCatalog.keys.filter { key in
+                        ["pageUp", "pageDown"].contains(key.id)
+                    }) { key in
+                        let isUp = key.id == "pageUp"
+                        TerminalKeyButton(
+                            label: key.label,
+                            repeatable: true,
+                            accessibilityLabel: key.accessibilityLabel,
+                            action: { triggerPageScroll(up: isUp, fallbackBytes: key.bytes) },
+                            repeatAction: { triggerPageScroll(up: isUp, fallbackBytes: key.bytes) }
                         )
                     }
                     TerminalKeyButton(
@@ -127,6 +140,15 @@ struct TerminalKeyboardAccessoryBar: View {
     private func send(_ bytes: String) {
         guard isEnabled else { return }
         onSend(controlModifier.apply(to: bytes))
+    }
+
+    private func triggerPageScroll(up: Bool, fallbackBytes: String) {
+        guard isEnabled else { return }
+        if let onPageScroll {
+            onPageScroll(up)
+        } else {
+            send(fallbackBytes)
+        }
     }
 }
 

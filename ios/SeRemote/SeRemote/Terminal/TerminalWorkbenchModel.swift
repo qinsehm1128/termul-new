@@ -154,6 +154,11 @@ final class TerminalWorkbenchModel {
         errorMessage ?? session.terminals.errorMessage
     }
 
+    func clearError() {
+        errorMessage = nil
+        session.terminals.errorMessage = nil
+    }
+
     var panelPresentation: TerminalPanelPresentation {
         TerminalPanelPresentation.make(
             request: request,

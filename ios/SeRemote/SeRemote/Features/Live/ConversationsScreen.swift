@@ -64,7 +64,8 @@ struct ConversationsScreen: View {
                 }
 
                 if let errorText {
-                    SeErrorBanner(message: errorText)
+                    // `self.errorText`: the shadowed binding is immutable.
+                    NocturneNotice(message: errorText, isError: true, onDismiss: { self.errorText = nil })
                         .padding(.horizontal, 18)
                         .padding(.top, 10)
                 }
@@ -72,6 +73,9 @@ struct ConversationsScreen: View {
                 Color.clear
                     .frame(height: 28)
             }
+        }
+        .refreshable {
+            await session.conversations.refresh()
         }
         .background(palette.canvas)
         .foregroundStyle(palette.ink)
@@ -113,7 +117,6 @@ struct ConversationsScreen: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
-            SeEyebrow(text: "AGENT CHAT")
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 SeDisplayText(text: String(localized: "Conversations"))
                 Spacer(minLength: 0)
@@ -164,12 +167,18 @@ struct ConversationsScreen: View {
         .animation(reduceMotion ? nil : SeNocturneMotion.quick, value: entry.needsAttention)
     }
 
-    private func rowMeta(_ entry: ConversationEntry) -> String {
+    /// Static and status-free: `SeSessionRow.trailing` already renders
+    /// `entry.statusText`, so the meta line must never repeat it.
+    nonisolated static func rowMeta(agent: String, project: String) -> String {
         var parts: [String] = []
-        if !entry.agent.isEmpty { parts.append(entry.agent) }
-        parts.append(entry.project)
-        parts.append(entry.statusText)
+        let trimmedAgent = agent.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedAgent.isEmpty { parts.append(trimmedAgent) }
+        parts.append(project)
         return parts.joined(separator: " · ")
+    }
+
+    private func rowMeta(_ entry: ConversationEntry) -> String {
+        ConversationsScreen.rowMeta(agent: entry.agent, project: entry.project)
     }
 
     private var emptyState: some View {

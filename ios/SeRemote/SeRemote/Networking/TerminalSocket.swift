@@ -95,6 +95,14 @@ final class TerminalSocket {
     /// every byte since the client's cursor: the stream starts mid-sequence and
     /// the canvas must reset before painting it.
     var onBytes: (@MainActor (String, Data, Bool) -> Void)?
+    /// Same frames as `onBytes`, plus the host's sequence cursor. Recovery
+    /// re-authorization needs the true cursor to resume replay without a gap
+    /// or a full-scrollback refetch.
+    var onOutputFrame: (@MainActor (OutputFrame) -> Void)?
+    /// Fired once per authenticated connection, right after
+    /// `connectionGeneration` is bumped. Authorization is per-connection, so
+    /// this is the store's cue to re-watch/re-attach everything it holds.
+    var onConnected: (@MainActor (Int) -> Void)?
     var onExit: (@MainActor (String) -> Void)?
     var onCatalogChanged: (@MainActor () -> Void)?
     var onDisplayModeChanged: (@MainActor (String, String, Int, Int) -> Void)?
@@ -141,6 +149,9 @@ final class TerminalSocket {
             isConnected = true
             connectionGeneration &+= 1
             HostLog.session.info("terminal WebSocket authenticated")
+            // Authorization is per-connection: everything watched/attached on
+            // the previous generation must re-authorize on this one.
+            onConnected?(connectionGeneration)
         } catch {
             if case HostError.deviceRevoked = error {
                 handleDeviceRevoked(origin: origin)
@@ -387,8 +398,9 @@ final class TerminalSocket {
             handleReply(id: id, object: object)
             return
         }
-        if let output = Self.output(from: object) {
-            onBytes?(output.terminalId, output.data, output.gap)
+        if let frame = Self.outputFrame(from: object) {
+            onOutputFrame?(frame)
+            onBytes?(frame.terminalId, frame.data, frame.gap)
             return
         }
         guard let type = object["type"] as? String else { return }
@@ -443,9 +455,46 @@ final class TerminalSocket {
         }
     }
 
+    /// One terminal-output frame with the host's authoritative sequence cursor.
+    /// `latestSeq` is what recovery replays resume from: `data` frames carry it
+    /// flat as `seq`, `replay` frames carry `latestSeq` (falling back to the
+    /// last chunk's own `seq`).
+    struct OutputFrame: Equatable, Sendable {
+        let terminalId: String
+        let data: Data
+        let gap: Bool
+        let latestSeq: Int?
+    }
+
+    /// `output(from:)` plus the sequence cursor, for callers that re-authorize
+    /// after a reconnect and must resume replay at the host's true cursor.
+    nonisolated static func outputFrame(from object: [String: Any]) -> OutputFrame? {
+        guard let output = output(from: object) else { return nil }
+        let latestSeq: Int?
+        switch object["type"] as? String {
+        case "data":
+            latestSeq = intValue(object["seq"])
+        case "replay":
+            if let chunks = object["chunks"] as? [[String: Any]] {
+                latestSeq = intValue(object["latestSeq"])
+                    ?? chunks.compactMap { intValue($0["seq"]) }.last
+            } else {
+                latestSeq = intValue(object["latestSeq"])
+            }
+        default:
+            latestSeq = nil
+        }
+        return OutputFrame(
+            terminalId: output.terminalId,
+            data: output.data,
+            gap: output.gap,
+            latestSeq: latestSeq
+        )
+    }
+
     /// Event payloads come through JSONSerialization, so numbers arrive as
     /// NSNumber; bridge both spellings.
-    private static func intValue(_ any: Any?) -> Int? {
+    nonisolated private static func intValue(_ any: Any?) -> Int? {
         if let number = any as? NSNumber {
             return number.intValue
         }

@@ -26,6 +26,11 @@ struct TerminalLandingScreen: View {
     var onDeleteQuick: (TerminalLandingModel.QuickRow) -> Void
     var onNewTerminal: () -> Void
     var onNewQuickTerminal: () -> Void
+    /// The first host answer has not arrived yet: an empty model here means
+    /// "unknown", not "no running terminals".
+    var isLoading = false
+    var onDismissNotice: (() -> Void)? = nil
+    var onDismissError: (() -> Void)? = nil
 
     @Environment(\.sePalette) private var palette
     @Environment(\.seThemeMode) private var mode
@@ -50,12 +55,12 @@ struct TerminalLandingScreen: View {
                     .padding(.top, 14)
 
                 if let notice {
-                    NocturneNotice(message: notice, isError: false)
+                    NocturneNotice(message: notice, isError: false, onDismiss: onDismissNotice)
                         .padding(.horizontal, NocturneToolMetrics.gutter)
                         .padding(.top, 12)
                 }
                 if let errorMessage {
-                    NocturneNotice(message: errorMessage, isError: true)
+                    NocturneNotice(message: errorMessage, isError: true, onDismiss: onDismissError)
                         .padding(.horizontal, NocturneToolMetrics.gutter)
                         .padding(.top, 12)
                 }
@@ -67,9 +72,15 @@ struct TerminalLandingScreen: View {
                 }
 
                 if model.isEmpty {
-                    emptyState
-                        .padding(.horizontal, NocturneToolMetrics.gutter)
-                        .padding(.top, 16)
+                    if isLoading {
+                        loadingState
+                            .padding(.horizontal, NocturneToolMetrics.gutter)
+                            .padding(.top, 16)
+                    } else {
+                        emptyState
+                            .padding(.horizontal, NocturneToolMetrics.gutter)
+                            .padding(.top, 16)
+                    }
                 } else {
                     ForEach(model.groups) { group in
                         groupHeader(group)
@@ -102,10 +113,7 @@ struct TerminalLandingScreen: View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             VStack(alignment: .leading, spacing: 5) {
                 SeDisplayText(text: String(localized: "Terminals"))
-                Text(verbatim: subtitle)
-                    .font(SeNocturneType.font(9, mono: true))
-                    .foregroundStyle(palette.inkTertiary)
-                    .lineLimit(1)
+                headerSubtitle
             }
             Spacer(minLength: 0)
             Button(action: onRefresh) {
@@ -133,13 +141,25 @@ struct TerminalLandingScreen: View {
         }
     }
 
-    private var subtitle: String {
-        let count = model.terminalCount
-        guard count > 0 else { return hostMeta }
-        let terminals = count == 1
+    @ViewBuilder
+    private var headerSubtitle: some View {
+        // `SeHostSwitch` already shows hostMeta ("Connected"), so the header
+        // only adds the terminal count — never a second status line.
+        if let subtitle = TerminalLandingScreen.subtitle(for: model.terminalCount) {
+            Text(verbatim: subtitle)
+                .font(SeNocturneType.font(9, mono: true))
+                .foregroundStyle(palette.inkTertiary)
+                .lineLimit(1)
+        }
+    }
+
+    /// `nil` at zero terminals: an absent subtitle reads cleaner than a
+    /// duplicated host status the switch above already renders.
+    nonisolated static func subtitle(for terminalCount: Int) -> String? {
+        guard terminalCount > 0 else { return nil }
+        return terminalCount == 1
             ? String(localized: "1 terminal")
-            : String(localized: "\(count) terminals")
-        return "\(hostMeta) · \(terminals)"
+            : String(localized: "\(terminalCount) terminals")
     }
 
     // MARK: - Hero
@@ -355,6 +375,26 @@ struct TerminalLandingScreen: View {
     }
 
     // MARK: - Empty and new
+
+    /// Quiet first-load placeholder. The host has not answered yet, so the
+    /// screen must not claim the host has no running terminals.
+    private var loadingState: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+            Text("Loading terminals…")
+                .font(SeNocturneType.font(11))
+                .foregroundStyle(palette.inkSecondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(palette.card, in: RoundedRectangle(cornerRadius: SeNocturneRadius.card, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: SeNocturneRadius.card, style: .continuous)
+                .strokeBorder(mode.hairline, lineWidth: 1)
+        }
+        .accessibilityElement(children: .combine)
+    }
 
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 6) {

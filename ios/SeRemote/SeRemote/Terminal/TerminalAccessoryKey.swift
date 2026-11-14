@@ -18,6 +18,8 @@ enum TerminalAccessoryCatalog {
         .init(id: "arrowDown", label: String(localized: "↓"), bytes: "\u{1b}[B", accessibilityLabel: String(localized: "Arrow down"), repeatable: true),
         .init(id: "arrowLeft", label: String(localized: "←"), bytes: "\u{1b}[D", accessibilityLabel: String(localized: "Arrow left"), repeatable: true),
         .init(id: "arrowRight", label: String(localized: "→"), bytes: "\u{1b}[C", accessibilityLabel: String(localized: "Arrow right"), repeatable: true),
+        .init(id: "pageUp", label: String(localized: "PgUp"), bytes: "\u{1b}[5~", accessibilityLabel: String(localized: "Page up"), repeatable: true),
+        .init(id: "pageDown", label: String(localized: "PgDn"), bytes: "\u{1b}[6~", accessibilityLabel: String(localized: "Page down"), repeatable: true),
         .init(id: "ctrlC", label: String(localized: "Ctrl+C"), bytes: "\u{3}", accessibilityLabel: String(localized: "Interrupt")),
         .init(id: "ctrlD", label: String(localized: "Ctrl+D"), bytes: "\u{4}", accessibilityLabel: String(localized: "Send EOF")),
         .init(id: "ctrlZ", label: String(localized: "Ctrl+Z"), bytes: "\u{1a}", accessibilityLabel: String(localized: "Suspend")),

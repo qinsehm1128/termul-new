@@ -574,6 +574,9 @@ struct NocturneNotice: View {
 
     let message: String
     var isError = false
+    /// When provided, the notice renders a trailing close control so a stale
+    /// notice or error never stays stuck for the rest of the session.
+    var onDismiss: (() -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 9) {
@@ -584,8 +587,21 @@ struct NocturneNotice: View {
                 .font(SeNocturneType.font(10.5, weight: .regular))
                 .foregroundStyle(palette.inkSecondary)
                 .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if let onDismiss {
+                Button(action: onDismiss) {
+                    SeIconView(icon: .close, size: 12, stroke: 1.7, color: palette.inkSecondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(SePressable())
+                .accessibilityLabel(String(localized: "Dismiss"))
+                .fixedSize()
+            }
         }
-        .padding(13)
+        .padding(.leading, 13)
+        .padding(.trailing, onDismiss == nil ? 13 : 5)
+        .padding(.vertical, 13)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(palette.card, in: RoundedRectangle(cornerRadius: 14))
         .overlay {

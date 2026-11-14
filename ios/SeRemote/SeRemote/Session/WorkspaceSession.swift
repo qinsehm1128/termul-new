@@ -59,6 +59,15 @@ final class WorkspaceSession {
 
     var workspace: WorkspaceKind = .home
     var phase: SessionPhase = .idle
+    /// The handshake completed at least once in this session's life. Once
+    /// true, a foreground/transport recovery keeps the mounted shell visible:
+    /// the live terminal/chat canvas is never blanked behind a full-screen
+    /// "Connecting…" spinner for a link that already worked.
+    private(set) var hasEstablishedConnection = false
+    /// True while `start()` is re-running its handshakes to recover an
+    /// already-established session (transport blip, foreground return). The
+    /// UI keeps `phase == .connected` presentation during this window.
+    private(set) var isRecovering = false
     /// The last open failed in a way a retry cannot fix: the saved origin no
     /// longer reaches the host, or the host refuses this device's credential.
     /// The caller offers a pairing scan instead of another retry.
@@ -177,12 +186,21 @@ final class WorkspaceSession {
         startEpoch += 1
         let epoch = startEpoch
         isStarting = true
+        // Recovery of an already-established session keeps the mounted shell
+        // on screen: only a first-ever connect (or an exhausted retry) flips
+        // the visible phase, so a foreground return never blanks the live
+        // terminal/chat canvas behind a full-screen "Connecting…" spinner.
+        let recovering = hasEstablishedConnection
+        isRecovering = recovering
         defer {
             if startEpoch == epoch {
                 isStarting = false
+                if isRecovering { isRecovering = false }
             }
         }
-        phase = .connecting
+        if !recovering {
+            phase = .connecting
+        }
         needsRePairing = false
         HostLog.session.info("Host connect started")
         do {
@@ -203,10 +221,15 @@ final class WorkspaceSession {
                 terminals.errorMessage = error.localizedDescription
             }
             guard startEpoch == epoch else { return }
+            hasEstablishedConnection = true
             phase = .connected
             startPathMonitor()
             startRunningRefresh()
             await refreshDesktopSupport()
+            // A rebuilt terminal socket is a fresh connection with an empty
+            // server-side authorization map: re-watch/re-attach now so the
+            // first user action is not answered with UNAUTHORIZED.
+            await terminals.recoverAfterReconnect()
             HostLog.session.info("Host connect succeeded")
         } catch is CancellationError {
             HostLog.session.info("Host connect cancelled")
@@ -219,6 +242,7 @@ final class WorkspaceSession {
             if case HostError.forbidden = error {
                 // The global capability notice explains the failed operation;
                 // other scopes and the mounted workspace remain usable.
+                hasEstablishedConnection = true
                 phase = .connected
                 startRunningRefresh()
                 await refreshDesktopSupport()
@@ -260,6 +284,11 @@ final class WorkspaceSession {
     func stop() {
         startEpoch += 1
         isStarting = false
+        // Teardown is the one place the recovery promise ends: an explicit
+        // disconnect (or the session being replaced) must not keep a stale
+        // shell mounted behind a claimed "connected" phase.
+        hasEstablishedConnection = false
+        isRecovering = false
         pathRefreshTask?.cancel()
         pathRefreshTask = nil
         pathMonitor?.cancel()
@@ -305,19 +334,13 @@ final class WorkspaceSession {
         acp.handleLifecycle(isBackground: isBackground)
         desktopSocket.handleLifecycle(isBackground: isBackground)
         if !isBackground {
-            // Cached grid can match while the host PTY changed in background;
-            // re-assert equal dims to converge after resume.
-            terminals.scheduleRefit(force: true)
-            // Give a suspended socket a moment to report its terminal state
-            // before deciding it is stale. An immediate probe races the
-            // resume and reconnects a socket that was about to recover.
-            scheduleTransportRefresh(reason: "foreground")
-            // Running state may have changed while polling was parked.
-            Task { [weak self] in
-                guard let self, self.phase == .connected else { return }
-                await self.refreshRunningState()
-                await self.refreshDesktopSupport()
-            }
+            // Everything the foreground return needs happens AFTER the
+            // transports are proven alive (or rebuilt): scheduling a refit or
+            // a catalog refresh at t=0 races the still-suspended socket and
+            // pushes set_display_mode/list at a connection that has not
+            // re-watched yet — the raw "Unauthorized" answer. The settle
+            // delay lets iOS finish resuming the sockets first.
+            scheduleTransportRefresh(reason: "foreground", settleMilliseconds: 150)
         }
     }
 
@@ -353,8 +376,9 @@ final class WorkspaceSession {
     }
 
     /// Coalesce foreground and path notifications into one revalidation after
-    /// the route has settled.
-    private func scheduleTransportRefresh(reason: String) {
+    /// the route has settled. The foreground path uses a shorter settle: the
+    /// sockets were merely suspended, not lost.
+    private func scheduleTransportRefresh(reason: String, settleMilliseconds: Int = 350) {
         guard !isBackgrounded else { return }
         switch phase {
         case .connected, .failed:
@@ -364,7 +388,7 @@ final class WorkspaceSession {
         }
         pathRefreshTask?.cancel()
         pathRefreshTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(350))
+            try? await Task.sleep(for: .milliseconds(settleMilliseconds))
             guard let self, !Task.isCancelled else { return }
             await self.revalidateTransports(reason: reason)
         }
@@ -379,6 +403,9 @@ final class WorkspaceSession {
         case .failed:
             HostLog.session.info("Retrying host link after \(reason, privacy: .public)")
             await start()
+            if phase == .connected {
+                await convergeAfterTransportRecovery()
+            }
         case .connected:
             let acpLiveness = await acp.probeLiveness()
             let terminalLiveness = await terminalSocket.probeLiveness()
@@ -386,18 +413,34 @@ final class WorkspaceSession {
                 if acpLiveness == .unknown || terminalLiveness == .unknown {
                     HostLog.session.info("Transport liveness inconclusive after \(reason, privacy: .public)")
                 }
-                await refreshRunningState()
-                await refreshDesktopSupport()
+                // The sockets survived: re-assert the viewport and pick up
+                // whatever state changed while polling was parked. This is
+                // the foreground-return path that used to fire at t=0.
+                await convergeAfterTransportRecovery()
                 return
             }
             HostLog.session.info("Stale host transport after \(reason, privacy: .public); reconnecting link")
             await start()
+            if phase == .connected {
+                await convergeAfterTransportRecovery()
+            }
         case .idle, .connecting:
             // The in-flight start owns the retry budget.
             break
         case .revoked:
             break
         }
+    }
+
+    /// Post-recovery convergence: cached grid can match while the host PTY
+    /// changed in the background, and running state may have moved while
+    /// polling was parked. Runs only after the transports are verified alive
+    /// or freshly rebuilt, never speculatively at foreground t=0.
+    private func convergeAfterTransportRecovery() async {
+        guard phase == .connected else { return }
+        terminals.scheduleRefit(force: true)
+        await refreshRunningState()
+        await refreshDesktopSupport()
     }
 
     /// Rebuild the terminal WebSocket before a user-visible request if the
@@ -411,6 +454,11 @@ final class WorkspaceSession {
         terminalSocket.stop()
         do {
             try await terminals.ensureConnected()
+            // The rebuilt socket is a new connection with an empty
+            // server-side authorization map: re-watch the workbench PTY and
+            // re-attach standalone viewers so the next user action is not
+            // answered with UNAUTHORIZED ("Un…").
+            await terminals.recoverAfterReconnect()
         } catch {
             HostLog.session.error("Terminal transport reconnect failed")
             terminals.errorMessage = error.localizedDescription

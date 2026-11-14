@@ -48,6 +48,10 @@ struct SeDisplayText: View {
             .font(SeNocturneType.font(33, weight: .semibold))
             .tracking(-1.45)
             .foregroundStyle(palette.ink)
+            // 33pt titles wrap or collide with trailing actions on 375pt
+            // phones; shrink instead of growing a second line.
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
             .accessibilityAddTraits(.isHeader)
     }
 }
@@ -507,18 +511,24 @@ struct SeSessionRow: View {
                         .font(SeNocturneType.font(12.5, weight: .semibold))
                         .foregroundStyle(palette.ink)
                         .lineLimit(1)
+                        .layoutPriority(1)
                     Text(meta)
                         .font(SeNocturneType.font(9, mono: true))
                         .foregroundStyle(palette.inkSecondary)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 6)
-                if let time {
+                if let time, let trailing, !trailing.isEmpty {
+                    // The time and the trailing status never run together into
+                    // one unreadable mono string when both are present.
+                    Text("\(time) · \(trailing)")
+                        .font(SeNocturneType.font(9, mono: true))
+                        .foregroundStyle(palette.inkTertiary)
+                } else if let time {
                     Text(time)
                         .font(SeNocturneType.font(9, mono: true))
                         .foregroundStyle(palette.inkTertiary)
-                }
-                if let trailing {
+                } else if let trailing, !trailing.isEmpty {
                     Text(trailing)
                         .font(SeNocturneType.font(9, mono: true))
                         .foregroundStyle(palette.inkTertiary)
@@ -543,9 +553,28 @@ struct SeHostRowView: View {
     let name: String
     var meta: String
     var latency: String?
-    var online = false
+    /// `nil` (unknown) hides the live/off dot: the pre-connection list has no
+    /// connectivity probe, so it must not paint every host offline. Plain `Bool`
+    /// callers stay source-compatible through implicit optional conversion.
+    var online: Bool? = nil
     var onTap: () -> Void
     var onMore: (() -> Void)?
+
+    init(index: String,
+         name: String,
+         meta: String,
+         latency: String? = nil,
+         online: Bool? = nil,
+         onTap: @escaping () -> Void,
+         onMore: (() -> Void)? = nil) {
+        self.index = index
+        self.name = name
+        self.meta = meta
+        self.latency = latency
+        self.online = online
+        self.onTap = onTap
+        self.onMore = onMore
+    }
 
     @Environment(\.sePalette) private var palette
     @Environment(\.seThemeMode) private var mode
@@ -563,7 +592,9 @@ struct SeHostRowView: View {
                             .font(SeNocturneType.font(13.5, weight: .semibold))
                             .foregroundStyle(palette.ink)
                             .lineLimit(1)
-                        SeNeedDot(kind: online ? .live : .off, size: 5)
+                        if let online {
+                            SeNeedDot(kind: online ? .live : .off, size: 5)
+                        }
                     }
                     Text(meta)
                         .font(SeNocturneType.font(9, mono: true))

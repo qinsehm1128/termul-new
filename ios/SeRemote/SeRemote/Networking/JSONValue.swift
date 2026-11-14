@@ -146,13 +146,21 @@ enum HostError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .network(let message), .unexpected(let message), .rePairingRequired(let message):
-            message
-        case .ipc(let message, _):
-            message
+            return message
+        case .ipc(let message, let code):
+            // Reconnect recovery fires requests at a socket whose
+            // per-connection authorization map is empty until the re-watch
+            // lands. The host's raw answer is the English literal
+            // "Unauthorized" — surfacing it untranslated is the "Un…"
+            // banner, so it maps to a localized, explanatory string.
+            if code.uppercased() == "UNAUTHORIZED" || message == "Unauthorized" {
+                return String(localized: "Session authorization expired. Reconnecting…")
+            }
+            return message
         case .deviceRevoked:
-            String(localized: "This device's access was revoked. Pair again to reconnect.")
+            return String(localized: "This device's access was revoked. Pair again to reconnect.")
         case .forbidden(let capability):
-            String(localized: "This device does not have permission for \(DeviceScope.label(for: capability)).")
+            return String(localized: "This device does not have permission for \(DeviceScope.label(for: capability)).")
         }
     }
 }

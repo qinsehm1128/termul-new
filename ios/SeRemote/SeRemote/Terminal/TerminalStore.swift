@@ -83,6 +83,8 @@ final class TerminalStore {
 
     private var coalesceBuffers: [String: Data] = [:]
     private var coalesceGapped: Set<String> = []
+    /// Max host cursor seen per terminal inside the coalescing window.
+    private var coalesceSeq: [String: Int] = [:]
     private var coalesceTask: Task<Void, Never>?
     private var socket: TerminalSocket?
     private var origin: URL?
@@ -91,6 +93,16 @@ final class TerminalStore {
     /// Connection generation that took the watch. Watches are per-connection,
     /// so `watchedId` alone cannot prove the host still replays to us.
     private var watchedGeneration: Int?
+    /// Last known host output cursor per terminal, kept outside the `terminals`
+    /// catalog so a mid-refresh catalog (or an evicted row) cannot lose the
+    /// resume point a reconnect needs.
+    private var watchedSeq: [String: Int] = [:]
+    /// Serializes `recoverAfterReconnect` so the onConnected hook, foreground
+    /// revalidation and a user-driven open coalesce into one re-authorization.
+    /// `Task` is a value type, so an incrementing serial — not identity —
+    /// decides which run may clear the in-flight slot.
+    private var recoveryTask: Task<Void, Never>?
+    private var recoverySerial = 0
     private var lastConversationId: String?
     private var lastProjectId: String?
 
@@ -109,8 +121,22 @@ final class TerminalStore {
         self.socket = socket
         self.origin = origin
         self.credentials = credentials
-        socket.onBytes = { [weak self] terminalId, data, gap in
-            self?.enqueueOutput(terminalId: terminalId, data: data, gap: gap)
+        // `handleFrame` fires BOTH `onOutputFrame` and `onBytes` for one
+        // frame (the tuple API stays for compatibility). Subscribing to both
+        // here would deliver every frame twice, so this store reads only the
+        // richer `onOutputFrame` — same bytes plus the host cursor.
+        socket.onOutputFrame = { [weak self] frame in
+            guard let self else { return }
+            // Keep the true host cursor so a reconnect resumes replay here
+            // instead of seq 0 (which would repaint the whole scrollback).
+            if let latestSeq = frame.latestSeq {
+                self.watchedSeq[frame.terminalId] = max(self.watchedSeq[frame.terminalId] ?? 0, latestSeq)
+            }
+            self.enqueueOutput(terminalId: frame.terminalId, data: frame.data, gap: frame.gap, latestSeq: frame.latestSeq)
+        }
+        socket.onConnected = { [weak self] _ in
+            guard let self else { return }
+            Task { await self.recoverAfterReconnect() }
         }
         socket.onCatalogChanged = { [weak self] in
             guard let self else { return }
@@ -145,6 +171,8 @@ final class TerminalStore {
             self.pendingOutput.removeValue(forKey: terminalId)
             self.pendingReset.remove(terminalId)
             self.standaloneClaims.removeValue(forKey: terminalId)
+            self.watchedSeq.removeValue(forKey: terminalId)
+            self.lastPushed.removeValue(forKey: terminalId)
             if let viewer = self.viewers[terminalId]?.viewer {
                 viewer.markExited()
             }
@@ -184,6 +212,12 @@ final class TerminalStore {
             throw HostError.network(String(localized: "Disconnected from the host."))
         }
         if let existing = viewers[terminalId]?.viewer, !existing.isClosed {
+            // The socket may have reconnected since this viewer attached: the
+            // host's authorization map is empty on the new connection, so
+            // re-authorize before handing the same viewer back.
+            if !existing.isLiveOnCurrentConnection {
+                await existing.reattachAfterReconnect(claim: claim ?? standaloneClaims[terminalId])
+            }
             return existing
         }
         let viewer = TerminalPTYViewer(
@@ -256,6 +290,7 @@ final class TerminalStore {
             } else {
                 activeId = terminals.first?.id
             }
+            errorMessage = nil
             if let activeId, !isWatching(activeId) {
                 await open(activeId)
             }
@@ -294,6 +329,103 @@ final class TerminalStore {
         return watchedId == terminalId && watchedGeneration == socket.connectionGeneration
     }
 
+    /// Best-known host cursor for one terminal. The side-channel map wins: the
+    /// catalog may be mid-refresh or have evicted the row, and a reconnect
+    /// must resume from the real cursor regardless.
+    func lastWatchedSeq(for terminalId: String) -> Int {
+        if let side = watchedSeq[terminalId] { return side }
+        return terminals.first(where: { $0.id == terminalId })?.lastSeq ?? 0
+    }
+
+    /// Re-authorize everything this store holds on the current terminal-socket
+    /// connection. A reconnect empties the host's per-connection authorization
+    /// map, so `set_display_mode`/`write`/replay would all answer UNAUTHORIZED
+    /// ("Un…") until the watch and every standalone viewer are re-taken.
+    ///
+    /// In-flight guard: `onConnected`, foreground revalidation and a user
+    /// action can all land here at once; concurrent callers coalesce into the
+    /// running recovery and re-check liveness when it finishes.
+    func recoverAfterReconnect() async {
+        // Coalesce concurrent callers into the running recovery, then re-check:
+        // a caller that arrived mid-recovery still needs its own pass if the
+        // state it cares about was re-staled while the first run was awaited.
+        if let recoveryTask {
+            _ = await recoveryTask.value
+            guard needsRecovery else { return }
+        }
+        guard needsRecovery else { return }
+        recoverySerial &+= 1
+        let serial = recoverySerial
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performRecovery()
+        }
+        recoveryTask = task
+        _ = await task.value
+        if recoverySerial == serial { recoveryTask = nil }
+    }
+
+    private var needsRecovery: Bool {
+        guard let socket, socket.isConnected else { return false }
+        if let watchedId, !isWatching(watchedId) { return true }
+        for (_, box) in viewers {
+            if let viewer = box.viewer, !viewer.isClosed, !viewer.hasExited,
+               !viewer.isLiveOnCurrentConnection {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func performRecovery() async {
+        guard let socket else { return }
+
+        // 1. The workbench's watched PTY.
+        if let id = watchedId, !isWatching(id) {
+            let resume = lastWatchedSeq(for: id)
+            do {
+                let reply = try await socket.watch(terminalId: id, lastSeq: resume)
+                watchedGeneration = socket.connectionGeneration
+                if let seq = reply.latestSeq, seq > resume {
+                    watchedSeq[id] = seq
+                }
+                errorMessage = nil
+                HostLog.session.info("Re-watched workbench PTY after reconnect")
+                // Cached grid can match while the host PTY changed in background;
+                // re-assert equal dims to converge after resume.
+                if geometryActive, displayMode == .phone, activeId == id {
+                    scheduleRefit(force: true)
+                }
+            } catch {
+                // The PTY may have exited while we were away; that is a clean
+                // downgrade, not an error banner over a live session.
+                if Self.isTerminalNotFound(error) {
+                    HostLog.session.info("Watched PTY is gone after reconnect")
+                    watchedId = nil
+                    watchedGeneration = nil
+                    watchedSeq.removeValue(forKey: id)
+                } else {
+                    HostLog.session.error("Workbench PTY re-watch failed after reconnect")
+                }
+            }
+        }
+
+        // 2. Standalone viewers (quick terminals).
+        for (id, box) in viewers {
+            guard let viewer = box.viewer, !viewer.isClosed, !viewer.hasExited else { continue }
+            await viewer.reattachAfterReconnect(claim: standaloneClaims[id])
+        }
+    }
+
+    /// The host reports a vanished PTY as TERMINAL_NOT_FOUND; recovery treats
+    /// that as a clean downgrade instead of surfacing an error banner.
+    nonisolated private static func isTerminalNotFound(_ error: Error) -> Bool {
+        if case HostError.ipc(_, let code) = error, code.uppercased() == "TERMINAL_NOT_FOUND" {
+            return true
+        }
+        return false
+    }
+
     func open(_ terminalId: String) async {
         guard let socket else { return }
         do {
@@ -313,6 +445,10 @@ final class TerminalStore {
             let attached = try await socket.watch(terminalId: terminalId, lastSeq: 0)
             if let index = terminals.firstIndex(where: { $0.id == terminalId }) {
                 terminals[index].terminalScreenEngine = attached.terminalScreenEngine
+                if let seq = attached.latestSeq {
+                    terminals[index].lastSeq = max(terminals[index].lastSeq, seq)
+                    watchedSeq[terminalId] = max(watchedSeq[terminalId] ?? 0, seq)
+                }
                 // This watch just replayed the whole log. Remember the grid it
                 // was authored at: the phone fit below resizes the PTY, and a
                 // replay interpreted at the new grid cannot rebuild the screen.
@@ -325,6 +461,7 @@ final class TerminalStore {
             watchedGeneration = socket.connectionGeneration
             activeId = terminalId
             refitEpoch &+= 1
+            errorMessage = nil
             // A fresh watch may land on a PTY the desktop resized meanwhile;
             // re-assert the phone viewport deterministically instead of
             // waiting for a view-driven sizeChanged that may never come.
@@ -366,6 +503,7 @@ final class TerminalStore {
             if !terminals.contains(where: { $0.id == live.id }) {
                 terminals.append(live)
             }
+            errorMessage = nil
             HostLog.session.info("Created a host terminal from the phone")
             await open(live.id)
         } catch {
@@ -378,6 +516,7 @@ final class TerminalStore {
         guard let socket, let activeId else { return }
         do {
             try await socket.write(terminalId: activeId, data: data)
+            errorMessage = nil
         } catch {
             HostLog.session.error("Terminal write failed")
             errorMessage = error.localizedDescription
@@ -430,6 +569,18 @@ final class TerminalStore {
               let fitted = lastFitted else { return }
         guard let socket else { return }
         let terminalId = activeId
+        // Authorization gate: `set_display_mode` on a PTY this connection
+        // never watched answers UNAUTHORIZED (the raw "Un…" string). If a
+        // reconnect dropped the watch, recover it first; if recovery cannot
+        // authorize yet, leave the force flag armed so the open/watch that
+        // follows performs the takeover push instead.
+        if !isWatching(terminalId) {
+            await recoverAfterReconnect()
+            guard isWatching(terminalId) else {
+                HostLog.session.info("Phone fit deferred until the PTY is watched again")
+                return
+            }
+        }
         let cols = max(fitted.cols, 20)
         let rows = max(fitted.rows, 4)
         let forced = forceRefit
@@ -474,6 +625,7 @@ final class TerminalStore {
             applyState(state, for: terminalId)
             lastPushed[terminalId] = (state.cols, state.rows)
             forceRefit = false
+            errorMessage = nil
             HostLog.ui.info("Phone fit \(state.cols)x\(state.rows)\(forced ? " (forced)" : "", privacy: .public)")
         } catch {
             HostLog.session.error("Phone fit push failed")
@@ -494,6 +646,7 @@ final class TerminalStore {
                     mode: TerminalDisplayMode.desktop.rawValue
                 )
                 applyState(state, for: activeId)
+                errorMessage = nil
             } catch {
                 HostLog.session.error("Desktop display mode switch failed")
                 errorMessage = error.localizedDescription
@@ -531,7 +684,7 @@ final class TerminalStore {
         terminals[index].rows = state.rows
     }
 
-    private func enqueueOutput(terminalId: String, data: Data, gap: Bool) {
+    private func enqueueOutput(terminalId: String, data: Data, gap: Bool, latestSeq: Int? = nil) {
         // A gap means the new stream starts mid-sequence. Bytes from the
         // previous stream that are still waiting in the 16 ms window belong to
         // the truncated prefix; drop them so the reset cannot be preceded by
@@ -541,17 +694,22 @@ final class TerminalStore {
             coalesceGapped.insert(terminalId)
         }
         coalesceBuffers[terminalId, default: Data()].append(data)
+        if let latestSeq {
+            coalesceSeq[terminalId] = max(coalesceSeq[terminalId] ?? 0, latestSeq)
+        }
         if coalesceTask == nil {
             coalesceTask = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(16))
                 guard let self else { return }
                 let pending = self.coalesceBuffers
                 let gapped = self.coalesceGapped
+                let seqs = self.coalesceSeq
                 self.coalesceBuffers.removeAll()
                 self.coalesceGapped.removeAll()
+                self.coalesceSeq.removeAll()
                 self.coalesceTask = nil
                 for (id, bytes) in pending {
-                    self.deliverOutput(terminalId: id, data: bytes, gap: gapped.contains(id))
+                    self.deliverOutput(terminalId: id, data: bytes, gap: gapped.contains(id), latestSeq: seqs[id])
                 }
             }
         }
@@ -564,15 +722,24 @@ final class TerminalStore {
     ///
     /// Internal (not private) so the replay-continuity tests can drive the
     /// coalesced destination without a live socket.
-    func deliverOutput(terminalId: String, data: Data, gap: Bool = false) {
+    func deliverOutput(terminalId: String, data: Data, gap: Bool = false, latestSeq: Int? = nil) {
         if let existing = terminals.firstIndex(where: { $0.id == terminalId }) {
-            terminals[existing].lastSeq += 1
+            // The host's own cursor is authoritative when present; the +1
+            // fallback keeps old hosts (no seq on the frame) monotonic.
+            if let latestSeq {
+                terminals[existing].lastSeq = max(terminals[existing].lastSeq, latestSeq)
+            } else {
+                terminals[existing].lastSeq += 1
+            }
+            watchedSeq[terminalId] = max(watchedSeq[terminalId] ?? 0, terminals[existing].lastSeq)
+        } else if let latestSeq {
+            watchedSeq[terminalId] = max(watchedSeq[terminalId] ?? 0, latestSeq)
         }
         // A standalone viewer (quick terminal) owns this PTY's bytes, so the
         // workbench's single `onFeed` never has to know it exists.
         if let box = viewers[terminalId] {
             if let viewer = box.viewer {
-                viewer.receive(data, reset: gap)
+                viewer.receive(data, reset: gap, latestSeq: latestSeq)
                 return
             }
             viewers.removeValue(forKey: terminalId)

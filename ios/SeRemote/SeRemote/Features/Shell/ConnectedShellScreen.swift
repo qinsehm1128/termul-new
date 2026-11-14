@@ -38,6 +38,9 @@ struct ConnectedShellScreen: View {
     @State private var refreshingHub = false
     @State private var hubRefreshTask: Task<Void, Never>?
     @State private var didBootstrap = false
+    /// The tab the user left when opening Settings, so Back returns there
+    /// instead of always dropping them on Terminals.
+    @State private var previousDestination: SidebarDestination = .terminals
 
     init(session: WorkspaceSession, store: ConnectionStore, link: RemoteLink) {
         self.session = session
@@ -49,6 +52,12 @@ struct ConnectedShellScreen: View {
     private var hostName: String { link.title }
     private var workbenchVisible: Bool { navigation.workbenchVisible }
     private var themeIcon: SeIcon { mode == .night ? .moon : .sun }
+
+    /// Settings' Back target: the last real tab the user was on, never
+    /// Settings itself, falling back to Terminals.
+    static func settingsBackTarget(from remembered: SidebarDestination) -> SidebarDestination {
+        SidebarDestination.primary.contains(remembered) ? remembered : .terminals
+    }
 
     private var needs: [NeedsItem] {
         LivePresentation.needs(
@@ -192,8 +201,13 @@ struct ConnectedShellScreen: View {
             guard route != nil, session.phase == .connected else { return }
             Task { await consumePendingRoute() }
         }
-        .onChange(of: navigation.destination) { _, _ in
+        .onChange(of: navigation.destination) { _, destination in
             showsDrawer = false
+            // Remember the last real tab: Settings' Back returns there instead
+            // of always dropping the user on Terminals.
+            if destination != .settings {
+                previousDestination = destination
+            }
         }
         .sheet(isPresented: $showsNeeds) {
             NeedsSheetView(items: needs, onOpen: openNeed)
@@ -231,10 +245,36 @@ struct ConnectedShellScreen: View {
         .disabled(openingSession)
         .overlay {
             if openingSession {
-                ProgressView().accessibilityLabel(String(localized: "Opening terminal"))
+                // A bare spinner over a frozen screen reads as a hang; the pill
+                // says the tap was accepted and work is in flight.
+                ProgressView()
+                    .padding(16)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(palette.stroke, lineWidth: 1)
+                    }
+                    .accessibilityLabel(String(localized: "Opening terminal"))
             }
         }
         .animation(reduceMotion ? nil : SeNocturneMotion.quick, value: showsCommand)
+        .overlay {
+            // A notice raised by a deep link or a ⌘K miss while another tab is
+            // showing would stay invisible until the user returns to Terminals;
+            // surface it here instead, dismissible at the source.
+            if let landingNotice,
+               navigation.destination != .terminals,
+               !showsDrawer, !showsCommand {
+                // `self.landingNotice`: the shadowed binding is immutable.
+                NocturneNotice(message: landingNotice, isError: false, onDismiss: { self.landingNotice = nil })
+                    .padding(.horizontal, NocturneToolMetrics.gutter)
+                    .frame(maxWidth: 680)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .padding(.top, 8)
+                    .transition(.opacity)
+            }
+        }
+        .animation(reduceMotion ? nil : SeNocturneMotion.quick, value: landingNotice)
     }
 
     // MARK: - Pages
@@ -263,7 +303,8 @@ struct ConnectedShellScreen: View {
                     onToggleTheme: { settings.appearance = mode.toggled.appearance },
                     onOpenDrawer: { showsDrawer = true },
                     onOpenCommand: { showsCommand = true },
-                    onOpen: { request in Task { await open(request) } }
+                    onOpen: { request in Task { await open(request) } },
+                    onDismissNotice: { landingNotice = nil }
                 )
             }
         case .conversations:
@@ -294,7 +335,9 @@ struct ConnectedShellScreen: View {
                 onOpenSettings: { navigation.select(.settings) }
             )
         case .settings:
-            SettingsScreen(settings: settings, store: store, onBack: { navigation.select(.terminals) })
+            SettingsScreen(settings: settings, store: store, onBack: {
+                navigation.select(ConnectedShellScreen.settingsBackTarget(from: previousDestination))
+            })
         }
     }
 
@@ -529,25 +572,10 @@ struct ConnectedShellScreen: View {
     }
 
     private var chatCover: some View {
-        ZStack(alignment: .topTrailing) {
-            ChatView(session: session, embedded: false)
-                .background(palette.canvas.ignoresSafeArea())
-            Button {
-                showsChatCover = false
-            } label: {
-                SeIconView(icon: .close, size: 13, stroke: 1.7, color: palette.inkSecondary)
-                    .frame(width: 32, height: 32)
-                    .background(.ultraThinMaterial, in: Circle())
-                    .overlay { Circle().strokeBorder(palette.stroke, lineWidth: 1) }
-                    .frame(width: SeSpace.hitTarget, height: SeSpace.hitTarget)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .padding(.trailing, 8)
-            .padding(.top, 8)
-            .accessibilityLabel(String(localized: "Close"))
-        }
-        .background(palette.canvas.ignoresSafeArea())
+        // The close control lives inside ChatView's top row so the status
+        // ribbon truncates before it instead of being overlapped.
+        ChatView(session: session, embedded: false, onClose: { showsChatCover = false })
+            .background(palette.canvas.ignoresSafeArea())
     }
 
     // MARK: - Bootstrap and routing

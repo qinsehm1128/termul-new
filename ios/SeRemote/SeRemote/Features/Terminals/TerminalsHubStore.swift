@@ -84,8 +84,12 @@ final class TerminalsHubStore {
             return
         } catch {
             guard currentRequest == requestID else { return }
-            summaries = []
-            state = .failed(error.localizedDescription)
+            // A transient socket blip must not wipe a list the user is already
+            // looking at: keep the last good rows and surface the failure as
+            // state only when there is nothing to keep.
+            if summaries.isEmpty {
+                state = .failed(error.localizedDescription)
+            }
             HostLog.session.error("Terminal hub list failed")
         }
     }

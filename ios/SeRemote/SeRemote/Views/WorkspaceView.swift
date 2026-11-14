@@ -24,6 +24,17 @@ struct WorkspaceView: View {
         ))
     }
 
+    /// The mounted shell stays on screen (and interactive) once the session
+    /// has connected at least once — including while a foreground/network
+    /// recovery re-runs its handshakes. Blanking the live terminal/chat
+    /// canvas behind a full-screen "Connecting…" spinner for a link that
+    /// already worked is the bug this guards against.
+    private var shellIsPresentable: Bool {
+        session.hasEstablishedConnection
+            && (session.phase == .connected
+                || (session.isRecovering && session.phase == .connecting))
+    }
+
     var body: some View {
         ZStack {
             // Once connected, keep the navigation tree alive even during a
@@ -32,15 +43,20 @@ struct WorkspaceView: View {
                 ConnectedShellScreen(session: session, store: store, link: link)
                     .environment(settings)
                     .environment(store)
-                    .opacity(session.phase == .connected ? 1 : 0)
-                    .allowsHitTesting(session.phase == .connected)
-                    .accessibilityHidden(session.phase != .connected)
+                    .opacity(shellIsPresentable ? 1 : 0)
+                    .allowsHitTesting(shellIsPresentable)
+                    .accessibilityHidden(!shellIsPresentable)
                     .transition(SeTransition.entrance(reduceMotion: reduceMotion))
             }
             switch session.phase {
             case .connecting, .idle:
-                connectingState
-                    .transition(SeTransition.entrance(reduceMotion: reduceMotion))
+                // A recovery pass keeps the live shell on screen; the opaque
+                // full-screen "Connecting…" overlay must not stack on top of
+                // it (the ZStack draws this above the shell).
+                if !shellIsPresentable {
+                    connectingState
+                        .transition(SeTransition.entrance(reduceMotion: reduceMotion))
+                }
             case .failed(let message):
                 if hasConnected {
                     ConnectedOfflineScreen(session: session, store: store, link: link)
@@ -88,9 +104,19 @@ struct WorkspaceView: View {
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            session.handleScene(isBackground: phase != .active)
-            if phase == .active, case .failed = session.phase {
-                Task { await session.retry() }
+            // Transient `.inactive` samples (Control Center, notification
+            // shade, app-switcher peek, system banners) are not lifecycle
+            // events; only a real background stay and its return are.
+            switch ShellConnectionLifecycle.sceneAction(for: phase, wasBackgrounded: session.isBackgrounded) {
+            case .enterBackground:
+                session.handleScene(isBackground: true)
+            case .enterForeground:
+                // handleScene(false) -> revalidateTransports already retries a
+                // `.failed` link after proving the route settled; a second
+                // concurrent `retry()` here raced it and re-blanked the shell.
+                session.handleScene(isBackground: false)
+            case .none:
+                break
             }
         }
         .alert(
@@ -99,7 +125,7 @@ struct WorkspaceView: View {
         ) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(session.conversations.errorMessage ?? session.projects.errorMessage ?? session.files.errorMessage ?? session.terminals.errorMessage ?? "")
+            Text(session.conversations.errorMessage ?? session.projects.errorMessage ?? session.files.errorMessage ?? "")
         }
     }
 
@@ -213,7 +239,10 @@ struct WorkspaceView: View {
     private var alertBinding: Binding<Bool> {
         Binding(
             get: {
-                session.conversations.errorMessage != nil
+                // Recovery windows heal their own failures; an alert raised
+                // mid-reconnect would only show a stale, already-fixed error.
+                guard !session.isRecovering else { return false }
+                return session.conversations.errorMessage != nil
                     || session.projects.errorMessage != nil
                     || session.files.errorMessage != nil
             },

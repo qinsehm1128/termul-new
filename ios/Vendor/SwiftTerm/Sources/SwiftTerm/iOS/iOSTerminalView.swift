@@ -148,6 +148,74 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
      */
     public var allowMouseReporting: Bool = true
 
+    /// When false, single-tapping an unfocused terminal delivers links,
+    /// application mouse clicks, and selection dismissal directly instead of
+    /// calling `becomeFirstResponder()`. Mobile hosts with an explicit keyboard
+    /// trigger set this to false so tapping inside a TUI does not raise the
+    /// software keyboard or reflow the PTY grid.
+    public var tapFocusesKeyboardWhenUnfocused: Bool = true
+
+    /// Subclass gate for forwarding mouse button/wheel events to the running
+    /// program (e.g. read-only remote links allow link taps and local scroll
+    /// without sending mouse input).
+    open func canSendMouseEvents() -> Bool { true }
+
+    /// True when the terminal is currently displaying the alternate screen
+    /// buffer (full-screen TUIs such as claude/qin-code/tmux/vim/less).
+    public var isShowingAlternateBuffer: Bool {
+        terminal.isDisplayBufferAlternate
+    }
+
+    /// True when a text selection is active on the canvas.
+    public var isSelectionActive: Bool {
+        selection.active
+    }
+
+    /// True when the normal buffer is manually scrolled away from the bottom.
+    public var isScrolledBackInHistory: Bool {
+        !terminal.isDisplayBufferAlternate && userScrolling
+    }
+
+    /// True when the normal buffer currently has scrollback lines above the viewport.
+    public var hasNormalScrollback: Bool {
+        !terminal.isDisplayBufferAlternate && maxDisplayRow(in: terminal.displayBuffer) > 0
+    }
+
+    /// Current terminal cell height in points (at least 1 pt).
+    public var cellHeightPoints: CGFloat {
+        max(1, cellDimension.height)
+    }
+
+    /// Disengage manual scroll freeze and jump to the latest bottom row.
+    public func scrollToLatestBottom() {
+        resetManualScrollTracking()
+        queuePendingDisplay()
+        terminalDelegate?.scrolled(source: self, position: scrollPosition)
+    }
+
+    /// Emit an xterm/SGR mouse wheel tick (button 4 = wheel up / 64, button 5 =
+    /// wheel down / 65) at the screen cell corresponding to `point` in view coordinates.
+    public func sendMouseWheel(up: Bool, at point: CGPoint) {
+        guard allowMouseReporting, canSendMouseEvents(), terminal.mouseMode != .off else { return }
+        let hit = calculateTapHit(point: point)
+        if let grid = hit.grid.toScreenCoordinate(from: terminal.displayBuffer) {
+            let flags = terminal.encodeButton(
+                button: up ? 4 : 5,
+                release: false,
+                shift: false,
+                meta: false,
+                control: false
+            )
+            terminal.sendEvent(
+                buttonFlags: flags,
+                x: grid.col,
+                y: grid.row,
+                pixelX: hit.pixels.col,
+                pixelY: hit.pixels.row
+            )
+        }
+    }
+
     /// Controls how link tracking resolves hovered links:
     /// `.explicit` = OSC 8 only, `.implicit` = explicit + implicit fallback, `.none` = off.
     public var linkReporting: LinkReporting = .implicit
@@ -1008,7 +1076,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 
     @objc func singleTap (_ gestureRecognizer: UITapGestureRecognizer)
     {
-        if isFirstResponder {
+        if isFirstResponder || !tapFocusesKeyboardWhenUnfocused {
             guard gestureRecognizer.view != nil else { return }
 
             if gestureRecognizer.state != .ended {
@@ -1021,7 +1089,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
                 return
             }
 
-            if allowMouseReporting && !shiftBypassesMouseReporting(for: gestureRecognizer) && terminal.mouseMode.sendButtonPress() {
+            if allowMouseReporting && canSendMouseEvents() && !shiftBypassesMouseReporting(for: gestureRecognizer) && terminal.mouseMode.sendButtonPress() {
                 sharedMouseEvent(gestureRecognizer: gestureRecognizer, release: false)
 
                 if terminal.mouseMode.sendButtonRelease() {
@@ -1040,7 +1108,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
                 }
                 if UIMenuController.shared.isMenuVisible {
                     UIMenuController.shared.hideMenu()
-                } else {
+                } else if isFirstResponder {
                     let location = gestureRecognizer.location(in: gestureRecognizer.view)
                     let tapLoc = calculateTapHit(gesture: gestureRecognizer).grid
                     let displayBuffer = terminal.displayBuffer
@@ -1072,7 +1140,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             return
         }
 
-        if allowMouseReporting && !shiftBypassesMouseReporting(for: gestureRecognizer) && terminal.mouseMode.sendButtonPress() {
+        if allowMouseReporting && canSendMouseEvents() && !shiftBypassesMouseReporting(for: gestureRecognizer) && terminal.mouseMode.sendButtonPress() {
             sharedMouseEvent(gestureRecognizer: gestureRecognizer, release: false)
             
             if terminal.mouseMode.sendButtonRelease() {
@@ -1097,7 +1165,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             return
         }
 
-        if allowMouseReporting && !shiftBypassesMouseReporting(for: gestureRecognizer) && terminal.mouseMode.sendButtonPress() {
+        if allowMouseReporting && canSendMouseEvents() && !shiftBypassesMouseReporting(for: gestureRecognizer) && terminal.mouseMode.sendButtonPress() {
             sharedMouseEvent(gestureRecognizer: gestureRecognizer, release: false)
 
             if terminal.mouseMode.sendButtonRelease() {
@@ -1311,7 +1379,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         panMouseGesture = gesture
     }
     
-    func disableMousePanGesture () {
+    public func disableMousePanGesture () {
         guard let gesture = panMouseGesture else {
             return
         }
@@ -1923,7 +1991,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         // true through the entire coast, so it fails to exclude momentum. It also
         // covers layout/system-driven offset changes (startup sizing, rotation,
         // keyboard insets, buffer shrink), which are never a manual scroll.
-        guard isTracking else {
+        guard isTracking || (userScrolling && isDecelerating) else {
             return
         }
 
