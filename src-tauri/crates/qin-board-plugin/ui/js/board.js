@@ -169,7 +169,9 @@
     function card(c, now) {
       const s = c.root;
       const info = stateInfo(s.state);
-      const title = s.title || (s.kind === 'teammate' ? (s.friendly_name || '子代理') : '未命名会话');
+      const taskAsTitle = !s.title && s.kind !== 'teammate' && !!s.current_task;
+      const title = s.title || (s.kind === 'teammate' ? (s.friendly_name || '子代理') : (s.current_task || '未命名会话'));
+      const taskText = taskAsTitle ? '' : (s.current_task || '');
       const meta = [s.model, relTime(s.last_active_ms, now)].filter(Boolean).join(' · ');
       return el('article', { class: 'card' + (c.active ? ' is-active' : '') },
         el('button', { type: 'button', class: 'card-main', on: { click: () => hooks.open(s) } },
@@ -178,8 +180,8 @@
             el('span', { class: 'card-title', text: title, title: title + '\n' + s.session_id }),
             s.kind === 'teammate' ? el('span', { class: 'chip', text: '子代理' }) : null,
             el('span', { class: 'card-meta', text: meta })),
-          (s.current_task || progress(s)) ? el('span', { class: 'card-task-row' },
-            el('span', { class: 'card-task', text: s.current_task || '', title: s.current_task || null }),
+          (taskText || progress(s)) ? el('span', { class: 'card-task-row' },
+            el('span', { class: 'card-task', text: taskText, title: taskText || null }),
             progress(s)) : null),
         c.subs.length ? el('div', { class: 'subs' }, c.subs.map((x) => subRow(x, now))) : null);
     }

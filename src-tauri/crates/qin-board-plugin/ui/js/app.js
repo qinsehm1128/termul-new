@@ -201,6 +201,7 @@
     $('filter-active').setAttribute('aria-pressed', prefs.filter === 'active' ? 'true' : 'false');
     $('page-chat').classList.toggle('todo-closed', !prefs.todoOpen);
     $('todo-toggle').setAttribute('aria-expanded', prefs.todoOpen ? 'true' : 'false');
+    $('todo-toggle').classList.toggle('is-active', prefs.todoOpen);
     board.setView({ filter: prefs.filter, dir: prefs.dir, projectPath });
   }
 
@@ -291,7 +292,8 @@
         perms: $('perms'), banner: $('chat-banner'), title: $('chat-title'), dir: $('chat-dir'), state: $('chat-state'),
         model: $('chat-model'), sub: $('chat-sub'), parent: $('chat-parent'), input: $('composer-input'),
         send: $('composer-send'), stop: $('composer-stop'), toBottom: $('to-bottom'),
-        todoList: $('todo-list'), todoCount: $('todo-count')
+        todoList: $('todo-list'), todoCount: $('todo-count'),
+        todoBadge: $('todo-toggle-count'), todoBar: $('todo-bar'), todoFill: $('todo-fill')
       },
       {
         api,

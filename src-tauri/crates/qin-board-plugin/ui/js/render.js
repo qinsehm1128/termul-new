@@ -100,8 +100,14 @@
   const HR = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
   const LIST_ITEM = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
   const QUOTE = /^\s{0,3}>\s?(.*)$/;
+  const TABLE_SEP = /^\s*\|?\s*:?-{2,}:?(?:\s*\|\s*:?-{2,}:?)+\s*\|?\s*$/;
 
-  /** Split markdown into blocks: p | h | code | list | quote | hr. An unclosed
+  function splitTableRow(line) {
+    const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+    return trimmed.split('|').map((c) => c.trim());
+  }
+
+  /** Split markdown into blocks: p | h | code | list | quote | table | hr. An unclosed
    * fence (common mid-stream) swallows the rest as code. */
   function parseBlocks(src) {
     const lines = String(src == null ? '' : src).replace(/\r\n?/g, '\n').split('\n');
@@ -134,6 +140,25 @@
       const heading = HEADING.exec(line);
       if (heading) { flush(); blocks.push({ type: 'h', level: heading[1].length, text: heading[2] }); i++; continue; }
       if (HR.test(line)) { flush(); blocks.push({ type: 'hr' }); i++; continue; }
+      if (line.indexOf('|') > -1 && i + 1 < lines.length && TABLE_SEP.test(lines[i + 1])) {
+        const headers = splitTableRow(line);
+        const aligns = splitTableRow(lines[i + 1]).map((cell) => {
+          const l = cell.startsWith(':');
+          const r = cell.endsWith(':');
+          return l && r ? 'center' : r ? 'right' : 'left';
+        });
+        if (headers.length >= 2 && headers.length === aligns.length) {
+          flush();
+          i += 2;
+          const rows = [];
+          while (i < lines.length && lines[i].trim() && lines[i].indexOf('|') > -1 && !FENCE_OPEN.exec(lines[i])) {
+            rows.push(splitTableRow(lines[i]));
+            i++;
+          }
+          blocks.push({ type: 'table', headers, aligns, rows });
+          continue;
+        }
+      }
       const first = LIST_ITEM.exec(line);
       if (first && (para.length === 0 || first[1].length === 0)) {
         flush();
@@ -263,14 +288,38 @@
     });
   }
 
+  function copyText(text, btn) {
+    const nav = root.navigator;
+    if (!nav || !nav.clipboard || !nav.clipboard.writeText) return;
+    nav.clipboard.writeText(text).then(() => {
+      btn.textContent = '已复制';
+      btn.dataset.copied = 'true';
+      root.setTimeout(() => { btn.textContent = '复制'; delete btn.dataset.copied; }, 1600);
+    }).catch(() => {});
+  }
+
   function blockNode(block) {
     switch (block.type) {
       case 'p': return el('p', null, inlineNodes(parseInline(block.text)));
       case 'h': return el('p', { class: 'md-h md-h' + block.level }, inlineNodes(parseInline(block.text)));
       case 'hr': return el('hr');
       case 'quote': return el('blockquote', null, inlineNodes(parseInline(block.text)));
-      case 'code':
-        return el('pre', { class: 'md-code', dataset: block.lang ? { lang: block.lang } : null }, el('code', { text: block.text }));
+      case 'code': {
+        const copyBtn = el('button', { type: 'button', class: 'md-copy', text: '复制', on: { click: () => copyText(block.text, copyBtn) } });
+        return el('div', { class: 'md-code-wrap' },
+          el('div', { class: 'md-code-bar' },
+            el('span', { class: 'md-code-lang', text: block.lang || 'code' }),
+            copyBtn),
+          el('pre', { class: 'md-code', dataset: block.lang ? { lang: block.lang } : null }, el('code', { text: block.text })));
+      }
+      case 'table': {
+        const thead = el('thead', null, el('tr', null, block.headers.map((h, idx) =>
+          el('th', { style: { textAlign: block.aligns[idx] || 'left' } }, inlineNodes(parseInline(h))))));
+        const tbody = el('tbody', null, block.rows.map((row) =>
+          el('tr', null, block.headers.map((_, idx) =>
+            el('td', { style: { textAlign: block.aligns[idx] || 'left' } }, inlineNodes(parseInline(row[idx] || '')))))));
+        return el('div', { class: 'md-table-wrap' }, el('table', { class: 'md-table' }, thead, tbody));
+      }
       case 'list': {
         const list = el(block.ordered ? 'ol' : 'ul', { start: block.ordered && block.start !== 1 ? block.start : null });
         block.items.forEach((item) => {
@@ -287,8 +336,10 @@
     let target = container;
     for (;;) {
       const last = target.lastElementChild;
-      if (!last || !/^(P|LI|UL|OL|PRE|CODE|BLOCKQUOTE)$/.test(last.tagName)) break;
-      target = last;
+      if (!last) break;
+      if (/^(P|LI|UL|OL|PRE|CODE|BLOCKQUOTE)$/.test(last.tagName) || (last.classList && last.classList.contains('md-code-wrap'))) {
+        target = last;
+      } else break;
     }
     target.appendChild(el('span', { class: 'caret', 'aria-hidden': 'true' }));
   }

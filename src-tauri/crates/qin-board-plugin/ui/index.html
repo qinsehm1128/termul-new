@@ -49,18 +49,20 @@
       <section class="chat-main">
         <header class="chat-head">
           <div class="chat-head-main">
-            <div class="chat-title-row">
-              <h1 id="chat-title" class="chat-title"></h1>
-              <span id="chat-sub" class="chip" hidden></span>
-            </div>
+            <h1 id="chat-title" class="chat-title"></h1>
+            <span id="chat-sub" class="chip" hidden></span>
+            <button id="chat-parent" class="link-btn" type="button" hidden></button>
+          </div>
+          <div class="chat-head-side">
             <div class="chat-meta">
               <span id="chat-state" class="chat-state"></span>
-              <span id="chat-dir" class="chat-dir"></span>
-              <span id="chat-model" class="chat-model" hidden></span>
-              <button id="chat-parent" class="link-btn" type="button" hidden></button>
+              <span id="chat-dir" class="chat-pill" hidden></span>
+              <span id="chat-model" class="chat-pill" hidden></span>
             </div>
+            <button id="todo-toggle" class="todo-toggle-btn" type="button" title="切换任务面板" aria-label="切换任务面板" aria-expanded="true" aria-controls="todo-panel">
+              <span>Todo</span><span id="todo-toggle-count" class="todo-badge" hidden></span>
+            </button>
           </div>
-          <button id="todo-toggle" class="icon-btn todo-toggle" type="button" title="todo" aria-label="切换 todo 面板" aria-expanded="true" aria-controls="todo-panel">☰</button>
         </header>
         <div id="perms" class="perms" hidden></div>
         <div id="chat-banner" class="chat-banner" role="status" hidden></div>
@@ -71,10 +73,10 @@
             <div id="chat-empty" class="chat-empty" hidden></div>
           </div>
         </div>
-        <button id="to-bottom" class="to-bottom" type="button" hidden>回到底部 ↓</button>
+        <button id="to-bottom" class="to-bottom" type="button" hidden>↓ 最新消息</button>
         <footer class="composer">
           <div class="composer-box">
-            <textarea id="composer-input" rows="1" placeholder="发消息…" aria-label="消息" disabled></textarea>
+            <textarea id="composer-input" rows="1" placeholder="输入消息…" aria-label="消息" disabled></textarea>
             <div class="composer-actions">
               <button id="composer-stop" class="btn danger" type="button" hidden>停止</button>
               <button id="composer-send" class="btn primary" type="button" disabled>发送</button>
@@ -83,7 +85,14 @@
         </footer>
       </section>
       <aside id="todo-panel" class="todo-panel" aria-label="todo">
-        <div class="todo-head"><span>Todo</span><span class="todo-head-right"><span id="todo-count" class="todo-count"></span><button id="todo-close" class="icon-btn todo-close" type="button" title="收起" aria-label="收起 todo 面板">×</button></span></div>
+        <div class="todo-head">
+          <span>Todo</span>
+          <span class="todo-head-right">
+            <span id="todo-count" class="todo-count"></span>
+            <button id="todo-close" class="icon-btn todo-close" type="button" title="收起" aria-label="收起 todo 面板">×</button>
+          </span>
+        </div>
+        <div id="todo-bar" class="todo-bar" hidden><span id="todo-fill" class="todo-fill"></span></div>
         <ol id="todo-list" class="todo-list"></ol>
       </aside>
     </main>
