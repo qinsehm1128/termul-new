@@ -13,6 +13,7 @@
     <script src="./js/api.js" defer></script>
     <script src="./js/refresh.js" defer></script>
     <script src="./js/board.js" defer></script>
+    <script src="./js/slash.js" defer></script>
     <script src="./js/chat.js" defer></script>
     <script src="./js/app.js" defer></script>
   </head>
@@ -75,11 +76,15 @@
         </div>
         <button id="to-bottom" class="to-bottom" type="button" hidden>↓ 最新消息</button>
         <footer class="composer">
-          <div class="composer-box">
-            <textarea id="composer-input" rows="1" placeholder="输入消息…" aria-label="消息" disabled></textarea>
-            <div class="composer-actions">
-              <button id="composer-stop" class="btn danger" type="button" hidden>停止</button>
-              <button id="composer-send" class="btn primary" type="button" disabled>发送</button>
+          <div class="composer-wrap">
+            <div id="slash-menu" class="slash-menu" role="listbox" aria-label="斜线命令" hidden></div>
+            <div class="composer-box">
+              <button id="composer-slash" class="slash-trigger" type="button" title="斜线命令与技能 (/)" aria-label="斜线命令" disabled>/</button>
+              <textarea id="composer-input" rows="1" placeholder="输入消息或 / 调用命令与技能…" aria-label="消息" disabled></textarea>
+              <div class="composer-actions">
+                <button id="composer-stop" class="btn danger" type="button" hidden>停止</button>
+                <button id="composer-send" class="btn primary" type="button" disabled>发送</button>
+              </div>
             </div>
           </div>
         </footer>

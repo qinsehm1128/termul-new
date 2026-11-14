@@ -104,6 +104,15 @@ impl Session {
         let chan = message["chan"].as_str().map(str::to_owned);
         match (message["op"].as_str(), chan) {
             (Some("ping"), _) => self.send(json!({"op":"pong"})),
+            (Some("list_slash"), _) => {
+                let catalog = super::skills::list_slash_catalog(message["working_dir"].as_str());
+                self.send(json!({
+                    "op": "slash_items",
+                    "id": message["id"],
+                    "skills": catalog["skills"],
+                    "commands": catalog["commands"],
+                }))
+            }
             (Some("open"), Some(chan)) => {
                 self.drop_channel(&chan);
                 self.start_open(chan);

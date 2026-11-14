@@ -286,11 +286,13 @@
         restart: () => { void restartService(); },
         retry: () => { problem = null; refreshNow(); }
       });
+    const toggleTodo = () => { prefs.todoOpen = !prefs.todoOpen; applyPrefs(); savePrefs(); };
     chat = QB.chat.createChat(
       {
         scroll: $('chat-scroll'), list: $('chat-list'), empty: $('chat-empty'), thinking: $('chat-thinking'),
         perms: $('perms'), banner: $('chat-banner'), title: $('chat-title'), dir: $('chat-dir'), state: $('chat-state'),
         model: $('chat-model'), sub: $('chat-sub'), parent: $('chat-parent'), input: $('composer-input'),
+        slashMenu: $('slash-menu'), slashBtn: $('composer-slash'),
         send: $('composer-send'), stop: $('composer-stop'), toBottom: $('to-bottom'),
         todoList: $('todo-list'), todoCount: $('todo-count'),
         todoBadge: $('todo-toggle-count'), todoBar: $('todo-bar'), todoFill: $('todo-fill')
@@ -301,7 +303,8 @@
         findSession: (id) => board.find(id),
         isConnected: () => transport.state === 'open',
         notify: toast,
-        turnEnded: () => { void todoRefresher.trigger('turn'); }
+        turnEnded: () => { void todoRefresher.trigger('turn'); },
+        toggleTodo
       });
 
     $('back').addEventListener('click', backToBoard);
@@ -311,7 +314,7 @@
     const setFilter = (f) => { prefs.filter = f; applyPrefs(); savePrefs(); };
     $('filter-all').addEventListener('click', () => setFilter('all'));
     $('filter-active').addEventListener('click', () => setFilter('active'));
-    $('todo-toggle').addEventListener('click', () => { prefs.todoOpen = !prefs.todoOpen; applyPrefs(); savePrefs(); });
+    $('todo-toggle').addEventListener('click', toggleTodo);
     $('todo-close').addEventListener('click', () => { prefs.todoOpen = false; applyPrefs(); savePrefs(); });
     doc.addEventListener('keydown', (e) => { if (e.key === 'Escape' && page === 'chat' && doc.activeElement !== $('composer-input')) backToBoard(); });
 

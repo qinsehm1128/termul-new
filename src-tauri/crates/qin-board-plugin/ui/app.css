@@ -227,8 +227,8 @@ body[data-page="board"] .back { display: none; }
 .stale .empty-actions { margin-top: 0; }
 
 /* ---------- chat layout & header ---------- */
-.chat { position: relative; }
-.chat-main { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--page); }
+.chat { position: relative; overflow: hidden; }
+.chat-main { position: relative; flex: 1; min-width: 0; overflow: hidden; display: flex; flex-direction: column; background: var(--page); }
 .chat-head {
   flex: none;
   display: flex;
@@ -348,13 +348,15 @@ body[data-page="board"] .back { display: none; }
 .chat-banner { flex: none; padding: 6px 18px; font-size: 12px; color: var(--muted); background: var(--soft); text-align: center; }
 
 /* ---------- conversation flow ---------- */
-.chat-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.chat-scroll { flex: 1; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
 .chat-flow {
+  width: 100%;
   max-width: 780px;
+  min-width: 0;
   margin: 0 auto;
   padding: 26px clamp(16px, 4vw, 36px) 24px;
 }
-.chat-list { display: flex; flex-direction: column; gap: 18px; }
+.chat-list { display: flex; flex-direction: column; gap: 18px; min-width: 0; width: 100%; }
 .chat-empty { color: var(--muted); text-align: center; padding: 80px 0 32px; font-size: 13.5px; }
 
 .thinking {
@@ -413,11 +415,15 @@ body[data-page="board"] .back { display: none; }
 }
 .notice {
   align-self: center;
+  max-width: 100%;
   padding: 3px 12px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--soft) 45%, transparent);
   font-size: 11.5px;
   color: var(--muted);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  text-align: center;
 }
 .notice[data-tone="error"] {
   color: var(--danger);
@@ -680,6 +686,39 @@ body[data-page="board"] .back { display: none; }
 }
 .io.is-error { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--line-soft)); }
 .io-clip { margin-top: 4px; font-size: 11px; color: var(--muted); }
+.io-more {
+  margin-top: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line-soft);
+  background: color-mix(in srgb, var(--soft) 55%, transparent);
+  font-size: 11px;
+  color: var(--accent);
+}
+.io-more:hover { background: var(--soft); }
+.batch-subs {
+  margin: 0 0 6px;
+  padding-left: 20px;
+  font-size: 12px;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.data {
+  background: color-mix(in srgb, var(--soft) 28%, transparent);
+  border-style: dashed;
+}
+.data .fold-title {
+  font-family: inherit;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--soft) 65%, transparent);
+}
+.data-meta {
+  margin: 4px 0 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
 .reasoning { background: transparent; border-style: dashed; }
 .reasoning .fold-title { background: transparent; padding: 0; font-family: inherit; font-weight: 500; color: var(--muted); }
 .reasoning-text {
@@ -693,7 +732,7 @@ body[data-page="board"] .back { display: none; }
   padding-top: 8px;
 }
 
-/* ---------- composer ---------- */
+/* ---------- composer & slash command menu ---------- */
 .to-bottom {
   position: absolute;
   left: 50%;
@@ -713,19 +752,104 @@ body[data-page="board"] .back { display: none; }
   flex: none;
   padding: 6px clamp(16px, 4vw, 36px) 16px;
 }
-.composer-box {
+.composer-wrap {
+  position: relative;
   max-width: 780px;
   margin: 0 auto;
+}
+.slash-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 8px);
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 6px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: 0 14px 40px rgb(0 0 0 / .36);
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.slash-sec {
+  padding: 6px 10px 3px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: .02em;
+}
+.slash-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 32px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  min-width: 0;
+  transition: background .1s;
+}
+.slash-item:hover,
+.slash-item.is-active {
+  background: color-mix(in srgb, var(--accent) 14%, var(--soft));
+}
+.slash-name {
+  flex: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--ink);
+}
+.slash-item[data-kind="skill"] .slash-name { color: var(--accent); }
+.slash-desc {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 12px;
+}
+.slash-badge {
+  flex: none;
+  margin-left: auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--soft) 80%, transparent);
+  color: var(--muted);
+  font-size: 10.5px;
+}
+.composer-box {
   display: flex;
   align-items: flex-end;
-  gap: 10px;
-  padding: 9px 10px 9px 16px;
+  gap: 8px;
+  padding: 8px 10px 8px 12px;
   border-radius: var(--radius-xl);
   border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
   background: var(--surface);
   box-shadow: 0 6px 24px rgb(0 0 0 / .16);
   transition: border-color .15s, box-shadow .15s;
 }
+.slash-trigger {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin-bottom: 2px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--soft) 70%, transparent);
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 700;
+  font-size: 13px;
+  transition: background .12s, color .12s;
+}
+.slash-trigger:not(:disabled):hover { background: var(--soft); color: var(--ink); }
 .composer-box:focus-within {
   border-color: color-mix(in srgb, var(--ring) 65%, var(--line));
   box-shadow: 0 8px 28px rgb(0 0 0 / .22);

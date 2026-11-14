@@ -1,13 +1,14 @@
 /* qin-board · chat: the conversation page.
  *  - createModel(): pure reducer from history + stream events to display items
  *    (runs under node).
- *  - createChat(): view + session lifecycle (peek → open s:<id> → attach →
- *    get_history), grouped activity timeline, composer, permission banner, todo panel.
+ *  - createChat(): view + session lifecycle, grouped activity timeline, folded
+ *    structured data cards, `/` slash-command & skill menu, composer, todo panel.
  * Classic script; exports QB.chat. */
 (function (root) {
   'use strict';
   const QB = (root.QB = root.QB || {});
   const R = () => QB.render;
+  const S = () => QB.slash;
 
   const TOOL_OUTPUT_MAX = 4000;
   const BUSY_STATUS = /generat|stream|tool|think|running|busy|working|processing/i;
@@ -33,19 +34,27 @@
     return phase.trim();
   }
 
+  function extractBlocks(role, text) {
+    if (QB.slash && QB.slash.extractMessageBlocks) return QB.slash.extractMessageBlocks(role, text);
+    if (!text || !text.trim()) return [];
+    if (role === 'user') return [{ kind: 'user', text, pending: false }];
+    if (role === 'assistant') return [{ kind: 'assistant', text, streaming: false }];
+    return [{ kind: 'notice', text: text.trim(), tone: 'muted' }];
+  }
+
   // ======================= pure model =======================
   function createModel() {
     let seq = 0;
     const s = {
       items: [], busy: false, permissions: [], status: null, statusDetail: null,
-      phase: null, bgTask: null, model: null, title: null, rev: 0
+      phase: null, bgTask: null, model: null, effort: null, title: null, rev: 0
     };
     let curText = null;
     let curReason = null;
     let lastLiveTool = null;
     let pendingInputDelta = '';
     let tools = new Map();
-    let liveTail = []; // items created by live events during the current turn
+    let liveTail = [];
 
     const touch = (item) => { item.rev = (item.rev || 0) + 1; s.rev += 1; return item; };
     function add(item, live) {
@@ -98,7 +107,7 @@
         t = add({
           kind: 'tool', callId: key, name: name || '工具',
           input: '', output: null, error: null, duration: null,
-          status: 'pending', open: false
+          status: 'pending', open: false, fullOutput: false
         }, live);
         if (key) tools.set(key, t);
       } else if (name && (t.name === '工具' || t.name !== name)) {
@@ -130,27 +139,7 @@
       list.forEach((m, idx) => {
         if (!m || typeof m !== 'object') return;
         const text = typeof m.content === 'string' ? m.content : '';
-        if (m.role === 'user') {
-          if (text.trim()) add({ kind: 'user', text, pending: false });
-        } else if (m.role === 'system') {
-          if (text.trim()) add({ kind: 'notice', text: text.trim(), tone: 'muted' });
-        } else if (m.role === 'assistant') {
-          if (text.trim()) add({ kind: 'assistant', text, streaming: false });
-          const calls = Array.isArray(m.tool_calls) ? m.tool_calls : [];
-          calls.forEach((raw) => {
-            const ref = String(raw == null ? '' : raw).trim();
-            if (!ref) return;
-            if (toolMsgIds.has(ref)) {
-              // ID-referenced tool call: the subsequent role:'tool' message fills details in place.
-              const t = toolItem(ref, null, false);
-              t.status = 'done';
-            } else if (idx > lastToolIdx && !keep.some((it) => it.kind === 'tool')) {
-              // Name-only tool_calls on an incomplete trailing assistant message without tool results yet.
-              const t = toolItem(null, ref, false);
-              t.status = s.busy ? 'running' : 'done';
-            }
-          });
-        } else if (m.role === 'tool') {
+        if (m.role === 'tool') {
           const data = m.tool_data || {};
           const parsed = splitToolTiming(text);
           const t = toolItem(data.id ? String(data.id) : null, data.name || 'tool', false);
@@ -158,6 +147,25 @@
           t.output = parsed.body;
           if (parsed.duration) t.duration = parsed.duration;
           t.status = 'done';
+          return;
+        }
+
+        const blocks = extractBlocks(m.role, text);
+        blocks.forEach((blk) => add(blk, false));
+
+        if (m.role === 'assistant') {
+          const calls = Array.isArray(m.tool_calls) ? m.tool_calls : [];
+          calls.forEach((raw) => {
+            const ref = String(raw == null ? '' : raw).trim();
+            if (!ref) return;
+            if (toolMsgIds.has(ref)) {
+              const t = toolItem(ref, null, false);
+              t.status = 'done';
+            } else if (idx > lastToolIdx && !keep.some((it) => it.kind === 'tool')) {
+              const t = toolItem(null, ref, false);
+              t.status = s.busy ? 'running' : 'done';
+            }
+          });
         }
       });
 
@@ -174,6 +182,14 @@
       s.rev += 1;
     }
 
+    function clearItems() {
+      endTurn();
+      s.items = [];
+      tools = new Map();
+      liveTail = [];
+      s.rev += 1;
+    }
+
     function addUser(text, opts) {
       const soft = !!(opts && opts.soft);
       if (!soft) { endText(); endReason(); lastLiveTool = null; pendingInputDelta = ''; }
@@ -181,7 +197,12 @@
       return add({ kind: 'user', text, pending: true, soft }, true);
     }
 
-    function notice(text, tone) { endText(); return add({ kind: 'notice', text, tone: tone || 'info' }, true); }
+    function notice(text, tone) {
+      endText();
+      const blocks = extractBlocks('system', String(text == null ? '' : text));
+      if (blocks.length === 1 && blocks[0].kind === 'data') return add(blocks[0], true);
+      return add({ kind: 'notice', text: String(text == null ? '' : text), tone: tone || 'info' }, true);
+    }
 
     /** Apply one stream event. Returns true when something visible changed. */
     function apply(ev) {
@@ -234,7 +255,6 @@
           const key = typeof ev.call_id === 'string' && ev.call_id ? ev.call_id : null;
           const t = key ? toolItem(key, null, true) : lastLiveTool;
           if (!t) {
-            // Attached mid-argument-stream before tool_start: hold until tool_exec / tool_done names it.
             pendingInputDelta += delta;
             s.busy = true;
             return false;
@@ -296,7 +316,11 @@
           if (mine) { mine.pending = false; touch(mine); return true; }
           if (content.trim()) {
             endText();
-            add({ kind: 'user', text: content, pending: false, soft: true, role: ev.display_role || null }, true);
+            const blocks = extractBlocks('user', content);
+            blocks.forEach((blk) => {
+              if (blk.kind === 'user') { blk.soft = true; blk.role = ev.display_role || null; }
+              add(blk, true);
+            });
           }
           return true;
         }
@@ -317,9 +341,15 @@
           s.rev += 1;
           return true;
         case 'model_info':
-        case 'runtime_info':
-          if (ev.model) { s.model = String(ev.model); s.rev += 1; return true; }
-          return false;
+        case 'model_changed':
+        case 'runtime_info': {
+          let changed = false;
+          if (ev.model) { s.model = String(ev.model); changed = true; }
+          if (ev.reasoning_effort !== undefined) { s.effort = ev.reasoning_effort || null; changed = true; }
+          if (ev.effort !== undefined) { s.effort = ev.effort || null; changed = true; }
+          if (changed) s.rev += 1;
+          return changed;
+        }
         case 'session_renamed':
           s.title = ev.display_title || ev.title || s.title;
           s.rev += 1;
@@ -352,13 +382,22 @@
       if (s.permissions.length !== before) s.rev += 1;
     }
 
-    return { state: s, apply, loadHistory, addUser, notice, resolvePermission, endTurn };
+    return { state: s, apply, loadHistory, clearItems, addUser, notice, resolvePermission, endTurn };
   }
 
-  // ======================= view =======================
+  // ======================= view helpers =======================
   function prettyJson(text) {
     if (typeof text !== 'string' || !text.trim()) return '';
     try { return JSON.stringify(JSON.parse(text), null, 2); } catch (_) { return text; }
+  }
+
+  function prettyMaybeJson(text) {
+    if (typeof text !== 'string') return '';
+    const t = text.trim();
+    if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
+      try { return JSON.stringify(JSON.parse(t), null, 2); } catch (_) { return text; }
+    }
+    return text;
   }
 
   function compactArg(val, key) {
@@ -370,12 +409,26 @@
     return line;
   }
 
-  /** One-line summary of a tool call's input: supports both complete JSON and mid-stream partial JSON. */
+  function parseBatchSubCalls(input) {
+    if (typeof input !== 'string' || !input) return [];
+    try {
+      const obj = JSON.parse(input);
+      if (obj && Array.isArray(obj.tool_calls)) return obj.tool_calls.filter((c) => c && typeof c === 'object');
+    } catch (_) { /* partial JSON */ }
+    return [];
+  }
+
   function toolSummary(input) {
     if (typeof input !== 'string' || !input) return '';
     let obj = null;
     try { obj = JSON.parse(input); } catch (_) { obj = null; }
     if (obj && typeof obj === 'object') {
+      if (Array.isArray(obj.tool_calls) && obj.tool_calls.length) {
+        const names = obj.tool_calls.map((c) => c && c.tool).filter(Boolean);
+        const uniq = Array.from(new Set(names)).slice(0, 3).join(', ');
+        const prefix = typeof obj.intent === 'string' && obj.intent.trim() ? obj.intent.trim() + ' · ' : '';
+        return prefix + '并行 ' + obj.tool_calls.length + ' 项' + (uniq ? ' (' + uniq + ')' : '');
+      }
       for (const key of PARTIAL_KEYS) {
         if (typeof obj[key] === 'string' && obj[key].trim()) return compactArg(obj[key], key);
       }
@@ -417,7 +470,23 @@
       };
     }
     const counts = new Map();
-    tools.forEach((t) => { const n = t.name || 'tool'; counts.set(n, (counts.get(n) || 0) + 1); });
+    let totalOps = 0;
+    tools.forEach((t) => {
+      if (t.name === 'batch') {
+        const subs = parseBatchSubCalls(t.input);
+        if (subs.length) {
+          subs.forEach((sc) => {
+            const sn = sc.tool || 'tool';
+            counts.set(sn, (counts.get(sn) || 0) + 1);
+            totalOps += 1;
+          });
+          return;
+        }
+      }
+      const n = t.name || 'tool';
+      counts.set(n, (counts.get(n) || 0) + 1);
+      totalOps += 1;
+    });
     const top = Array.from(counts.entries())
       .sort((a, b) => b[1] - a[1])
       .slice(0, 4)
@@ -426,32 +495,40 @@
     const parts = [];
     if (reasons.length) parts.push('思考 ' + reasons.length + ' 次');
     if (top) parts.push(top);
+    const stepCount = totalOps > tools.length ? (tools.length + ' 步工具（共 ' + totalOps + ' 项）') : (tools.length + ' 步工具');
     return {
       tone: errors ? 'fail' : 'done',
-      title: tools.length ? ('已执行 ' + tools.length + ' 步工具') : ('已完成思考'),
+      title: tools.length ? ('已执行 ' + stepCount) : '已完成思考',
       sub: parts.join(' · '),
       badge: errors ? (errors + ' 失败') : '',
       errors
     };
   }
 
+  // ======================= chat view =======================
   function createChat(els, hooks) {
     const { el, dot, renderMarkdown, basename, stateInfo, truncate, message, shortId } = R();
     const api = hooks.api;
     let model = createModel();
-    let meta = null;         // BoardSession (or a stub {session_id})
-    let gen = 0;             // invalidates async work of a previous session
-    let off = null;          // stream listener cleanup
-    let link = 'idle';       // idle | opening | attached | lost | error
+    let meta = null;
+    let gen = 0;
+    let off = null;
+    let link = 'idle';
     let linkError = null;
     let historyLoaded = false;
     let todos = null;
     let todoError = null;
     let follow = true;
     let raf = 0;
-    const nodes = new Map();     // item id -> {rev, node}
-    const groups = new Map();    // group key -> {sig, node, body}
-    const groupOpen = new Map(); // group key -> boolean
+    const nodes = new Map();
+    const groups = new Map();
+    const groupOpen = new Map();
+
+    // Slash menu state
+    let slashCatalog = { models: [], currentModel: null, currentEffort: null, skills: [], commands: [] };
+    let slashIndex = 0;
+    let slashDismissed = false;
+    let slashFlat = []; // [{item, node}]
 
     // ---------- items ----------
     function userNode(item) {
@@ -467,22 +544,52 @@
       const d = el('details', { class: 'fold reasoning', open: item.open },
         el('summary', null,
           dot(item.done ? 'idle' : 'run'),
-          el('span', { class: 'fold-title', text: label })),
+          el('span', { class: 'fold-title', text: label }),
+          item.text ? el('span', { class: 'fold-sub', text: item.text.split('\n')[0].trim() }) : null),
         el('div', { class: 'fold-body reasoning-text', text: item.text }));
       d.addEventListener('toggle', () => { item.open = d.open; });
       return d;
+    }
+    function expandablePre(rawText, isErr) {
+      const formatted = prettyMaybeJson(rawText);
+      const clipped = formatted.length > TOOL_OUTPUT_MAX;
+      let expanded = false;
+      const pre = el('pre', { class: 'io' + (isErr ? ' is-error' : ''), text: clipped ? formatted.slice(0, TOOL_OUTPUT_MAX) : formatted });
+      if (!clipped) return [pre];
+      const moreBtn = el('button', {
+        type: 'button',
+        class: 'io-more',
+        text: '展开完整内容（共 ' + formatted.length + ' 字符）',
+        on: {
+          click: () => {
+            expanded = !expanded;
+            pre.textContent = expanded ? formatted : formatted.slice(0, TOOL_OUTPUT_MAX);
+            moreBtn.textContent = expanded ? '收起长文本' : ('展开完整内容（共 ' + formatted.length + ' 字符）');
+          }
+        }
+      });
+      return [pre, moreBtn];
     }
     function toolNode(item) {
       const summary = toolSummary(item.input);
       const out = item.error || item.output;
       const body = [];
+      if (item.name === 'batch') {
+        const subs = parseBatchSubCalls(item.input);
+        if (subs.length) {
+          body.push(el('div', { class: 'io-label', text: '并行子调用 (' + subs.length + ')' }),
+            el('ol', { class: 'batch-subs' }, subs.map((sc) => {
+              const subSum = sc.intent || sc.file_path || sc.path || sc.command || sc.query || '';
+              return el('li', null,
+                el('code', { class: 'md-icode', text: sc.tool || 'tool' }),
+                subSum ? el('span', { text: ' ' + subSum }) : null);
+            })));
+        }
+      }
       const input = prettyJson(item.input);
-      if (input) body.push(el('div', { class: 'io-label', text: '参数' }), el('pre', { class: 'io', text: input }));
+      if (input) body.push(el('div', { class: 'io-label', text: '参数' }), ...expandablePre(input, false));
       if (out != null && out !== '') {
-        const clipped = out.length > TOOL_OUTPUT_MAX;
-        body.push(el('div', { class: 'io-label', text: item.error ? '错误' : '结果' }),
-          el('pre', { class: 'io' + (item.error ? ' is-error' : ''), text: clipped ? out.slice(0, TOOL_OUTPUT_MAX) : out }));
-        if (clipped) body.push(el('div', { class: 'io-clip', text: '已截断，共 ' + out.length + ' 字符' }));
+        body.push(el('div', { class: 'io-label', text: item.error ? '错误' : '结果' }), ...expandablePre(out, !!item.error));
       }
       if (!body.length) body.push(el('div', { class: 'io-clip', text: item.status === 'done' ? '已完成（无文本输出）' : '等待工具返回…' }));
       const stateText = item.status === 'done' ? (item.duration || '') : (TOOL_STATUS[item.status] || '');
@@ -496,6 +603,20 @@
       d.addEventListener('toggle', () => { item.open = d.open; });
       return d;
     }
+    function dataNode(item) {
+      const body = [];
+      if (item.meta) body.push(el('div', { class: 'data-meta', text: item.meta }));
+      if (item.detail) body.push(...expandablePre(item.detail, false));
+      const d = el('details', { class: 'fold data', open: !!item.open, dataset: { subtype: item.subtype || 'system' } },
+        el('summary', null,
+          dot('idle'),
+          el('span', { class: 'fold-title', text: item.label || '上下文' }),
+          item.summary ? el('span', { class: 'fold-sub', title: item.summary, text: item.summary }) : null,
+          item.badge ? el('span', { class: 'fold-state', text: item.badge }) : null),
+        el('div', { class: 'fold-body' }, body));
+      d.addEventListener('toggle', () => { item.open = d.open; });
+      return d;
+    }
     function noticeNode(item) {
       return el('div', { class: 'notice', dataset: { tone: item.tone }, text: item.text });
     }
@@ -505,6 +626,7 @@
         case 'assistant': return assistantNode(item);
         case 'reasoning': return reasoningNode(item);
         case 'tool': return toolNode(item);
+        case 'data': return dataNode(item);
         default: return noticeNode(item);
       }
     }
@@ -568,6 +690,21 @@
       return sc.scrollHeight - sc.scrollTop - sc.clientHeight < 56;
     }
 
+    function setAllFolded(openState) {
+      model.state.items.forEach((it) => {
+        if (it.kind === 'tool' || it.kind === 'reasoning' || it.kind === 'data') {
+          it.open = openState;
+          it.rev = (it.rev || 0) + 1;
+        }
+      });
+      groups.forEach((g, key) => {
+        groupOpen.set(key, openState);
+        g.node.open = openState;
+      });
+      els.list.querySelectorAll('details.fold').forEach((d) => { d.open = openState; });
+      schedule();
+    }
+
     function drawList() {
       const st = model.state;
       const list = els.list;
@@ -615,7 +752,7 @@
       if (!st.items.length) {
         if (!historyLoaded && (link === 'opening' || link === 'idle')) placeholder = '正在同步对话…';
         else if (link === 'error') placeholder = null;
-        else placeholder = '发送消息开始对话';
+        else placeholder = '输入消息或输入 / 调用斜线命令与技能';
       }
       els.empty.hidden = !placeholder;
       els.empty.textContent = placeholder || '';
@@ -673,6 +810,12 @@
       return '未命名会话';
     }
 
+    function isBuiltinSlashInput(value) {
+      if (!QB.slash) return false;
+      const q = QB.slash.parseSlashQuery(value);
+      return !!(q && QB.slash.findBuiltinCommand(q.cmd));
+    }
+
     function drawHeader() {
       const st = model.state;
       const m = meta || {};
@@ -705,9 +848,12 @@
       }
       const canSend = link === 'attached';
       els.input.disabled = !canSend;
-      els.input.placeholder = canSend ? (st.busy ? '补充指令，Enter 立即插入当前回合…' : '输入消息，Enter 发送，Shift+Enter 换行…') : (link === 'opening' ? '正在连接会话…' : '会话未连接');
+      if (els.slashBtn) els.slashBtn.disabled = !canSend;
+      els.input.placeholder = canSend
+        ? (st.busy ? '补充指令（Enter 插入）或输入 / 调用命令…' : '输入消息，或输入 / 调用命令与技能…')
+        : (link === 'opening' ? '正在连接会话…' : '会话未连接');
       els.send.disabled = !canSend || !els.input.value.trim();
-      els.send.textContent = st.busy ? '追加' : '发送';
+      els.send.textContent = isBuiltinSlashInput(els.input.value) ? '执行' : (st.busy ? '追加' : '发送');
       els.stop.hidden = !st.busy;
       els.stop.disabled = !canSend;
       if (link === 'error' && linkError) { els.banner.hidden = false; els.banner.textContent = linkError; }
@@ -752,6 +898,292 @@
       }));
     }
 
+    // ---------- slash menu ----------
+    function closeSlashMenu() {
+      slashFlat = [];
+      if (els.slashMenu) {
+        els.slashMenu.hidden = true;
+        els.slashMenu.replaceChildren();
+      }
+    }
+
+    function setInputValue(next) {
+      els.input.value = next;
+      autosize();
+      els.send.disabled = link !== 'attached' || !els.input.value.trim();
+      els.send.textContent = isBuiltinSlashInput(els.input.value) ? '执行' : (model.state.busy ? '追加' : '发送');
+      els.input.focus();
+      try { els.input.setSelectionRange(next.length, next.length); } catch (_) { /* jsdom */ }
+    }
+
+    function highlightSlash(nextIdx) {
+      if (!slashFlat.length) return;
+      slashIndex = ((nextIdx % slashFlat.length) + slashFlat.length) % slashFlat.length;
+      slashFlat.forEach((entry, idx) => {
+        const active = idx === slashIndex;
+        entry.node.classList.toggle('is-active', active);
+        entry.node.setAttribute('aria-selected', active ? 'true' : 'false');
+        if (active && entry.node.scrollIntoView) {
+          try { entry.node.scrollIntoView({ block: 'nearest' }); } catch (_) { /* noop */ }
+        }
+      });
+    }
+
+    function drawSlashMenu() {
+      if (!els.slashMenu || !QB.slash || link !== 'attached') { closeSlashMenu(); return; }
+      if (slashDismissed) { closeSlashMenu(); return; }
+      const q = S().parseSlashQuery(els.input.value);
+      if (!q) { closeSlashMenu(); return; }
+      const ctx = {
+        models: slashCatalog.models,
+        currentModel: model.state.model || slashCatalog.currentModel || (meta && meta.model) || '',
+        currentEffort: model.state.effort || slashCatalog.currentEffort || '',
+        skills: slashCatalog.skills,
+        commands: slashCatalog.commands
+      };
+      const sections = S().buildSlashSections(q, ctx);
+      if (!sections.length) { closeSlashMenu(); return; }
+
+      slashFlat = [];
+      const frag = [];
+      sections.forEach((sec) => {
+        frag.push(el('div', { class: 'slash-sec', text: sec.heading }));
+        sec.items.forEach((item) => {
+          const idx = slashFlat.length;
+          const row = el('button', {
+            type: 'button',
+            class: 'slash-item',
+            role: 'option',
+            'aria-selected': 'false',
+            dataset: { kind: item.kind },
+            on: {
+              mouseenter: () => highlightSlash(idx),
+              mousedown: (e) => e.preventDefault(), // keep textarea focused
+              click: () => chooseSlashItem(item, false)
+            }
+          },
+            el('span', { class: 'slash-name', text: item.label }),
+            item.desc ? el('span', { class: 'slash-desc', text: item.desc }) : null,
+            item.badge ? el('span', { class: 'slash-badge', text: item.badge }) : null
+          );
+          slashFlat.push({ item, node: row });
+          frag.push(row);
+        });
+      });
+
+      els.slashMenu.replaceChildren(...frag);
+      els.slashMenu.hidden = false;
+      highlightSlash(Math.min(slashIndex, slashFlat.length - 1));
+    }
+
+    function chooseSlashItem(item, viaTab) {
+      if (!item || !meta) return;
+      const id = meta.session_id;
+      if (item.kind === 'model') {
+        slashDismissed = true;
+        setInputValue('');
+        closeSlashMenu();
+        void runModelSwitch(id, item.value);
+        return;
+      }
+      if (item.kind === 'effort') {
+        slashDismissed = true;
+        setInputValue('');
+        closeSlashMenu();
+        void runEffortSwitch(id, item.value);
+        return;
+      }
+      if (item.kind === 'work') {
+        slashDismissed = true;
+        setInputValue(item.value);
+        closeSlashMenu();
+        if (!viaTab) submit();
+        return;
+      }
+      if (item.kind === 'command') {
+        if (item.takesArg || viaTab) {
+          slashDismissed = false;
+          slashIndex = 0;
+          setInputValue('/' + item.name + (item.takesArg ? ' ' : ''));
+          drawSlashMenu();
+          return;
+        }
+        slashDismissed = true;
+        setInputValue('/' + item.name);
+        closeSlashMenu();
+        submit();
+        return;
+      }
+      if (item.kind === 'skill') {
+        const target = '/' + item.name;
+        const cur = els.input.value.trim();
+        if (!viaTab && cur === target) {
+          slashDismissed = true;
+          closeSlashMenu();
+          submit();
+          return;
+        }
+        slashDismissed = true;
+        setInputValue(target + ' ');
+        closeSlashMenu();
+      }
+    }
+
+    async function runModelSwitch(sessionId, modelName) {
+      try {
+        await api.setModel(sessionId, modelName);
+        if (!meta || meta.session_id !== sessionId) return;
+        model.state.model = modelName;
+        slashCatalog.currentModel = modelName;
+        model.notice('已切换模型：' + modelName, 'info');
+        schedule();
+      } catch (error) {
+        hooks.notify('切换模型失败：' + message(error));
+      }
+    }
+
+    async function runEffortSwitch(sessionId, effort) {
+      try {
+        await api.setEffort(sessionId, effort);
+        if (!meta || meta.session_id !== sessionId) return;
+        model.state.effort = effort;
+        slashCatalog.currentEffort = effort;
+        model.notice('已设置推理强度：' + effort, 'info');
+        schedule();
+      } catch (error) {
+        hooks.notify('设置推理强度失败：' + message(error));
+      }
+    }
+
+    async function executeBuiltinSlash(q) {
+      if (!meta || !QB.slash) return false;
+      const b = S().findBuiltinCommand(q.cmd);
+      if (!b) return false;
+      const id = meta.session_id;
+      const arg = q.args.trim();
+
+      // Commands that need an argument when invoked bare open their picker instead of failing
+      if (b.name === 'model' && !arg) {
+        slashDismissed = false;
+        slashIndex = 0;
+        setInputValue('/model ');
+        drawSlashMenu();
+        if (!slashCatalog.models.length && api.listModels) {
+          api.listModels(id).then((res) => {
+            if (!meta || meta.session_id !== id) return;
+            slashCatalog.models = res.models;
+            if (res.current) slashCatalog.currentModel = res.current;
+            drawSlashMenu();
+          }).catch(() => {});
+        }
+        return true;
+      }
+      if (b.name === 'effort' && !arg) {
+        slashDismissed = false;
+        slashIndex = 0;
+        setInputValue('/effort ');
+        drawSlashMenu();
+        return true;
+      }
+      if (b.name === 'work') {
+        // /work is natively executed by qin-code daemon's human_auto_alias via send_message
+        return false;
+      }
+
+      setInputValue('');
+      closeSlashMenu();
+
+      try {
+        switch (b.name) {
+          case 'compact':
+            model.notice('正在压缩上下文…', 'muted');
+            schedule();
+            await api.compact(id);
+            if (meta && meta.session_id === id) {
+              const msgs = await api.history(id);
+              if (meta && meta.session_id === id) { model.loadHistory(msgs, { keepLive: true }); schedule(); }
+            }
+            break;
+          case 'clear':
+            await api.clearSession(id);
+            if (meta && meta.session_id === id) {
+              model.clearItems();
+              nodes.clear();
+              groups.clear();
+              groupOpen.clear();
+              model.notice('会话历史已清空', 'muted');
+              schedule();
+            }
+            break;
+          case 'stop':
+            stop();
+            break;
+          case 'model':
+            await runModelSwitch(id, arg);
+            break;
+          case 'effort':
+            await runEffortSwitch(id, arg.toLowerCase());
+            break;
+          case 'rename':
+            await api.renameSession(id, arg || null);
+            if (meta && meta.session_id === id) {
+              model.state.title = arg || null;
+              meta.title = arg || null;
+              model.notice(arg ? ('会话已重命名为：' + arg) : '已恢复默认会话标题', 'muted');
+              schedule();
+            }
+            break;
+          case 'rewind': {
+            const idx = Math.max(1, parseInt(arg, 10) || Math.max(1, model.state.items.filter((x) => x.kind === 'user').length));
+            await api.rewind(id, idx);
+            if (meta && meta.session_id === id) {
+              const msgs = await api.history(id);
+              if (meta && meta.session_id === id) { model.loadHistory(msgs, { keepLive: false }); model.notice('已回退至第 ' + idx + ' 条消息（可用 /undo 撤销）', 'muted'); schedule(); }
+            }
+            break;
+          }
+          case 'undo':
+            await api.rewindUndo(id);
+            if (meta && meta.session_id === id) {
+              const msgs = await api.history(id);
+              if (meta && meta.session_id === id) { model.loadHistory(msgs, { keepLive: false }); model.notice('已恢复上次被回退的历史', 'muted'); schedule(); }
+            }
+            break;
+          case 'drop-queued':
+            await api.cancelQueued(id);
+            if (meta && meta.session_id === id) { model.notice('已清空排队待插入消息', 'muted'); schedule(); }
+            break;
+          case 'status': {
+            const info = await api.runtimeInfo(id);
+            if (meta && meta.session_id === id && info) {
+              const parts = [
+                info.provider ? ('服务商: ' + info.provider) : '',
+                info.model ? ('模型: ' + info.model) : '',
+                info.reasoning_effort ? ('推理强度: ' + info.reasoning_effort) : ''
+              ].filter(Boolean);
+              model.notice(parts.join(' · ') || '会话已连接', 'info');
+              schedule();
+            }
+            break;
+          }
+          case 'todo':
+            if (hooks.toggleTodo) hooks.toggleTodo();
+            break;
+          case 'fold':
+            setAllFolded(false);
+            break;
+          case 'expand':
+            setAllFolded(true);
+            break;
+          default:
+            return false;
+        }
+      } catch (error) {
+        hooks.notify('/' + b.name + ' 执行失败：' + message(error));
+      }
+      return true;
+    }
+
     function draw() {
       raf = 0;
       if (!meta) return;
@@ -777,6 +1209,36 @@
       }
     }
 
+    function refreshSlashSources(my, id, workingDir) {
+      if (api.listSlash) {
+        api.listSlash(workingDir).then((cat) => {
+          if (my !== gen) return;
+          slashCatalog.skills = cat.skills || [];
+          slashCatalog.commands = cat.commands || [];
+          drawSlashMenu();
+        }).catch(() => {});
+      }
+      if (api.listModels) {
+        api.listModels(id).then((res) => {
+          if (my !== gen) return;
+          slashCatalog.models = res.models || [];
+          if (res.current) slashCatalog.currentModel = res.current;
+          drawSlashMenu();
+        }).catch(() => {});
+      }
+      if (api.runtimeInfo) {
+        api.runtimeInfo(id).then((info) => {
+          if (my !== gen || !info) return;
+          if (info.model && !model.state.model) model.state.model = info.model;
+          if (info.reasoning_effort) {
+            model.state.effort = info.reasoning_effort;
+            slashCatalog.currentEffort = info.reasoning_effort;
+          }
+          schedule();
+        }).catch(() => {});
+      }
+    }
+
     async function attach() {
       if (!meta) return;
       const my = ++gen;
@@ -790,7 +1252,7 @@
           if (my !== gen || historyLoaded || !messages.length) return;
           model.loadHistory(messages, { keepLive: true });
           schedule();
-        }).catch(() => { /* attach + get_history will fill in */ });
+        }).catch(() => {});
       }
       try {
         const session = await api.openSession(id, meta.working_dir || null);
@@ -799,6 +1261,7 @@
         if (session && typeof session.status === 'string') model.state.busy = BUSY_STATUS.test(session.status);
         link = 'attached';
         schedule();
+        refreshSlashSources(my, id, meta.working_dir || null);
         const messages = await api.history(id);
         if (my !== gen) return;
         model.loadHistory(messages, { keepLive: true });
@@ -819,6 +1282,10 @@
       meta = Object.assign({}, session);
       model = createModel();
       if (meta.state === 'streaming' || meta.state === 'waiting') model.state.busy = true;
+      slashCatalog = { models: [], currentModel: meta.model || null, currentEffort: null, skills: [], commands: [] };
+      slashIndex = 0;
+      slashDismissed = false;
+      closeSlashMenu();
       nodes.clear();
       groups.clear();
       groupOpen.clear();
@@ -839,6 +1306,7 @@
     function leave() {
       if (!meta) return;
       gen++;
+      closeSlashMenu();
       if (off) { off(); off = null; }
       api.closeSession(meta.session_id);
       meta = null;
@@ -875,8 +1343,21 @@
       if (!meta || link !== 'attached') return;
       const text = els.input.value;
       if (!text.trim()) return;
+      const q = QB.slash ? S().parseSlashQuery(text) : null;
+      if (q && S().findBuiltinCommand(q.cmd)) {
+        void executeBuiltinSlash(q).then((handled) => {
+          if (!handled) sendChatText(text);
+        });
+        return;
+      }
+      sendChatText(text);
+    }
+
+    function sendChatText(text) {
+      if (!meta || link !== 'attached') return;
       const id = meta.session_id;
       els.input.value = '';
+      closeSlashMenu();
       autosize();
       follow = true;
       if (model.state.busy) {
@@ -908,9 +1389,57 @@
     }
 
     els.input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); submit(); }
+      if (e.isComposing || e.keyCode === 229) return;
+      const menuOpen = !!(els.slashMenu && !els.slashMenu.hidden && slashFlat.length);
+      if (menuOpen) {
+        if (e.key === 'ArrowDown') { e.preventDefault(); highlightSlash(slashIndex + 1); return; }
+        if (e.key === 'ArrowUp') { e.preventDefault(); highlightSlash(slashIndex - 1); return; }
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); slashDismissed = true; closeSlashMenu(); return; }
+        if (e.key === 'Tab') { e.preventDefault(); chooseSlashItem(slashFlat[slashIndex].item, true); return; }
+        if (e.key === 'Enter' && !e.shiftKey) {
+          const picked = slashFlat[slashIndex] && slashFlat[slashIndex].item;
+          const q = QB.slash ? S().parseSlashQuery(els.input.value) : null;
+          // If user typed arguments manually (e.g. `/rename foo` or `/skill-x do bar`) and menu has no picker sub-items, submit directly;
+          // if menu is showing picker items (models/efforts/work/commands/skills), choose the highlighted item.
+          if (picked && (!q || !q.hasSpace || picked.kind === 'model' || picked.kind === 'effort' || picked.kind === 'work')) {
+            e.preventDefault();
+            chooseSlashItem(picked, false);
+            return;
+          }
+        }
+      }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        submit();
+      }
     });
-    els.input.addEventListener('input', () => { autosize(); els.send.disabled = link !== 'attached' || !els.input.value.trim(); });
+
+    els.input.addEventListener('input', () => {
+      autosize();
+      slashDismissed = false;
+      slashIndex = 0;
+      drawSlashMenu();
+      els.send.disabled = link !== 'attached' || !els.input.value.trim();
+      els.send.textContent = isBuiltinSlashInput(els.input.value) ? '执行' : (model.state.busy ? '追加' : '发送');
+    });
+
+    if (els.slashBtn) {
+      els.slashBtn.addEventListener('click', () => {
+        if (link !== 'attached') return;
+        if (els.slashMenu && !els.slashMenu.hidden && els.input.value === '/') {
+          slashDismissed = true;
+          setInputValue('');
+          closeSlashMenu();
+          return;
+        }
+        slashDismissed = false;
+        slashIndex = 0;
+        const cur = els.input.value;
+        setInputValue(cur.trim().startsWith('/') ? cur : '/' + cur.replace(/^\s+/, ''));
+        drawSlashMenu();
+      });
+    }
+
     els.send.addEventListener('click', submit);
     els.stop.addEventListener('click', stop);
     els.scroll.addEventListener('scroll', () => {
@@ -940,8 +1469,8 @@
           .then((m) => { if (my === gen) { model.loadHistory(m, { keepLive: true }); schedule(); } })
           .catch((e) => hooks.notify('读取历史失败：' + message(e)));
       },
-      lost() { if (!meta) return; gen++; link = 'lost'; schedule(); },
-      chanClosed(reason) { if (!meta || link === 'lost') return; gen++; link = 'error'; linkError = '会话连接已关闭' + (reason ? '：' + reason : ''); schedule(); },
+      lost() { if (!meta) return; gen++; closeSlashMenu(); link = 'lost'; schedule(); },
+      chanClosed(reason) { if (!meta || link === 'lost') return; gen++; closeSlashMenu(); link = 'error'; linkError = '会话连接已关闭' + (reason ? '：' + reason : ''); schedule(); },
       updateMeta(session) { if (meta && session && session.session_id === meta.session_id) { meta = Object.assign({}, meta, session); schedule(); } },
       get session() { return meta; },
       get busy() { return model.state.busy; }

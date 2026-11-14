@@ -71,6 +71,8 @@
     let pingTimer = null;
     let lastSeen = 0;
     const chans = new Map(); // chan -> {open:boolean, hello, waiters:[{resolve,reject}], timer}
+    const slashWaiters = new Map();
+    let slashSeq = 0;
 
     const emit = (kind, ...args) => listeners[kind].forEach((fn) => { try { fn(...args); } catch (e) { root.console && root.console.error(e); } });
     function setState(next, info) {
@@ -87,6 +89,9 @@
     }
 
     function dropChans(reason) {
+      const sList = Array.from(slashWaiters.values());
+      slashWaiters.clear();
+      sList.forEach((w) => { clearT(w.timer); w.resolve({ skills: [], commands: [] }); });
       const list = Array.from(chans.entries());
       chans.clear();
       list.forEach(([chan, c]) => {
@@ -205,6 +210,18 @@
           emit('chanClosed', msg.chan, reason);
           break;
         }
+        case 'slash_items': {
+          const w = slashWaiters.get(msg.id);
+          if (w) {
+            slashWaiters.delete(msg.id);
+            clearT(w.timer);
+            w.resolve({
+              skills: Array.isArray(msg.skills) ? msg.skills : [],
+              commands: Array.isArray(msg.commands) ? msg.commands : []
+            });
+          }
+          break;
+        }
         case 'pong':
         default:
           break;
@@ -260,11 +277,29 @@
       if (!rawSend({ op: 'send', chan, frame })) throw Object.assign(new Error('未连接'), { code: 'not_connected' });
     }
 
+    function listSlash(workingDir) {
+      if (state !== 'open' || !ws) return Promise.resolve({ skills: [], commands: [] });
+      const id = ++slashSeq;
+      return new Promise((resolve) => {
+        const timer = setT(() => {
+          slashWaiters.delete(id);
+          resolve({ skills: [], commands: [] });
+        }, 2500);
+        slashWaiters.set(id, { resolve, timer });
+        if (!rawSend({ op: 'list_slash', id, working_dir: workingDir || null })) {
+          slashWaiters.delete(id);
+          clearT(timer);
+          resolve({ skills: [], commands: [] });
+        }
+      });
+    }
+
     return {
       on,
       openChan,
       closeChan,
       send,
+      listSlash,
       isChanOpen: (chan) => !!(chans.get(chan) && chans.get(chan).open),
       get state() { return state; },
       get detail() { return detail; },

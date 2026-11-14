@@ -143,6 +143,42 @@
       cancel(sessionId) {
         return request(sessionChan(sessionId), { req: 'cancel', session_id: sessionId });
       },
+      clearSession(sessionId) {
+        return request(sessionChan(sessionId), { req: 'clear', session_id: sessionId });
+      },
+      compact(sessionId) {
+        return request(sessionChan(sessionId), { req: 'compact', session_id: sessionId }, { timeoutMs: 120000 });
+      },
+      async listModels(sessionId) {
+        const reply = await request(sessionChan(sessionId), { req: 'list_models', session_id: sessionId });
+        return { models: Array.isArray(reply.models) ? reply.models : [], current: reply.current || null };
+      },
+      setModel(sessionId, model) {
+        return request(sessionChan(sessionId), { req: 'set_model', session_id: sessionId, model });
+      },
+      setEffort(sessionId, effort) {
+        return request(sessionChan(sessionId), { req: 'set_reasoning_effort', session_id: sessionId, effort });
+      },
+      renameSession(sessionId, title) {
+        const body = { req: 'rename_session', session_id: sessionId };
+        if (title != null && String(title).trim()) body.title = String(title).trim();
+        return request(sessionChan(sessionId), body);
+      },
+      rewind(sessionId, messageIndex) {
+        return request(sessionChan(sessionId), { req: 'rewind', session_id: sessionId, message_index: messageIndex });
+      },
+      rewindUndo(sessionId) {
+        return request(sessionChan(sessionId), { req: 'rewind_undo', session_id: sessionId });
+      },
+      cancelQueued(sessionId) {
+        return request(sessionChan(sessionId), { req: 'cancel_soft_interrupts', session_id: sessionId });
+      },
+      runtimeInfo(sessionId) {
+        return request(sessionChan(sessionId), { req: 'get_runtime_info', session_id: sessionId });
+      },
+      listSlash(workingDir) {
+        return transport.listSlash ? transport.listSlash(workingDir) : Promise.resolve({ skills: [], commands: [] });
+      },
       permission(sessionId, requestId, decision) {
         return request(sessionChan(sessionId), { req: 'permission_response', session_id: sessionId, request_id: requestId, decision });
       },
