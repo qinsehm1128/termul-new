@@ -93,7 +93,32 @@ impl PluginV1 for BoardPlugin {
             Some("open-board") => json!({"ok":true}),
             _ => return Err(SEP_UNAVAILABLE),
         };
-        write(out, json!({"schemaVersion":1,"result":result}))
+        write(
+            out,
+            json!({"schemaVersion":1,"result":result,"invalidateViews":[]}),
+        )
+    }
+
+    fn on_config_changed(&mut self, bytes: &[u8]) -> Result<(), SeStatus> {
+        let _ = parse(bytes)?;
+        Ok(())
+    }
+
+    fn on_service_call(
+        &mut self,
+        bytes: &[u8],
+        out: &mut OutputWriter<'_>,
+    ) -> Result<(), SeStatus> {
+        let request = parse(bytes)?;
+        match (request["service"].as_str(), request["method"].as_str()) {
+            (Some("se.host.wake"), Some("wake"))
+            | (Some("se.host.events"), Some("deliver"))
+            | (Some("se.host.storage"), Some("completed")) => write(
+                out,
+                json!({"schemaVersion":1,"result":{"invalidateViews":[]}}),
+            ),
+            _ => Err(SEP_UNAVAILABLE),
+        }
     }
 
     fn destroy(self) -> Result<(), SeStatus> {
