@@ -1922,6 +1922,11 @@ impl PtyManager {
         log::info!("[pty-view] opened terminal_id={terminal_id} views={views}");
     }
 
+    /// Views (desktop and remote) currently counted as watching this PTY.
+    pub fn view_count(&self, terminal_id: &str) -> u32 {
+        self.view_refs.lock().get(terminal_id).copied().unwrap_or(0)
+    }
+
     /// Hide a tab that never attached on this surface. Pause polling only
     /// when no other desktop/remote view is still watching.
     pub fn pause_tracking_if_unwatched(&self, terminal_id: &str) {

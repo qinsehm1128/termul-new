@@ -45,6 +45,13 @@ const MAX_RECONNECT_FRAMES: usize = 64;
 const ATTACH_GENERATION_CHECK_MS: u64 = 250;
 const BINARY_SUBPROTOCOL: &str = "se-terminal-v2.binary";
 const BINARY_FRAME_MAGIC: &[u8; 4] = b"TML2";
+/// Keepalive Ping interval, matching the `/ws` relay. A quiet terminal sends
+/// nothing in either direction, so idle NAT, proxy and tunnel hops drop the
+/// connection without a close frame; the phone then finds out on its next
+/// keystroke.
+const KEEPALIVE_PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(20);
+/// Opaque; under the 125-byte control-frame limit.
+const KEEPALIVE_PING_PAYLOAD: &[u8] = b"keepalive";
 static CONNECTION_SERIAL: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy)]
@@ -357,17 +364,10 @@ async fn run(
     ticket: crate::web::upgraded_connections::UpgradedConnectionTicket,
 ) {
     let cancel = ticket.cancel_token();
-    let (mut sink, mut stream) = socket.split();
-    let (tx, mut rx) = mpsc::channel::<Message>(MAX_RECONNECT_FRAMES);
+    let (sink, mut stream) = socket.split();
+    let (tx, rx) = mpsc::channel::<Message>(MAX_RECONNECT_FRAMES);
 
-    let write_task = tokio::spawn(async move {
-        while let Some(message) = rx.recv().await {
-            let closing = matches!(message, Message::Close(_));
-            if sink.send(message).await.is_err() || closing {
-                break;
-            }
-        }
-    });
+    let write_task = tokio::spawn(run_terminal_writer(sink, rx, KEEPALIVE_PING_INTERVAL));
 
     // Per-connection authorization: exact terminal + Conversation + claim
     // generation scopes this socket may operate on. The generation binding is
@@ -432,6 +432,18 @@ async fn run(
                     lifecycle_phase = "host_shutdown",
                     stable_code = "OK",
                     "terminal WebSocket closing for host shutdown"
+                );
+                break;
+            }
+            () = tx.closed() => {
+                // The writer ended on a failed socket write. Without this the
+                // loop kept the connection's views and phone-fit lease until
+                // the read half noticed, which a half-open link never does.
+                info!(
+                    target: "se_manager::web::terminal_ws",
+                    lifecycle_phase = "write_half_closed",
+                    stable_code = "OK",
+                    "terminal WebSocket closing after its write half ended"
                 );
                 break;
             }
@@ -536,6 +548,39 @@ async fn run(
     );
     drop(tx);
     let _ = write_task.await;
+}
+
+/// Drain queued frames into the socket and keep an idle connection alive.
+/// Ends after a close frame, a failed write, or when every sender is gone.
+async fn run_terminal_writer<S>(
+    mut sink: S,
+    mut rx: mpsc::Receiver<Message>,
+    ping_interval: std::time::Duration,
+) where
+    S: futures_util::Sink<Message> + Unpin,
+{
+    let mut ping = tokio::time::interval(ping_interval);
+    // Steady, not bursty: a stalled client must not be ping-stormed on recovery.
+    ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // The first tick is immediate; a fresh connection needs no keepalive yet.
+    ping.tick().await;
+    loop {
+        tokio::select! {
+            message = rx.recv() => {
+                let Some(message) = message else { break };
+                let closing = matches!(message, Message::Close(_));
+                if sink.send(message).await.is_err() || closing {
+                    break;
+                }
+            }
+            _ = ping.tick() => {
+                let keepalive = Message::Ping(KEEPALIVE_PING_PAYLOAD.to_vec().into());
+                if sink.send(keepalive).await.is_err() {
+                    break;
+                }
+            }
+        }
+    }
 }
 
 struct ConnectionContext {
@@ -2354,6 +2399,51 @@ mod tests {
         );
         assert_eq!(&frame[15..20], b"pty-1");
         assert_eq!(&frame[20..], &[0, 0xff, b'A']);
+    }
+
+    #[tokio::test]
+    async fn writer_pings_an_idle_socket_forwards_frames_and_ends_on_close() {
+        let (sink, mut sent) = futures::channel::mpsc::unbounded::<Message>();
+        let (tx, rx) = mpsc::channel::<Message>(4);
+        let writer = tokio::spawn(run_terminal_writer(
+            sink,
+            rx,
+            std::time::Duration::from_millis(20),
+        ));
+        let wait = std::time::Duration::from_secs(5);
+
+        // Nothing is queued: the only traffic is the keepalive.
+        let first = tokio::time::timeout(wait, sent.next())
+            .await
+            .expect("an idle socket must be pinged")
+            .expect("writer alive");
+        assert!(
+            matches!(&first, Message::Ping(payload) if payload.as_ref() == KEEPALIVE_PING_PAYLOAD),
+            "unexpected first frame: {first:?}"
+        );
+
+        tx.send(Message::Text("reply".into())).await.unwrap();
+        loop {
+            let next = tokio::time::timeout(wait, sent.next())
+                .await
+                .expect("queued frame must be written")
+                .expect("writer alive");
+            match next {
+                Message::Ping(_) => continue,
+                Message::Text(text) => {
+                    assert_eq!(text.as_str(), "reply");
+                    break;
+                }
+                other => panic!("unexpected frame: {other:?}"),
+            }
+        }
+
+        tx.send(Message::Close(None)).await.unwrap();
+        tokio::time::timeout(wait, writer)
+            .await
+            .expect("the writer ends after the close frame")
+            .unwrap();
+        assert!(tx.is_closed(), "a finished writer must release the queue");
     }
 
     #[tokio::test]

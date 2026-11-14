@@ -2096,7 +2096,10 @@ async fn open_terminal_stream(
 }
 
 fn spawn_terminal_read_loop(inner: &Arc<ClientInner>, reader: CoreReadHalf) {
-    let reader_inner = Arc::clone(inner);
+    // Weak on purpose: a strong reference here formed a cycle with
+    // `ClientInner::reader`, so a dropped client never ran `Drop`, its socket
+    // stayed open, and the Core kept every view that connection had opened.
+    let reader_inner = Arc::downgrade(inner);
     let handle = tokio::spawn(async move {
         client_read_loop(reader, reader_inner).await;
     });
@@ -2117,11 +2120,16 @@ fn fail_stale_pending(inner: &ClientInner) {
     }
 }
 
-async fn client_read_loop(mut reader: CoreReadHalf, inner: Arc<ClientInner>) {
+async fn client_read_loop(mut reader: CoreReadHalf, inner: std::sync::Weak<ClientInner>) {
     loop {
         let payload = match read_frame(&mut reader).await {
             Ok(payload) => payload,
             Err(_) => break,
+        };
+        // Held for one frame only, so the last client handle going away ends
+        // this loop and closes the connection.
+        let Some(inner) = inner.upgrade() else {
+            return;
         };
         if is_output_frame(&payload) {
             if let Ok(frame) = decode_output_frame(&payload) {
@@ -2167,6 +2175,9 @@ async fn client_read_loop(mut reader: CoreReadHalf, inner: Arc<ClientInner>) {
             }
         }
     }
+    let Some(inner) = inner.upgrade() else {
+        return;
+    };
     fail_stale_pending(&inner);
     inner.connected.store(false, Ordering::Release);
     // A broken Core transport invalidates cached liveness. Keep stream slots
@@ -3353,5 +3364,64 @@ mod tests {
 
         desktop.shutdown().await.expect("shutdown");
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
+    }
+
+    /// A remote viewer's Core connection must close when the viewer goes away.
+    /// The read loop used to own the client, so the socket, and every view it
+    /// had opened, outlived the phone connection that created it.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dropping_a_viewer_client_releases_its_connection_and_views() {
+        let profile = tempfile::tempdir().unwrap();
+        let endpoint = CoreEndpoint::for_profile(profile.path(), CoreRole::TerminalCore);
+        prepare_runtime_dir(&endpoint).expect("runtime dir");
+        let mut listener = listen_core(&endpoint, CoreRole::TerminalCore)
+            .await
+            .expect("listen");
+        let pty = construct_pty_manager(test_program());
+        let (shutdown, _shutdown_rx) = watch::channel(false);
+        let state = Arc::new(TerminalCoreState {
+            pty: Arc::clone(&pty),
+            quick: None,
+            shutdown,
+        });
+        let server = tokio::spawn(async move {
+            while let Ok(stream) = listener.accept().await {
+                let state = Arc::clone(&state);
+                tokio::spawn(async move {
+                    let _ = handle_connection(stream, state).await;
+                });
+            }
+        });
+
+        let desktop = wait_for_client(&endpoint).await;
+        let cwd = profile.path().to_string_lossy().into_owned();
+        let spawned = desktop.spawn(spawn_test_shell(&cwd)).await.expect("spawn");
+        let terminal_id = spawned.info.id.clone();
+        let _desktop_stream = desktop.watch(&terminal_id, 0).await.expect("desktop watch");
+        assert_eq!(pty.view_count(&terminal_id), 1);
+
+        // The phone: its own connection, dropped without a close_view, exactly
+        // like a remote socket that ends while its forwarder is aborted.
+        let viewer = wait_for_client(&endpoint).await;
+        let viewer_stream = viewer.watch(&terminal_id, 0).await.expect("viewer watch");
+        assert_eq!(pty.view_count(&terminal_id), 2);
+        let viewer_inner = Arc::downgrade(&viewer.inner);
+        drop(viewer_stream);
+        drop(viewer);
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while viewer_inner.strong_count() != 0 || pty.view_count(&terminal_id) != 1 {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "viewer connection leaked: client_refs={} views={}",
+                viewer_inner.strong_count(),
+                pty.view_count(&terminal_id)
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        desktop.terminate(&terminal_id).await.expect("terminate");
+        server.abort();
     }
 }
