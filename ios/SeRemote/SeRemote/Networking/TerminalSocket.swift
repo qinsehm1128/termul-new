@@ -157,6 +157,16 @@ final class TerminalSocket {
     /// device log shows whether the link was silent or busy during the wait.
     @ObservationIgnored private var inboundFrameCount = 0
     @ObservationIgnored private var inboundByteCount = 0
+    /// Output held per terminal while its `watch`/`attach` is in flight. Binary
+    /// frames carry no gap flag; the verdict is in the reply, which can arrive
+    /// after the replay it describes.
+    @ObservationIgnored private var attachBuffers: [String: [OutputFrame]] = [:]
+    /// Terminals whose reply reported a gap before any replay frame arrived.
+    @ObservationIgnored private var pendingGap: Set<String> = []
+
+    /// Negotiated on the handshake: PTY bytes travel raw instead of as a JSON
+    /// number array (about four characters per byte).
+    nonisolated static let binarySubprotocol = "se-terminal-v2.binary"
 
     /// True while a handshake is in flight. Stopping the socket now would fail
     /// every caller awaiting it with "Disconnected from the host."
@@ -217,6 +227,9 @@ final class TerminalSocket {
         var urlRequest = URLRequest(url: wsURL, timeoutInterval: HostTunnelSession.handshakeSeconds)
         urlRequest.assumesHTTP3Capable = false
         credentials.apply(to: &urlRequest)
+        // A host that does not know the subprotocol ignores the offer and
+        // keeps sending JSON output frames, which are still decoded.
+        urlRequest.setValue(Self.binarySubprotocol, forHTTPHeaderField: "Sec-WebSocket-Protocol")
         let gate = HostWebSocketOpenGate { [weak self] in
             Task { @MainActor in self?.handleDeviceRevoked(origin: origin) }
         }
@@ -272,15 +285,17 @@ final class TerminalSocket {
     }
 
     func attach(terminalId: String, claim: String, lastSeq: Int) async throws -> TerminalAttachResult {
-        try await request(
-            "attach",
-            payload: [
-                "terminalId": terminalId,
-                "claim": claim,
-                "lastSeq": lastSeq
-            ],
-            as: TerminalAttachResult.self
-        )
+        try await holdingOutput(for: terminalId) {
+            try await self.request(
+                "attach",
+                payload: [
+                    "terminalId": terminalId,
+                    "claim": claim,
+                    "lastSeq": lastSeq
+                ],
+                as: TerminalAttachResult.self
+            )
+        }
     }
 
     func list(conversationId: String?, projectId: String?) async throws -> [LiveTerminalSummary] {
@@ -322,14 +337,66 @@ final class TerminalSocket {
     }
 
     func watch(terminalId: String, lastSeq: Int) async throws -> TerminalAttachResult {
-        try await request(
-            "watch",
-            payload: [
-                "terminalId": terminalId,
-                "lastSeq": lastSeq
-            ],
-            as: TerminalAttachResult.self
-        )
+        try await holdingOutput(for: terminalId) {
+            try await self.request(
+                "watch",
+                payload: [
+                    "terminalId": terminalId,
+                    "lastSeq": lastSeq
+                ],
+                as: TerminalAttachResult.self
+            )
+        }
+    }
+
+    /// Hold this terminal's output until the attach reply says whether the
+    /// replay starts after a gap, then release it in arrival order.
+    private func holdingOutput(
+        for terminalId: String,
+        _ attach: () async throws -> TerminalAttachResult
+    ) async throws -> TerminalAttachResult {
+        if attachBuffers[terminalId] == nil {
+            attachBuffers[terminalId] = []
+        }
+        do {
+            let reply = try await attach()
+            releaseHeldOutput(for: terminalId, replyGap: reply.gap ?? false)
+            return reply
+        } catch {
+            releaseHeldOutput(for: terminalId, replyGap: false)
+            throw error
+        }
+    }
+
+    private func releaseHeldOutput(for terminalId: String, replyGap: Bool) {
+        // Nil after a socket reset: those frames belonged to the dead connection.
+        guard let held = attachBuffers.removeValue(forKey: terminalId) else { return }
+        let released = Self.framesAfterAttach(held, replyGap: replyGap)
+        if released.gapCarries {
+            pendingGap.insert(terminalId)
+        }
+        for frame in released.frames {
+            emitOutput(frame)
+        }
+    }
+
+    private func deliverOutput(_ frame: OutputFrame) {
+        if attachBuffers[frame.terminalId] != nil {
+            attachBuffers[frame.terminalId]?.append(frame)
+            return
+        }
+        if pendingGap.remove(frame.terminalId) != nil {
+            emitOutput(OutputFrame(
+                terminalId: frame.terminalId, data: frame.data, gap: true, latestSeq: frame.latestSeq
+            ))
+            return
+        }
+        emitOutput(frame)
+    }
+
+    private func emitOutput(_ frame: OutputFrame) {
+        onOutputFrame?(frame)
+        onBytes?(frame.terminalId, frame.data, frame.gap)
     }
 
     func detach(terminalId: String) async {
@@ -459,6 +526,8 @@ final class TerminalSocket {
         task = nil
         isConnected = false
         lastInboundAt = nil
+        attachBuffers.removeAll()
+        pendingGap.removeAll()
         oldTask?.cancel(with: .goingAway, reason: nil)
         session?.invalidateAndCancel()
         session = nil
@@ -605,7 +674,11 @@ final class TerminalSocket {
                 }
                 inboundFrameCount &+= 1
                 inboundByteCount &+= data.count
-                handleFrame(data)
+                if case .data = message, let frame = Self.binaryOutputFrame(from: data) {
+                    deliverOutput(frame)
+                } else {
+                    handleFrame(data)
+                }
             } catch {
                 guard self.task === loopTask, !isRevoked else { return }
                 if loopTask.closeCode == .policyViolation, let origin {
@@ -629,8 +702,7 @@ final class TerminalSocket {
             return
         }
         if let frame = Self.outputFrame(from: object) {
-            onOutputFrame?(frame)
-            onBytes?(frame.terminalId, frame.data, frame.gap)
+            deliverOutput(frame)
             return
         }
         guard let type = object["type"] as? String else { return }
@@ -656,6 +728,63 @@ final class TerminalSocket {
         default:
             break
         }
+    }
+
+    /// Decode a negotiated binary PTY frame:
+    /// magic "TML2" + kind u8 (1 live, 2 replay) + id length u16 BE + seq u64 BE
+    /// + terminal id + bytes. Anything else is not an output frame.
+    nonisolated static func binaryOutputFrame(from data: Data) -> OutputFrame? {
+        let headerLength = 15
+        guard data.count >= headerLength else { return nil }
+        let header = [UInt8](data.prefix(headerLength))
+        guard header[0] == 0x54, header[1] == 0x4D, header[2] == 0x4C, header[3] == 0x32,
+              header[4] == 1 || header[4] == 2 else { return nil }
+        let idLength = Int(header[5]) << 8 | Int(header[6])
+        var seq: UInt64 = 0
+        for byte in header[7 ..< headerLength] {
+            seq = seq << 8 | UInt64(byte)
+        }
+        guard idLength > 0, data.count >= headerLength + idLength, seq <= UInt64(Int.max) else {
+            return nil
+        }
+        let idStart = data.startIndex + headerLength
+        let payloadStart = idStart + idLength
+        guard let terminalId = String(data: data[idStart ..< payloadStart], encoding: .utf8),
+              !terminalId.isEmpty else { return nil }
+        return OutputFrame(
+            terminalId: terminalId,
+            data: Data(data[payloadStart...]),
+            gap: false,
+            latestSeq: Int(seq)
+        )
+    }
+
+    /// Order the output held during an attach. A gap means the canvas must
+    /// reset before the replay paints, so it moves to the first released frame.
+    /// A flagged frame that carries bytes starts the new stream (JSON hosts):
+    /// everything before it is the previous stream and is dropped. A flagged
+    /// frame without bytes is the trailer a binary host sends after its replay,
+    /// so the replay before it is kept. `gapCarries` is true when the reply
+    /// reported a gap but no frame has arrived yet to carry it.
+    nonisolated static func framesAfterAttach(
+        _ held: [OutputFrame],
+        replyGap: Bool
+    ) -> (frames: [OutputFrame], gapCarries: Bool) {
+        var gapped = replyGap
+        var start = 0
+        for (index, frame) in held.enumerated() where frame.gap {
+            gapped = true
+            if !frame.data.isEmpty { start = index }
+        }
+        guard gapped else { return (held, false) }
+        let kept = held[start...]
+        guard !kept.isEmpty else { return ([], true) }
+        let frames = kept.enumerated().map { offset, frame in
+            OutputFrame(
+                terminalId: frame.terminalId, data: frame.data, gap: offset == 0, latestSeq: frame.latestSeq
+            )
+        }
+        return (frames, false)
     }
 
     /// Pure mapping for the two terminal-output frames the host sends over the
