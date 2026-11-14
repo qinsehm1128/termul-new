@@ -89,6 +89,11 @@ final class TerminalSocket {
     /// connection that took it, so a caller holding one must compare this
     /// generation before assuming the host still replays to it.
     private(set) var connectionGeneration = 0
+    /// Monotonic timestamp of the most recent authenticated handshake or
+    /// inbound WebSocket frame on the current connection. Real inbound traffic
+    /// proves the TCP/WebSocket stream is alive without sending a control Ping
+    /// (which some tunnels buffer or drop right after handshake).
+    private(set) var lastInboundAt: ContinuousClock.Instant?
     private var origin: URL?
 
     /// `gap` is true on the first replay frame when the host could not replay
@@ -118,11 +123,38 @@ final class TerminalSocket {
     private var timeoutTasks: [String: Task<Void, Never>] = [:]
     private var requestSerial = 0
     private var openGate: HostWebSocketOpenGate?
+    /// Single-flight handshake task so concurrent `ensureConnected()` callers
+    /// await the same connection attempt instead of calling `stop()` on each
+    /// other and throwing spurious "Disconnected from the host." errors.
+    private var connectTask: Task<Void, Error>?
+    private var connectSerial = 0
 
     func connect(origin: URL, credentials: HostCredentials) async throws {
         guard !isRevoked else { throw HostError.deviceRevoked }
+        if isConnected, self.origin == origin { return }
+        if let inFlight = connectTask, self.origin == origin {
+            try await inFlight.value
+            return
+        }
+        connectSerial &+= 1
+        let serial = connectSerial
         self.origin = origin
-        stop()
+        let task = Task<Void, Error> { @MainActor [weak self] in
+            guard let self else { throw CancellationError() }
+            defer {
+                if self.connectSerial == serial {
+                    self.connectTask = nil
+                }
+            }
+            try await self.performConnect(origin: origin, credentials: credentials)
+        }
+        connectTask = task
+        try await task.value
+    }
+
+    private func performConnect(origin: URL, credentials: HostCredentials) async throws {
+        guard !isRevoked else { throw HostError.deviceRevoked }
+        stopSocketOnly()
         guard let token = credentials.bearer, !token.isEmpty else {
             throw HostError.unexpected(String(localized: "This access link is missing its token. Scan the QR again."))
         }
@@ -143,15 +175,16 @@ final class TerminalSocket {
         openGate = gate
         let session = HostTunnelSession.make(delegate: gate)
         self.session = session
-        let task = session.webSocketTask(with: urlRequest)
-        self.task = task
-        task.resume()
-        receiveTask = Task { await self.receiveLoop() }
+        let wsTask = session.webSocketTask(with: urlRequest)
+        self.task = wsTask
+        wsTask.resume()
+        receiveTask = Task { await self.receiveLoop(for: wsTask) }
         do {
             try await gate.waitForOpen()
             _ = try await self.request("authenticate", payload: ["token": token], as: EmptyPayload.self)
             guard !isRevoked else { throw HostError.deviceRevoked }
             isConnected = true
+            lastInboundAt = ContinuousClock.now
             connectionGeneration &+= 1
             startHeartbeat()
             HostLog.session.info("terminal WebSocket authenticated")
@@ -163,7 +196,7 @@ final class TerminalSocket {
                 handleDeviceRevoked(origin: origin)
             }
             HostLog.session.error("terminal WebSocket connect failed: \(error.localizedDescription, privacy: .public)")
-            stop()
+            stopSocketOnly()
             throw isRevoked ? HostError.deviceRevoked : error
         }
     }
@@ -317,12 +350,33 @@ final class TerminalSocket {
     /// connected. A socket that survived a network-path change reports the
     /// stale-path error here immediately, which lets the session rebuild the
     /// transport instead of surfacing a failed request to the user.
+    /// True when the socket is connected and received an authenticated reply or
+    /// inbound frame within `window` — proving liveness without a control Ping.
+    func isRecentlyActive(within window: Duration = .seconds(10)) -> Bool {
+        guard isConnected, task != nil, let lastInboundAt else { return false }
+        return lastInboundAt.duration(to: ContinuousClock.now) < window
+    }
+
     func probeLiveness() async -> TransportLiveness {
         guard isConnected, let task else { return .dead }
-        return await WebSocketLiveness.probe(task)
+        if isRecentlyActive(within: .seconds(6)) {
+            return .alive
+        }
+        let result = await WebSocketLiveness.probe(task)
+        if result == .alive {
+            lastInboundAt = ContinuousClock.now
+        }
+        return result
     }
 
     func stop() {
+        connectSerial &+= 1
+        connectTask?.cancel()
+        connectTask = nil
+        stopSocketOnly()
+    }
+
+    private func stopSocketOnly() {
         heartbeatTask?.cancel()
         heartbeatTask = nil
         receiveTask?.cancel()
@@ -334,11 +388,13 @@ final class TerminalSocket {
         openGate?.failOpen(HostError.network(String(localized: "Disconnected from the host.")))
         openGate = nil
         failPending(HostError.network(String(localized: "Disconnected from the host.")))
-        task?.cancel(with: .goingAway, reason: nil)
+        let oldTask = task
         task = nil
+        isConnected = false
+        lastInboundAt = nil
+        oldTask?.cancel(with: .goingAway, reason: nil)
         session?.invalidateAndCancel()
         session = nil
-        isConnected = false
     }
 
     /// Periodic WebSocket ping watchdog so a half-open TCP/tunnel link is torn
@@ -350,22 +406,31 @@ final class TerminalSocket {
             while let self, !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(25))
                 guard !Task.isCancelled, self.isConnected, let currentTask = self.task else { return }
+                if self.isRecentlyActive(within: .seconds(20)) {
+                    consecutiveUnknowns = 0
+                    continue
+                }
                 let liveness = await WebSocketLiveness.probe(currentTask, timeout: .seconds(5))
                 guard !Task.isCancelled, self.task === currentTask, self.isConnected else { return }
                 switch liveness {
                 case .alive:
+                    self.lastInboundAt = ContinuousClock.now
                     consecutiveUnknowns = 0
                 case .unknown:
+                    if self.isRecentlyActive(within: .seconds(20)) {
+                        consecutiveUnknowns = 0
+                        continue
+                    }
                     consecutiveUnknowns += 1
-                    if consecutiveUnknowns >= 2 {
-                        HostLog.session.error("Terminal WebSocket ping timed out twice; tearing down stale socket")
-                        self.stop()
+                    if consecutiveUnknowns >= 3 {
+                        HostLog.session.error("Terminal WebSocket ping timed out 3x with no traffic; resetting stale socket")
+                        self.stopSocketOnly()
                         self.onDisconnected?()
                         return
                     }
                 case .dead:
                     HostLog.session.error("Terminal WebSocket ping failed; tearing down dead socket")
-                    self.stop()
+                    self.stopSocketOnly()
                     self.onDisconnected?()
                     return
                 }
@@ -405,7 +470,7 @@ final class TerminalSocket {
                 // subsequent requests reconnect instead of hanging 20s each.
                 if self.task === currentTask {
                     let wasConnected = self.isConnected
-                    self.stop()
+                    self.stopSocketOnly()
                     if wasConnected {
                         self.onDisconnected?()
                     }
@@ -417,9 +482,8 @@ final class TerminalSocket {
                         guard let self, self.task === currentTask else { return }
                         self.timeoutTasks.removeValue(forKey: id)?.cancel()
                         let wasConnected = self.isConnected
-                        self.isConnected = false
                         self.pending.removeValue(forKey: id)?.resume(throwing: HostError.network(error.localizedDescription))
-                        self.stop()
+                        self.stopSocketOnly()
                         if wasConnected {
                             self.onDisconnected?()
                         }
@@ -433,10 +497,12 @@ final class TerminalSocket {
         return try JSONDecoder().decode(T.self, from: reply)
     }
 
-    private func receiveLoop() async {
-        while let task, !Task.isCancelled {
+    private func receiveLoop(for loopTask: URLSessionWebSocketTask) async {
+        while self.task === loopTask, !Task.isCancelled {
             do {
-                let message = try await task.receive()
+                let message = try await loopTask.receive()
+                guard self.task === loopTask else { return }
+                lastInboundAt = ContinuousClock.now
                 let data: Data
                 switch message {
                 case .data(let value):
@@ -448,13 +514,12 @@ final class TerminalSocket {
                 }
                 handleFrame(data)
             } catch {
-                guard self.task === task, !isRevoked else { return }
-                if task.closeCode == .policyViolation, let origin {
+                guard self.task === loopTask, !isRevoked else { return }
+                if loopTask.closeCode == .policyViolation, let origin {
                     handleDeviceRevoked(origin: origin)
                 } else {
                     let wasConnected = isConnected
-                    isConnected = false
-                    failPending(HostError.network(error.localizedDescription))
+                    stopSocketOnly()
                     if wasConnected {
                         onDisconnected?()
                     }

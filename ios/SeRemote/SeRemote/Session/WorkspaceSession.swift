@@ -68,6 +68,10 @@ final class WorkspaceSession {
     /// already-established session (transport blip, foreground return). The
     /// UI keeps `phase == .connected` presentation during this window.
     private(set) var isRecovering = false
+    /// Monotonic counter incremented every time `start()` reaches `.connected`.
+    /// Mounted shell surfaces observe this to re-sync hubs, open workbenches,
+    /// and pending terminal resumes after an offline/reconnect round-trip.
+    private(set) var connectionEpoch = 0
     /// The last open failed in a way a retry cannot fix: the saved origin no
     /// longer reaches the host, or the host refuses this device's credential.
     /// The caller offers a pairing scan instead of another retry.
@@ -186,11 +190,11 @@ final class WorkspaceSession {
         startEpoch += 1
         let epoch = startEpoch
         isStarting = true
-        // Recovery of an already-established session keeps the mounted shell
-        // on screen: only a first-ever connect (or an exhausted retry) flips
-        // the visible phase, so a foreground return never blanks the live
-        // terminal/chat canvas behind a full-screen "Connecting…" spinner.
-        let recovering = hasEstablishedConnection
+        // Recovery of a currently live `.connected` session keeps the mounted
+        // shell on screen; initial open or explicit retry from `.failed` shows
+        // `.connecting` until the host actually answers, while still keeping
+        // `hasEstablishedConnection` so full workspace restoration runs on success.
+        let recovering = hasEstablishedConnection && phase == .connected
         isRecovering = recovering
         defer {
             if startEpoch == epoch {
@@ -202,6 +206,10 @@ final class WorkspaceSession {
             phase = .connecting
         }
         needsRePairing = false
+        // Start path monitoring immediately so even if the initial handshake
+        // lands on `.failed` while Wi-Fi/tunnel is still coming up, the next
+        // satisfied path change automatically retries without stranding the user.
+        startPathMonitor()
         HostLog.session.info("Host connect started")
         do {
             await HostNetwork.waitUntilReady()
@@ -212,6 +220,11 @@ final class WorkspaceSession {
             guard startEpoch == epoch else { return }
             try await connectAgent()
             guard startEpoch == epoch else { return }
+            conversations.errorMessage = nil
+            projects.errorMessage = nil
+            files.errorMessage = nil
+            chat.errorMessage = nil
+            terminals.errorMessage = nil
             await conversations.refresh()
             await projects.refresh()
             await liveAgents.refresh()
@@ -221,15 +234,17 @@ final class WorkspaceSession {
                 terminals.errorMessage = error.localizedDescription
             }
             guard startEpoch == epoch else { return }
+            let wasEstablished = hasEstablishedConnection
             hasEstablishedConnection = true
             phase = .connected
-            startPathMonitor()
             startRunningRefresh()
             await refreshDesktopSupport()
-            // A rebuilt terminal socket is a fresh connection with an empty
-            // server-side authorization map: re-watch/re-attach now so the
-            // first user action is not answered with UNAUTHORIZED.
-            await terminals.recoverAfterReconnect()
+            if wasEstablished {
+                await restoreWorkspaceAfterReconnect()
+            } else {
+                await terminals.recoverAfterReconnect()
+            }
+            connectionEpoch &+= 1
             HostLog.session.info("Host connect succeeded")
         } catch is CancellationError {
             HostLog.session.info("Host connect cancelled")
@@ -277,8 +292,52 @@ final class WorkspaceSession {
     }
 
     func retry() async {
-        stop()
+        // Preserve `hasEstablishedConnection` and `pathMonitor` across retry so
+        // the mounted shell tree (open terminal, conversation, tab state)
+        // recovers in place instead of resetting to a cold session.
+        tearDownTransports(showConnectingIfFailed: true)
         await start()
+    }
+
+    private func tearDownTransports(showConnectingIfFailed: Bool) {
+        startEpoch += 1
+        isStarting = false
+        isRecovering = false
+        if showConnectingIfFailed, case .failed = phase {
+            phase = .connecting
+        }
+        pathRefreshTask?.cancel()
+        pathRefreshTask = nil
+        runningRefreshTask?.cancel()
+        runningRefreshTask = nil
+        acp.stop()
+        terminalSocket.stop()
+        desktopSocket.close()
+    }
+
+    /// Re-bind the active ACP conversation and refresh scoped terminals on a
+    /// freshly reconnected transport pair so streaming, permissions, and PTY
+    /// watches resume seamlessly.
+    private func restoreWorkspaceAfterReconnect() async {
+        await terminals.recoverAfterReconnect()
+        switch workspace {
+        case .conversation:
+            if let active = conversations.active {
+                let refreshed = conversations.conversations.first(where: { $0.id == active.id }) ?? active
+                conversations.select(refreshed)
+                let binding = await conversations.binding(for: refreshed)
+                await chat.bindConversation(refreshed, binding: binding)
+            }
+            await refreshActiveTerminals()
+        case .project:
+            if let active = projects.active,
+               let refreshed = projects.projects.first(where: { $0.id == active.id }) {
+                await projects.select(refreshed)
+            }
+            await refreshActiveTerminals()
+        case .home:
+            break
+        }
     }
 
     func stop() {
@@ -413,10 +472,12 @@ final class WorkspaceSession {
                 if acpLiveness == .unknown {
                     HostLog.session.info("ACP liveness inconclusive after \(reason, privacy: .public)")
                 }
-                // Half-open terminal WebSockets commonly fail to answer a ping
-                // within 4 s (`.unknown`) rather than reporting `-1004` right
-                // away; keeping them leaves `write` wedged until timeout.
-                if terminalLiveness != .alive {
+                // Only rebuild on `.unknown` when the socket has been idle (no
+                // recent inbound traffic); a socket that just authenticated or
+                // received bytes is healthy even if a tunnel buffered a Ping.
+                let terminalNeedsRebuild = terminalLiveness.isDead
+                    || (terminalLiveness == .unknown && !terminalSocket.isRecentlyActive(within: .seconds(15)))
+                if terminalNeedsRebuild {
                     HostLog.session.info("Terminal transport \(String(describing: terminalLiveness), privacy: .public) after \(reason, privacy: .public); rebuilding terminal socket")
                     await rebuildTerminalTransport()
                 }
@@ -453,8 +514,20 @@ final class WorkspaceSession {
     /// This keeps one stale-path failure from surfacing as a failed open.
     func ensureTerminalTransport() async {
         guard phase == .connected else { return }
-        guard await terminalSocket.probeLiveness() != .alive else { return }
-        await rebuildTerminalTransport()
+        if !terminalSocket.isConnected {
+            await rebuildTerminalTransport()
+            return
+        }
+        // A socket that just authenticated or received frames within 10 s is
+        // proven live: skip the Ping round-trip so bootstrap/open never stalls
+        // or tears down a freshly connected socket over a proxy/tunnel.
+        if terminalSocket.isRecentlyActive(within: .seconds(10)) {
+            return
+        }
+        let liveness = await terminalSocket.probeLiveness()
+        if liveness.isDead || (liveness == .unknown && !terminalSocket.isRecentlyActive(within: .seconds(25))) {
+            await rebuildTerminalTransport()
+        }
     }
 
     private func rebuildTerminalTransport() async {

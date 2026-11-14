@@ -267,4 +267,25 @@ struct ReconnectAuthorizationTests {
         #expect(TerminalStore.isRecoverableWriteFailure(HostError.deviceRevoked) == false)
         #expect(TerminalStore.isRecoverableWriteFailure(HostError.forbidden("terminal.input")) == false)
     }
+
+    @Test("Transient hub failures preserve TerminalLastSeen so reconnect can still resume the last terminal")
+    func lastSeenClearedOnlyOnAuthoritativeHostAnswer() {
+        #expect(ConnectedShellScreen.canClearMissingLastSeen(hubState: .idle) == false)
+        #expect(ConnectedShellScreen.canClearMissingLastSeen(hubState: .loading) == false)
+        #expect(ConnectedShellScreen.canClearMissingLastSeen(hubState: .failed("Disconnected from the host.")) == false)
+        #expect(ConnectedShellScreen.canClearMissingLastSeen(hubState: .loaded) == true)
+        #expect(ConnectedShellScreen.canClearMissingLastSeen(hubState: .empty) == true)
+
+        #expect(ConnectedShellScreen.canClearMissingQuickLastSeen(quickState: .failed("net")) == false)
+        #expect(ConnectedShellScreen.canClearMissingQuickLastSeen(quickState: .loading) == false)
+        #expect(ConnectedShellScreen.canClearMissingQuickLastSeen(quickState: .loaded) == true)
+        #expect(ConnectedShellScreen.canClearMissingQuickLastSeen(quickState: .empty) == true)
+    }
+
+    @Test("Disconnected socket reports not recently active")
+    @MainActor
+    func disconnectedSocketIsNotRecentlyActive() {
+        let socket = TerminalSocket()
+        #expect(socket.isRecentlyActive() == false)
+    }
 }

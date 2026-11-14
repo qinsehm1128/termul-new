@@ -56,6 +56,7 @@ final class TerminalWorkbenchModel {
 
     @ObservationIgnored private var workspaceBackend: (any TerminalSurfaceBackend)?
     @ObservationIgnored private var standaloneBackend: (any TerminalSurfaceBackend)?
+    @ObservationIgnored private var failedOpenRequest: TerminalOpenRequest?
     @ObservationIgnored private var hookProbe: AgentChatStore?
     @ObservationIgnored private var hookTask: Task<Void, Never>?
 
@@ -229,6 +230,7 @@ final class TerminalWorkbenchModel {
 
         panelExpanded = false
         errorMessage = nil
+        failedOpenRequest = nil
         isOpening = true
         defer { isOpening = false }
 
@@ -249,15 +251,40 @@ final class TerminalWorkbenchModel {
                 self.request = request
                 stopHookProbe()
             } catch {
-                // No surface exists: keep no request, or the panel would offer a
-                // destructive "Close Terminal" for a shell this app never
-                // attached to. A failed attach may still have taken a host view
-                // lease, so drop that too — the PTY itself keeps running.
+                // No surface exists: keep no request on `self.request`, or the
+                // panel would offer a destructive "Close Terminal" for a shell
+                // this app never attached to; remember `failedOpenRequest` so a
+                // subsequent reconnect can retry opening it automatically.
                 activeBackend = nil
                 standaloneBackend = nil
                 self.request = nil
+                failedOpenRequest = request
                 errorMessage = error.localizedDescription
                 await session.terminals.releaseViewer(for: request.terminalID)
+            }
+        }
+    }
+
+    /// Re-open or re-watch the terminal surface after the host session recovers
+    /// from an offline/disconnect state.
+    func recoverAfterSessionReconnect() async {
+        clearError()
+        if activeBackend == nil, let retryRequest = request ?? failedOpenRequest {
+            failedOpenRequest = nil
+            await open(retryRequest)
+            return
+        }
+        guard let current = request else { return }
+        switch current.attach {
+        case .workspace(let terminalID):
+            if !isWatching(terminalID) {
+                await activeBackend?.select(terminalID)
+            }
+            await activeBackend?.resume()
+            startHookProbe(for: terminalID)
+        case .standalone:
+            if activeBackend?.isLiveAttached != true {
+                await open(current)
             }
         }
     }
@@ -297,6 +324,7 @@ final class TerminalWorkbenchModel {
     func back() async {
         panelExpanded = false
         sheetAction = nil
+        failedOpenRequest = nil
         await activeBackend?.park()
         activeBackend = nil
         if isStandalone { standaloneBackend = nil }

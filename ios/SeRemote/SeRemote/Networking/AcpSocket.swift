@@ -43,11 +43,36 @@ final class AcpSocket {
     private var requestSerial = 0
     private var origin: URL?
     private var openGate: HostWebSocketOpenGate?
+    private var connectTask: Task<Void, Error>?
+    private var connectSerial = 0
+    private(set) var lastInboundAt: ContinuousClock.Instant?
 
     func connect(origin: URL, credentials: HostCredentials) async throws {
         guard state != .revoked else { throw HostError.deviceRevoked }
-        stop()
+        if state == .connected, self.origin == origin { return }
+        if let inFlight = connectTask, self.origin == origin {
+            try await inFlight.value
+            return
+        }
+        connectSerial &+= 1
+        let serial = connectSerial
         self.origin = origin
+        let task = Task<Void, Error> { @MainActor [weak self] in
+            guard let self else { throw CancellationError() }
+            defer {
+                if self.connectSerial == serial {
+                    self.connectTask = nil
+                }
+            }
+            try await self.performConnect(origin: origin, credentials: credentials)
+        }
+        connectTask = task
+        try await task.value
+    }
+
+    private func performConnect(origin: URL, credentials: HostCredentials) async throws {
+        guard state != .revoked else { throw HostError.deviceRevoked }
+        stopSocketOnly()
         state = .connecting
         runtimePolicy = AcpRuntimePolicy()
         guard let token = credentials.bearer, !token.isEmpty else {
@@ -63,10 +88,10 @@ final class AcpSocket {
         openGate = gate
         let session = HostTunnelSession.make(delegate: gate)
         self.session = session
-        let task = session.webSocketTask(with: urlRequest)
-        self.task = task
-        task.resume()
-        receiveTask = Task { await self.receiveLoop() }
+        let wsTask = session.webSocketTask(with: urlRequest)
+        self.task = wsTask
+        wsTask.resume()
+        receiveTask = Task { await self.receiveLoop(for: wsTask) }
 
         do {
             try await gate.waitForOpen()
@@ -76,6 +101,7 @@ final class AcpSocket {
                 runtimePolicy = reply.runtimePolicy ?? AcpRuntimePolicy()
             }
             guard state != .revoked else { throw HostError.deviceRevoked }
+            lastInboundAt = ContinuousClock.now
             state = .connected
             startHeartbeat()
         } catch {
@@ -84,7 +110,7 @@ final class AcpSocket {
             } else if state != .revoked {
                 state = .failed(error.localizedDescription)
             }
-            stop()
+            stopSocketOnly()
             throw state == .revoked ? HostError.deviceRevoked : error
         }
     }
@@ -146,9 +172,21 @@ final class AcpSocket {
     /// Transport-level liveness for a socket the app still believes is
     /// connected. Used after a resume or a path change so a stranded socket is
     /// rebuilt before the next user request has to fail.
+    func isRecentlyActive(within window: Duration = .seconds(8)) -> Bool {
+        guard state == .connected, task != nil, let lastInboundAt else { return false }
+        return lastInboundAt.duration(to: ContinuousClock.now) < window
+    }
+
     func probeLiveness() async -> TransportLiveness {
         guard state == .connected, let task else { return .dead }
-        return await WebSocketLiveness.probe(task)
+        if isRecentlyActive(within: .seconds(6)) {
+            return .alive
+        }
+        let result = await WebSocketLiveness.probe(task)
+        if result == .alive {
+            lastInboundAt = ContinuousClock.now
+        }
+        return result
     }
 
     func revoke() {
@@ -166,6 +204,13 @@ final class AcpSocket {
     }
 
     func stop() {
+        connectSerial &+= 1
+        connectTask?.cancel()
+        connectTask = nil
+        stopSocketOnly()
+    }
+
+    private func stopSocketOnly() {
         heartbeat?.cancel()
         heartbeat = nil
         receiveTask?.cancel()
@@ -176,8 +221,10 @@ final class AcpSocket {
             continuation.resume(throwing: HostError.network(String(localized: "Disconnected from the host.")))
         }
         pending.removeAll()
-        task?.cancel(with: .goingAway, reason: nil)
+        let oldTask = task
         task = nil
+        lastInboundAt = nil
+        oldTask?.cancel(with: .goingAway, reason: nil)
         session?.invalidateAndCancel()
         session = nil
         switch state {
@@ -209,10 +256,12 @@ final class AcpSocket {
         }
     }
 
-    private func receiveLoop() async {
-        while let task, !Task.isCancelled {
+    private func receiveLoop(for loopTask: URLSessionWebSocketTask) async {
+        while self.task === loopTask, !Task.isCancelled {
             do {
-                let message = try await task.receive()
+                let message = try await loopTask.receive()
+                guard self.task === loopTask else { return }
+                lastInboundAt = ContinuousClock.now
                 let data: Data
                 switch message {
                 case .data(let value):
@@ -224,8 +273,8 @@ final class AcpSocket {
                 }
                 handleFrame(data)
             } catch {
-                guard self.task === task, state != .revoked else { return }
-                if task.closeCode == .policyViolation, let origin {
+                guard self.task === loopTask, state != .revoked else { return }
+                if loopTask.closeCode == .policyViolation, let origin {
                     handleDeviceRevoked(origin: origin)
                     return
                 }

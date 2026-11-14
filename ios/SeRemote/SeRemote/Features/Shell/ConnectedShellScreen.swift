@@ -197,6 +197,13 @@ struct ConnectedShellScreen: View {
             guard phase == .connected else { return }
             Task { await consumePendingRoute() }
         }
+        .onChange(of: session.connectionEpoch) { _, epoch in
+            // Epoch 1 is the initial connect handled by `bootstrap()`; every
+            // later epoch means the link recovered from an offline/reconnect
+            // round-trip and must refresh T1 + recover any mounted surface.
+            guard didBootstrap, epoch > 1, session.phase == .connected else { return }
+            Task { await recoverShellAfterReconnect() }
+        }
         .onChange(of: store.pendingTerminalRoute) { _, route in
             guard route != nil, session.phase == .connected else { return }
             Task { await consumePendingRoute() }
@@ -589,7 +596,6 @@ struct ConnectedShellScreen: View {
         Task {
             await session.ensureTerminalTransport()
             await refreshHub()
-            await session.quickTerminals.refresh()
             if let request = await resumeRequest() {
                 await open(request)
             } else {
@@ -598,6 +604,26 @@ struct ConnectedShellScreen: View {
             await consumePendingRoute()
             startHubPolling()
         }
+    }
+
+    /// Full shell recovery after an offline/reconnect cycle: refresh the
+    /// terminal directory, re-attach/re-watch the open workbench (or resume
+    /// `TerminalLastSeen` if the initial open had failed before attaching), and
+    /// restart polling if needed.
+    private func recoverShellAfterReconnect() async {
+        await refreshHub()
+        if hubRefreshTask == nil {
+            startHubPolling()
+        }
+        if workbenchVisible {
+            await terminalModel.recoverAfterSessionReconnect()
+            if terminalModel.activeID == nil, let request = navigation.openRequest {
+                await open(request)
+            }
+        } else if navigation.openRequest == nil, let request = await resumeRequest() {
+            await open(request)
+        }
+        await consumePendingRoute()
     }
 
     /// 15 s cadence for the rail and T1; the first tick is skipped because the
@@ -628,13 +654,36 @@ struct ConnectedShellScreen: View {
     /// Reopen the terminal that was open when the app last left this host. A
     /// terminal the host no longer reports lands on T1 with a notice instead of
     /// opening an empty surface.
+    /// Only an authoritative host answer (`.loaded` or `.empty`) proves a
+    /// previously seen terminal actually exited; a transient `.failed`/`.loading`
+    /// refresh must NEVER erase `TerminalLastSeen`.
+    nonisolated static func canClearMissingLastSeen(hubState: TerminalsHubStore.State) -> Bool {
+        switch hubState {
+        case .loaded, .empty:
+            return true
+        case .idle, .loading, .failed:
+            return false
+        }
+    }
+
+    nonisolated static func canClearMissingQuickLastSeen(quickState: QuickTerminalStore.State) -> Bool {
+        switch quickState {
+        case .loaded, .empty:
+            return true
+        case .idle, .loading, .failed:
+            return false
+        }
+    }
+
     private func resumeRequest() async -> TerminalOpenRequest? {
         guard let saved = TerminalLastSeen.load(origin: session.origin) else { return nil }
         switch saved.attach {
         case .workspace(let terminalID):
             guard let summary = hub.summary(for: terminalID) else {
-                TerminalLastSeen.clear(origin: session.origin)
-                landingNotice = String(localized: "The terminal you left is no longer running.")
+                if Self.canClearMissingLastSeen(hubState: hub.state) {
+                    TerminalLastSeen.clear(origin: session.origin)
+                    landingNotice = String(localized: "The terminal you left is no longer running.")
+                }
                 return nil
             }
             return TerminalLandingModel.request(for: summary, projects: session.projects.projects)
@@ -642,7 +691,9 @@ struct ConnectedShellScreen: View {
             guard let record = session.quickTerminals.records.first(where: {
                 QuickTerminalPresentation.liveTerminalIds($0).contains(terminalID)
             }) else {
-                TerminalLastSeen.clear(origin: session.origin)
+                if Self.canClearMissingQuickLastSeen(quickState: session.quickTerminals.state) {
+                    TerminalLastSeen.clear(origin: session.origin)
+                }
                 return nil
             }
             guard let opened = try? await session.quickTerminals.open(id: record.id, cols: 80, rows: 24) else {
