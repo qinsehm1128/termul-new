@@ -4991,6 +4991,21 @@ pub async fn remote_server_start(
                         return Ok(IpcResult::error(e, "REMOTE_TUNNEL_FAILED"));
                     }
                     tokio::spawn(remote::cloudflared::log_tunnel_reachability(probe_url));
+                    // Restart the provider on this listener if it exits. The
+                    // configuration is read again on every attempt, so an edit
+                    // made while the tunnel was down is what gets started.
+                    let supervised_store = Arc::clone(tunnel_store);
+                    remote_state.inner().supervise_tunnel(
+                        remote::TunnelRestartPolicy::DEFAULT,
+                        move || {
+                            let store = Arc::clone(&supervised_store);
+                            async move {
+                                let config = store.load()?;
+                                config.validate_for_start()?;
+                                remote::tunnel::start_configured_tunnel(port, &config, &store).await
+                            }
+                        },
+                    );
                     Ok(IpcResult::success(remote_state.status()))
                 }
                 Err(e) => {

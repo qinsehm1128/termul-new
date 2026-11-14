@@ -49,6 +49,56 @@ use crate::web::{serve_router, ProjectRegistry, RemoteAccessAuthority, ServerCon
 /// enumerating interfaces more than once per tick.
 const LAN_ORIGIN_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
+/// Numbers each listener so a tunnel restart that finishes late can tell the
+/// listener it was started for from a newer one in the same slot.
+static NEXT_SERVER_INSTANCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// How the tunnel supervisor paces restarts of an exited provider.
+#[derive(Debug, Clone, Copy)]
+pub struct TunnelRestartPolicy {
+    /// How often the exit flag is read.
+    pub poll: Duration,
+    /// Wait before each consecutive attempt; the last entry repeats.
+    pub backoff: &'static [Duration],
+    /// A tunnel that lived this long starts the backoff over.
+    pub stable_after: Duration,
+}
+
+impl TunnelRestartPolicy {
+    /// The first retry waits long enough for an SSH server to release the
+    /// forwarded port; later ones back off so an unreachable provider is not
+    /// hammered. Attempts never stop while the listener runs: the network may
+    /// come back hours later.
+    pub const DEFAULT: Self = Self {
+        poll: Duration::from_secs(2),
+        backoff: &[
+            Duration::from_secs(2),
+            Duration::from_secs(5),
+            Duration::from_secs(15),
+            Duration::from_secs(30),
+            Duration::from_secs(60),
+        ],
+        stable_after: Duration::from_secs(60),
+    };
+}
+
+/// What the supervisor sees when it looks at its listener's tunnel.
+enum TunnelWatch {
+    /// The listener stopped or was replaced; supervision ends.
+    Gone,
+    Alive,
+    /// The provider child exited.
+    Dead,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum TunnelReattachError {
+    /// The listener this tunnel was started for no longer exists.
+    ServerGone,
+    /// The public Origin was malformed or refused by the Origin policy.
+    Rejected,
+}
+
 /// Which network interface(s) the in-process web server binds to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteBindMode {
@@ -235,6 +285,11 @@ struct RemoteServer {
     /// is reaped via `kill_on_drop` — the child is NOT held here directly,
     /// which keeps `status()` sync (no try_wait-across-`.await` dance).
     tunnel_watchdog: Option<tokio::task::JoinHandle<()>>,
+    /// Restarts the tunnel provider after its child exits, on this same
+    /// listener. Aborted on `stop()`/`Drop`.
+    tunnel_supervisor: Option<tokio::task::JoinHandle<()>>,
+    /// See [`NEXT_SERVER_INSTANCE`].
+    instance: u64,
     /// Polls the machine's LAN address for the listener's lifetime and admits
     /// the new `http://<ip>:<port>` Origin when the desktop changes networks.
     /// `None` for loopback binds. Aborted on `stop()`/`Drop`.
@@ -316,6 +371,9 @@ impl Drop for RemoteServer {
         // drops its future → drops the child). Without this, dropping the
         // JoinHandle would detach the task and the cloudflared process could
         // outlive the server on a hard exit where `stop()` never ran.
+        if let Some(handle) = self.tunnel_supervisor.take() {
+            handle.abort();
+        }
         if let Some(handle) = self.tunnel_watchdog.take() {
             handle.abort();
         }
@@ -701,6 +759,8 @@ impl RemoteServerState {
             tunnel_provider: None,
             tunnel_dead: None,
             tunnel_watchdog: None,
+            tunnel_supervisor: None,
+            instance: NEXT_SERVER_INSTANCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             lan_watchdog: None,
             credential_lease: Some(pending_credential.into_lease()),
             authority: Arc::clone(&self.authority),
@@ -793,6 +853,13 @@ impl RemoteServerState {
                 // Axum drains so the public tunnel stops forwarding new traffic
                 // before existing conns flush. An already-exited child (the
                 // watchdog already completed) is a no-op.
+                // The supervisor goes first so it cannot start a provider for
+                // a listener that is draining; a start it had in flight drops
+                // its child, which is reaped the same way.
+                if let Some(handle) = server.tunnel_supervisor.take() {
+                    handle.abort();
+                    let _ = handle.await;
+                }
                 if let Some(handle) = server.tunnel_watchdog.take() {
                     handle.abort();
                     // Await completion of the abort so the child is reaped
@@ -957,11 +1024,7 @@ impl RemoteServerState {
             self.fail_active_server("attach_origin_policy");
             return Err(format!("failed to register public Origin: {error}"));
         }
-        let mut public_origin = parsed_origin;
-        public_origin.set_path("");
-        public_origin.set_query(None);
-        public_origin.set_fragment(None);
-        let public_origin = public_origin.to_string().trim_end_matches('/').to_string();
+        let public_origin = published_origin(parsed_origin);
 
         let mut slot = self.inner.lock().unwrap();
         match slot.as_mut() {
@@ -969,22 +1032,18 @@ impl RemoteServerState {
                 if !server.task_finished() && server.credential_lease.as_ref().is_some() =>
             {
                 let child = child.take().expect("child present after take");
-                let dead_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-                let flag = dead_flag.clone();
                 // The watchdog owns the child: `wait()` for natural exit, then
                 // flag death so the next `status()` poll clears the stale URL.
                 // A dead tunnel is an availability failure, not a leak — keep
                 // the pairing generation so LAN (and a later tunnel retry) still
                 // work. Aborted on `stop()`/`Drop`.
-                let watchdog = tokio::spawn(async move {
-                    let mut child = child;
-                    let _ = child.wait().await;
-                    flag.store(true, std::sync::atomic::Ordering::Release);
-                });
+                let (dead_flag, watchdog) = spawn_tunnel_watchdog(child, provider);
                 server.tunnel_url = Some(public_origin);
                 server.tunnel_provider = Some(provider.to_string());
                 server.tunnel_dead = Some(dead_flag);
-                server.tunnel_watchdog = Some(watchdog);
+                if let Some(previous) = server.tunnel_watchdog.replace(watchdog) {
+                    previous.abort();
+                }
                 log::info!(target: "se_manager::remote::host", "operation=shared_live_host stable_code=OK");
                 Ok(())
             }
@@ -995,6 +1054,204 @@ impl RemoteServerState {
                 drop(slot);
                 self.fail_active_server("attach_race");
                 Err("remote server stopped before tunnel attached".to_string())
+            }
+        }
+    }
+
+    /// Keep the attached tunnel alive: when its provider child exits, start
+    /// the provider again with `start` and attach it to this same listener.
+    ///
+    /// A dead tunnel used to stay dead until remote access was toggled off
+    /// and on by hand, and that toggle retires the pairing bearer. Restarting
+    /// in place keeps the listener, the bearer and every paired device.
+    /// Supervision ends when the listener stops.
+    pub fn supervise_tunnel<F, Fut>(self: &Arc<Self>, policy: TunnelRestartPolicy, start: F)
+    where
+        F: FnMut() -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = Result<crate::remote::tunnel::StartedTunnel, String>>
+            + Send
+            + 'static,
+    {
+        let mut slot = self.inner.lock().unwrap();
+        let Some(server) = slot.as_mut().filter(|server| !server.task_finished()) else {
+            return;
+        };
+        let supervisor = tokio::spawn(run_tunnel_supervisor(
+            Arc::downgrade(self),
+            server.instance,
+            policy,
+            start,
+        ));
+        if let Some(previous) = server.tunnel_supervisor.replace(supervisor) {
+            previous.abort();
+        }
+    }
+
+    fn tunnel_watch(&self, instance: u64) -> TunnelWatch {
+        let slot = self.inner.lock().unwrap();
+        let Some(server) = slot
+            .as_ref()
+            .filter(|server| server.instance == instance && !server.task_finished())
+        else {
+            return TunnelWatch::Gone;
+        };
+        match server.tunnel_dead.as_ref() {
+            None => TunnelWatch::Gone,
+            Some(flag) if flag.load(std::sync::atomic::Ordering::Acquire) => TunnelWatch::Dead,
+            Some(_) => TunnelWatch::Alive,
+        }
+    }
+
+    /// Attach a restarted tunnel to the listener `instance` names.
+    ///
+    /// Unlike [`attach_tunnel_as`](Self::attach_tunnel_as), a failure here
+    /// never touches the listener or its pairing credential: a restart that
+    /// goes wrong must leave LAN access and the next attempt intact.
+    fn reattach_tunnel(
+        &self,
+        instance: u64,
+        url: &str,
+        mut child: Child,
+        provider: &str,
+    ) -> Result<(), TunnelReattachError> {
+        let Ok(parsed_origin) = url::Url::parse(url) else {
+            let _ = child.start_kill();
+            return Err(TunnelReattachError::Rejected);
+        };
+        let mut slot = self.inner.lock().unwrap();
+        let Some(server) = slot.as_mut().filter(|server| {
+            server.instance == instance
+                && !server.task_finished()
+                && server.credential_lease.is_some()
+        }) else {
+            let _ = child.start_kill();
+            return Err(TunnelReattachError::ServerGone);
+        };
+        if self
+            .authority
+            .set_public_origin(parsed_origin.clone())
+            .is_err()
+        {
+            let _ = child.start_kill();
+            return Err(TunnelReattachError::Rejected);
+        }
+        let (dead_flag, watchdog) = spawn_tunnel_watchdog(child, provider);
+        server.tunnel_url = Some(published_origin(parsed_origin));
+        server.tunnel_provider = Some(provider.to_string());
+        server.tunnel_dead = Some(dead_flag);
+        if let Some(previous) = server.tunnel_watchdog.replace(watchdog) {
+            previous.abort();
+        }
+        Ok(())
+    }
+}
+
+/// The Origin as published in the QR: no path, query or fragment.
+fn published_origin(mut origin: url::Url) -> String {
+    origin.set_path("");
+    origin.set_query(None);
+    origin.set_fragment(None);
+    origin.to_string().trim_end_matches('/').to_string()
+}
+
+/// Own the provider child until it exits, then raise the returned flag.
+/// Aborting the task drops the child, which reaps it via `kill_on_drop`.
+fn spawn_tunnel_watchdog(
+    child: Child,
+    provider: &str,
+) -> (
+    Arc<std::sync::atomic::AtomicBool>,
+    tokio::task::JoinHandle<()>,
+) {
+    let dead_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = Arc::clone(&dead_flag);
+    let provider = provider.to_string();
+    let watchdog = tokio::spawn(async move {
+        let mut child = child;
+        let exit_code = child.wait().await.ok().and_then(|status| status.code());
+        // The exit code is the only clue to why a provider left (ssh uses 255
+        // for a lost connection); `None` means it was killed by a signal.
+        log::warn!(
+            target: "se_manager::remote::host",
+            "operation=tunnel_watchdog lifecycle_phase=child_exit provider={provider} exit_code={exit_code:?} stable_code=TUNNEL_EXITED"
+        );
+        flag.store(true, std::sync::atomic::Ordering::Release);
+    });
+    (dead_flag, watchdog)
+}
+
+async fn run_tunnel_supervisor<F, Fut>(
+    host: std::sync::Weak<RemoteServerState>,
+    instance: u64,
+    policy: TunnelRestartPolicy,
+    mut start: F,
+) where
+    F: FnMut() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<crate::remote::tunnel::StartedTunnel, String>>
+        + Send
+        + 'static,
+{
+    let watch = |host: &std::sync::Weak<RemoteServerState>| {
+        host.upgrade()
+            .map_or(TunnelWatch::Gone, |state| state.tunnel_watch(instance))
+    };
+    let mut attempt: usize = 0;
+    let mut attached_at = tokio::time::Instant::now();
+    loop {
+        tokio::time::sleep(policy.poll).await;
+        match watch(&host) {
+            TunnelWatch::Gone => return,
+            TunnelWatch::Alive => continue,
+            TunnelWatch::Dead => {}
+        }
+        if attached_at.elapsed() >= policy.stable_after {
+            attempt = 0;
+        }
+        let delay = policy
+            .backoff
+            .get(attempt)
+            .or(policy.backoff.last())
+            .copied()
+            .unwrap_or(policy.poll);
+        attempt += 1;
+        log::warn!(
+            target: "se_manager::remote::host",
+            "operation=tunnel_supervisor lifecycle_phase=restart_scheduled attempt={attempt} delay_ms={} stable_code=TUNNEL_EXITED",
+            delay.as_millis()
+        );
+        tokio::time::sleep(delay).await;
+        if matches!(watch(&host), TunnelWatch::Gone) {
+            return;
+        }
+        let tunnel = match start().await {
+            Ok(tunnel) => tunnel,
+            Err(_) => {
+                // The provider's message can name hosts; log the code only.
+                log::warn!(
+                    target: "se_manager::remote::host",
+                    "operation=tunnel_supervisor lifecycle_phase=restart_failed attempt={attempt} stable_code=REMOTE_TUNNEL_FAILED"
+                );
+                continue;
+            }
+        };
+        let Some(state) = host.upgrade() else {
+            return;
+        };
+        let provider = tunnel.provider.as_str();
+        match state.reattach_tunnel(instance, &tunnel.url, tunnel.child, provider) {
+            Ok(()) => {
+                attached_at = tokio::time::Instant::now();
+                log::info!(
+                    target: "se_manager::remote::host",
+                    "operation=tunnel_supervisor lifecycle_phase=restarted provider={provider} attempt={attempt} stable_code=OK"
+                );
+            }
+            Err(TunnelReattachError::ServerGone) => return,
+            Err(TunnelReattachError::Rejected) => {
+                log::warn!(
+                    target: "se_manager::remote::host",
+                    "operation=tunnel_supervisor lifecycle_phase=reattach_rejected provider={provider} attempt={attempt} stable_code=REMOTE_TUNNEL_FAILED"
+                );
             }
         }
     }
@@ -1825,6 +2082,187 @@ mod tests {
             assert!(access.contains("#access_token="));
         }
         let _ = state.stop().await;
+    }
+
+    const FAST_TUNNEL_RESTART: TunnelRestartPolicy = TunnelRestartPolicy {
+        poll: Duration::from_millis(20),
+        backoff: &[Duration::from_millis(20)],
+        stable_after: Duration::from_secs(60),
+    };
+
+    async fn start_localhost_listener(state: &RemoteServerState) {
+        let (acp, pty, relay, registry) = lifecycle_fixtures();
+        let _ = state
+            .start(
+                crate::core::AcpWebHostHandle::in_process(acp, Arc::clone(&relay)),
+                pty.clone(),
+                crate::core::TerminalServiceHandle::in_process(Arc::clone(&pty)),
+                relay,
+                registry,
+                RemoteBindMode::Localhost,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("start");
+    }
+
+    fn attach_exited_tunnel(state: &RemoteServerState, url: &str) {
+        let mut cmd = quick_exit_command();
+        cmd.kill_on_drop(true);
+        let child = cmd.spawn().expect("spawn quick-exit child");
+        state.attach_tunnel(url.to_string(), child).expect("attach");
+    }
+
+    #[tokio::test]
+    async fn supervisor_restarts_a_dead_tunnel_and_keeps_the_pairing_credential() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let state = Arc::new(RemoteServerState::new());
+        start_localhost_listener(&state).await;
+        let credential = active_credential(&state);
+        attach_exited_tunnel(&state, "https://first.trycloudflare.com");
+
+        let starts = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&starts);
+        state.supervise_tunnel(FAST_TUNNEL_RESTART, move || {
+            let attempt = counter.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if attempt == 0 {
+                    return Err("provider not reachable yet".to_string());
+                }
+                let child = long_lived_command()
+                    .spawn()
+                    .map_err(|error| error.to_string())?;
+                Ok(crate::remote::tunnel::StartedTunnel {
+                    url: "https://second.trycloudflare.com".to_string(),
+                    child,
+                    provider: crate::remote::tunnel::TunnelProviderKind::SshReverse,
+                })
+            }
+        });
+
+        let mut restored = false;
+        for _ in 0..200 {
+            let status = state.status();
+            // A failed attempt must leave the listener and its bearer alone.
+            assert!(
+                status.running,
+                "a tunnel restart must never stop the listener"
+            );
+            if status.tunnel_url.as_deref() == Some("https://second.trycloudflare.com") {
+                restored = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(restored, "the exited tunnel must be restarted");
+        assert!(
+            starts.load(Ordering::SeqCst) >= 2,
+            "a failed restart must be retried"
+        );
+        assert_eq!(
+            state.status().tunnel_provider.as_deref(),
+            Some("sshReverse")
+        );
+        assert_eq!(
+            active_credential(&state),
+            credential,
+            "restarting the tunnel must not rotate the pairing bearer"
+        );
+        assert!(state.authority.verify_bearer(&credential.1).is_ok());
+
+        // The restarted provider is alive, so nothing restarts it again.
+        let settled = starts.load(Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(starts.load(Ordering::SeqCst), settled);
+        let _ = state.stop().await;
+    }
+
+    #[tokio::test]
+    async fn stopping_the_listener_ends_tunnel_supervision() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let state = Arc::new(RemoteServerState::new());
+        start_localhost_listener(&state).await;
+        attach_exited_tunnel(&state, "https://first.trycloudflare.com");
+        let stale_instance = state
+            .inner
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|server| server.instance)
+            .expect("running listener");
+
+        let starts = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&starts);
+        state.supervise_tunnel(FAST_TUNNEL_RESTART, move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            async { Err::<crate::remote::tunnel::StartedTunnel, _>("still down".to_string()) }
+        });
+        for _ in 0..200 {
+            if starts.load(Ordering::SeqCst) > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(
+            starts.load(Ordering::SeqCst) > 0,
+            "supervision must be running"
+        );
+
+        state.stop().await.expect("stop");
+        let after_stop = starts.load(Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(
+            starts.load(Ordering::SeqCst),
+            after_stop,
+            "no provider may be started for a stopped listener"
+        );
+
+        // A provider start that finishes late must not attach to the next
+        // listener: that one was never asked to publish this tunnel.
+        start_localhost_listener(&state).await;
+        let child = long_lived_command().spawn().expect("spawn");
+        assert_eq!(
+            state.reattach_tunnel(
+                stale_instance,
+                "https://late.trycloudflare.com",
+                child,
+                "sshReverse"
+            ),
+            Err(TunnelReattachError::ServerGone)
+        );
+        let status = state.status();
+        assert!(status.running);
+        assert!(status.tunnel_url.is_none());
+        let _ = state.stop().await;
+    }
+
+    /// A cross-platform command that outlives any test, standing in for a
+    /// healthy tunnel provider. Killed when its owner drops it.
+    fn long_lived_command() -> tokio::process::Command {
+        #[cfg(target_os = "windows")]
+        let mut c = tokio::process::Command::new("cmd");
+        #[cfg(target_os = "windows")]
+        c.args(["/c", "ping", "-n", "120", "127.0.0.1"]);
+        #[cfg(not(target_os = "windows"))]
+        let mut c = tokio::process::Command::new("sleep");
+        #[cfg(not(target_os = "windows"))]
+        c.arg("120");
+
+        c.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true);
+        c
     }
 
     /// A cross-platform command that exits 0 almost immediately, for the

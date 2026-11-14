@@ -17,6 +17,6 @@ pub mod intent;
 pub mod lan;
 pub mod tunnel;
 
-pub use host::{RemoteBindMode, RemoteServerState, RemoteStatus};
+pub use host::{RemoteBindMode, RemoteServerState, RemoteStatus, TunnelRestartPolicy};
 pub use intent::{PublishMode, RemoteAccessIntent, RemoteAccessIntentStore};
 pub use tunnel::TunnelConfigStore;
