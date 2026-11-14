@@ -103,6 +103,12 @@ final class TerminalStore {
     /// decides which run may clear the in-flight slot.
     private var recoveryTask: Task<Void, Never>?
     private var recoverySerial = 0
+    /// Ordered outbound input buffers per terminal so rapid typing, paste, or
+    /// mouse-wheel bursts collapse into serialized WebSocket `write` frames
+    /// instead of flooding concurrent RPCs.
+    @ObservationIgnored private var pendingWrites: [String: String] = [:]
+    @ObservationIgnored private var activeWriteDrains: Set<String> = []
+    @ObservationIgnored private var backgroundReconnectTask: Task<Void, Never>?
     private var lastConversationId: String?
     private var lastProjectId: String?
 
@@ -137,6 +143,10 @@ final class TerminalStore {
         socket.onConnected = { [weak self] _ in
             guard let self else { return }
             Task { await self.recoverAfterReconnect() }
+        }
+        socket.onDisconnected = { [weak self] in
+            guard let self else { return }
+            self.scheduleProactiveReconnectIfNeeded()
         }
         socket.onCatalogChanged = { [weak self] in
             guard let self else { return }
@@ -173,6 +183,7 @@ final class TerminalStore {
             self.standaloneClaims.removeValue(forKey: terminalId)
             self.watchedSeq.removeValue(forKey: terminalId)
             self.lastPushed.removeValue(forKey: terminalId)
+            self.pendingWrites.removeValue(forKey: terminalId)
             if let viewer = self.viewers[terminalId]?.viewer {
                 viewer.markExited()
             }
@@ -220,16 +231,22 @@ final class TerminalStore {
             }
             return existing
         }
+        let resolved = claim ?? standaloneClaims[terminalId]
         let viewer = TerminalPTYViewer(
             terminalId: terminalId,
             title: title,
             socket: socket,
             cols: cols,
-            rows: rows
+            rows: rows,
+            ensureConnected: { [weak self] in
+                try await self?.ensureConnected()
+            },
+            claimProvider: { [weak self] in
+                resolved ?? self?.standaloneClaims[terminalId]
+            }
         )
         let box = TerminalViewerBox(viewer: viewer)
         viewers[terminalId] = box
-        let resolved = claim ?? standaloneClaims[terminalId]
         do {
             try await viewer.attach(claim: resolved)
         } catch {
@@ -513,13 +530,87 @@ final class TerminalStore {
     }
 
     func write(_ data: String) async {
-        guard let socket, let activeId else { return }
+        guard !data.isEmpty, socket != nil, let terminalId = activeId else { return }
+        pendingWrites[terminalId, default: ""].append(data)
+        guard !activeWriteDrains.contains(terminalId) else { return }
+        activeWriteDrains.insert(terminalId)
+        defer { activeWriteDrains.remove(terminalId) }
+
+        // Yield one micro-turn so synchronous bursts (e.g. multi-line SGR
+        // mouse-wheel ticks or fast keystrokes) coalesce into a single RPC.
+        await Task.yield()
+
+        while let chunk = pendingWrites.removeValue(forKey: terminalId), !chunk.isEmpty {
+            do {
+                try await sendWriteWithSingleRecoveryRetry(terminalId: terminalId, data: chunk)
+                errorMessage = nil
+            } catch {
+                HostLog.session.error("Terminal write failed")
+                errorMessage = error.localizedDescription
+                pendingWrites.removeValue(forKey: terminalId)
+                return
+            }
+        }
+    }
+
+    private func sendWriteWithSingleRecoveryRetry(terminalId: String, data: String) async throws {
+        guard let socket else {
+            throw HostError.network(String(localized: "Disconnected from the host."))
+        }
+        try await ensureConnected()
+        if !isWatching(terminalId) {
+            if watchedId == terminalId {
+                await recoverAfterReconnect()
+            } else {
+                _ = try await socket.watch(terminalId: terminalId, lastSeq: lastWatchedSeq(for: terminalId))
+                watchedId = terminalId
+                watchedGeneration = socket.connectionGeneration
+            }
+        }
         do {
-            try await socket.write(terminalId: activeId, data: data)
-            errorMessage = nil
+            try await socket.write(terminalId: terminalId, data: data)
         } catch {
-            HostLog.session.error("Terminal write failed")
-            errorMessage = error.localizedDescription
+            guard Self.isRecoverableWriteFailure(error) else { throw error }
+            HostLog.session.info("Reconnecting terminal socket to retry failed write")
+            socket.stop()
+            try await ensureConnected()
+            if watchedId == nil { watchedId = terminalId }
+            await recoverAfterReconnect()
+            try await socket.write(terminalId: terminalId, data: data)
+        }
+    }
+
+    nonisolated static func isRecoverableWriteFailure(_ error: Error) -> Bool {
+        switch error {
+        case HostError.deviceRevoked, HostError.forbidden, HostError.rePairingRequired:
+            return false
+        case HostError.ipc(_, let code):
+            let upper = code.uppercased()
+            return upper == "UNAUTHORIZED" || upper == "NETWORK_ERROR"
+        case HostError.network:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func scheduleProactiveReconnectIfNeeded() {
+        guard backgroundReconnectTask == nil else { return }
+        let hasLiveConsumer = watchedId != nil || viewers.values.contains { box in
+            guard let viewer = box.viewer else { return false }
+            return !viewer.isClosed && !viewer.hasExited
+        }
+        guard hasLiveConsumer, origin != nil, credentials != nil else { return }
+        backgroundReconnectTask = Task { @MainActor [weak self] in
+            defer { self?.backgroundReconnectTask = nil }
+            try? await Task.sleep(for: .milliseconds(300))
+            guard let self, !Task.isCancelled else { return }
+            do {
+                try await self.ensureConnected()
+                await self.recoverAfterReconnect()
+            } catch {
+                HostLog.session.info("Proactive terminal socket reconnect deferred")
+            }
         }
     }
 

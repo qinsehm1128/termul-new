@@ -39,22 +39,36 @@ final class TerminalPTYViewer {
     var errorMessage: String?
 
     @ObservationIgnored private let socket: TerminalSocket
+    @ObservationIgnored private let ensureConnected: (@MainActor () async throws -> Void)?
+    @ObservationIgnored private let claimProvider: (@MainActor () -> String?)?
     /// Bytes that arrived before the SwiftTerm canvas installed its feed.
     @ObservationIgnored private var backlog = Data()
     /// The backlog starts mid-stream; the canvas must reset before it.
     @ObservationIgnored private var backlogNeedsReset = false
     @ObservationIgnored private var feed: (@MainActor (Data, Bool) -> Void)?
     @ObservationIgnored private var refitTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingSend = ""
+    @ObservationIgnored private var isDrainingSend = false
 
     /// A viewer that is installed late (or never) must not grow unbounded.
     private static let backlogLimit = 262_144
 
-    init(terminalId: String, title: String, socket: TerminalSocket, cols: Int, rows: Int) {
+    init(
+        terminalId: String,
+        title: String,
+        socket: TerminalSocket,
+        cols: Int,
+        rows: Int,
+        ensureConnected: (@MainActor () async throws -> Void)? = nil,
+        claimProvider: (@MainActor () -> String?)? = nil
+    ) {
         self.terminalId = terminalId
         self.title = title
         self.socket = socket
         self.cols = max(cols, 20)
         self.rows = max(rows, 4)
+        self.ensureConnected = ensureConnected
+        self.claimProvider = claimProvider
     }
 
     /// True when this viewer's attach/watch is still authorized on the live
@@ -170,14 +184,47 @@ final class TerminalPTYViewer {
     }
 
     func send(_ text: String) {
-        guard !isClosed, !text.isEmpty else { return }
-        Task {
-            do {
-                try await socket.write(terminalId: terminalId, data: text)
-                errorMessage = nil
-            } catch {
-                errorMessage = error.localizedDescription
+        guard !isClosed, !hasExited, !text.isEmpty else { return }
+        pendingSend.append(text)
+        guard !isDrainingSend else { return }
+        isDrainingSend = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.isDrainingSend = false }
+            await Task.yield()
+            while !self.isClosed, !self.hasExited, !self.pendingSend.isEmpty {
+                let chunk = self.pendingSend
+                self.pendingSend.removeAll(keepingCapacity: true)
+                do {
+                    try await self.writeChunkWithRecovery(chunk)
+                    self.errorMessage = nil
+                } catch {
+                    self.errorMessage = error.localizedDescription
+                    self.pendingSend.removeAll(keepingCapacity: false)
+                    return
+                }
             }
+        }
+    }
+
+    private func writeChunkWithRecovery(_ chunk: String) async throws {
+        if !socket.isConnected {
+            try await ensureConnected?()
+        }
+        if !isLiveOnCurrentConnection {
+            await reattachAfterReconnect(claim: claimProvider?())
+        }
+        do {
+            try await socket.write(terminalId: terminalId, data: chunk)
+        } catch {
+            guard TerminalStore.isRecoverableWriteFailure(error), let ensureConnected else {
+                throw error
+            }
+            HostLog.session.info("Reconnecting standalone viewer socket to retry write")
+            socket.stop()
+            try await ensureConnected()
+            await reattachAfterReconnect(claim: claimProvider?())
+            try await socket.write(terminalId: terminalId, data: chunk)
         }
     }
 
@@ -231,6 +278,7 @@ final class TerminalPTYViewer {
     func markExited() {
         hasExited = true
         feed = nil
+        pendingSend.removeAll(keepingCapacity: false)
         refitTask?.cancel()
         refitTask = nil
     }
@@ -240,6 +288,7 @@ final class TerminalPTYViewer {
     func close() async {
         guard !isClosed else { return }
         isClosed = true
+        pendingSend.removeAll(keepingCapacity: false)
         refitTask?.cancel()
         refitTask = nil
         feed = nil

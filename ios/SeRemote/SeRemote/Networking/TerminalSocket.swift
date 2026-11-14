@@ -103,6 +103,9 @@ final class TerminalSocket {
     /// `connectionGeneration` is bumped. Authorization is per-connection, so
     /// this is the store's cue to re-watch/re-attach everything it holds.
     var onConnected: (@MainActor (Int) -> Void)?
+    /// Fired when a live connection drops or fails its ping/request watchdog so
+    /// higher layers can proactively reconnect without waiting for user input.
+    var onDisconnected: (@MainActor () -> Void)?
     var onExit: (@MainActor (String) -> Void)?
     var onCatalogChanged: (@MainActor () -> Void)?
     var onDisplayModeChanged: (@MainActor (String, String, Int, Int) -> Void)?
@@ -110,7 +113,9 @@ final class TerminalSocket {
     private var session: URLSession?
     private var task: URLSessionWebSocketTask?
     private var receiveTask: Task<Void, Never>?
+    private var heartbeatTask: Task<Void, Never>?
     private var pending: [String: CheckedContinuation<Data, Error>] = [:]
+    private var timeoutTasks: [String: Task<Void, Never>] = [:]
     private var requestSerial = 0
     private var openGate: HostWebSocketOpenGate?
 
@@ -148,6 +153,7 @@ final class TerminalSocket {
             guard !isRevoked else { throw HostError.deviceRevoked }
             isConnected = true
             connectionGeneration &+= 1
+            startHeartbeat()
             HostLog.session.info("terminal WebSocket authenticated")
             // Authorization is per-connection: everything watched/attached on
             // the previous generation must re-authorize on this one.
@@ -253,7 +259,8 @@ final class TerminalSocket {
         _ = try await request(
             "write",
             payload: ["terminalId": terminalId, "data": data],
-            as: EmptyPayload.self
+            as: EmptyPayload.self,
+            timeoutSeconds: 6
         )
     }
 
@@ -261,7 +268,8 @@ final class TerminalSocket {
         _ = try await request(
             "resize",
             payload: ["terminalId": terminalId, "cols": cols, "rows": rows],
-            as: EmptyPayload.self
+            as: EmptyPayload.self,
+            timeoutSeconds: 6
         )
     }
 
@@ -281,7 +289,12 @@ final class TerminalSocket {
         if let rows {
             payload["rows"] = rows
         }
-        return try await request("set_display_mode", payload: payload, as: TerminalDisplayModeState.self)
+        return try await request(
+            "set_display_mode",
+            payload: payload,
+            as: TerminalDisplayModeState.self,
+            timeoutSeconds: 8
+        )
     }
 
     /// Cancel transport work only. PTYs, mounted terminal surfaces and geometry
@@ -310,8 +323,14 @@ final class TerminalSocket {
     }
 
     func stop() {
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
         receiveTask?.cancel()
         receiveTask = nil
+        for (_, timer) in timeoutTasks {
+            timer.cancel()
+        }
+        timeoutTasks.removeAll()
         openGate?.failOpen(HostError.network(String(localized: "Disconnected from the host.")))
         openGate = nil
         failPending(HostError.network(String(localized: "Disconnected from the host.")))
@@ -320,6 +339,38 @@ final class TerminalSocket {
         session?.invalidateAndCancel()
         session = nil
         isConnected = false
+    }
+
+    /// Periodic WebSocket ping watchdog so a half-open TCP/tunnel link is torn
+    /// down before user typing or scrolling hangs waiting for a reply.
+    private func startHeartbeat() {
+        heartbeatTask?.cancel()
+        heartbeatTask = Task { @MainActor [weak self] in
+            var consecutiveUnknowns = 0
+            while let self, !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(25))
+                guard !Task.isCancelled, self.isConnected, let currentTask = self.task else { return }
+                let liveness = await WebSocketLiveness.probe(currentTask, timeout: .seconds(5))
+                guard !Task.isCancelled, self.task === currentTask, self.isConnected else { return }
+                switch liveness {
+                case .alive:
+                    consecutiveUnknowns = 0
+                case .unknown:
+                    consecutiveUnknowns += 1
+                    if consecutiveUnknowns >= 2 {
+                        HostLog.session.error("Terminal WebSocket ping timed out twice; tearing down stale socket")
+                        self.stop()
+                        self.onDisconnected?()
+                        return
+                    }
+                case .dead:
+                    HostLog.session.error("Terminal WebSocket ping failed; tearing down dead socket")
+                    self.stop()
+                    self.onDisconnected?()
+                    return
+                }
+            }
+        }
     }
 
     private func request<T: Decodable>(
@@ -333,28 +384,45 @@ final class TerminalSocket {
         let id = "term-\(requestSerial)"
         let body: [String: Any] = ["id": id, "type": type, "payload": payload]
         let data = try WireJSON.data(from: body)
-        let reply = try await withCheckedThrowingContinuation { continuation in
-            pending[id] = continuation
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(timeoutSeconds))
-                guard let self, let waiting = self.pending.removeValue(forKey: id) else { return }
-                HostLog.session.error("Terminal request timed out type=\(type, privacy: .public)")
-                waiting.resume(throwing: HostError.network(String(localized: "The terminal host did not respond. Try again.")))
-            }
-            guard let task else {
-                pending.removeValue(forKey: id)?.resume(
+        let reply: Data = try await withCheckedThrowingContinuation { continuation in
+            guard let currentTask = task else {
+                continuation.resume(
                     throwing: HostError.network(String(localized: "Disconnected from the host."))
                 )
                 return
             }
-            task.send(.string(String(data: data, encoding: .utf8) ?? "")) { [weak self] error in
+            pending[id] = continuation
+            timeoutTasks[id] = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(timeoutSeconds))
+                guard let self, !Task.isCancelled,
+                      let waiting = self.pending.removeValue(forKey: id) else { return }
+                self.timeoutTasks.removeValue(forKey: id)
+                HostLog.session.error("Terminal request timed out type=\(type, privacy: .public); resetting stale socket")
+                let timeoutError = HostError.network(String(localized: "The terminal host did not respond. Try again."))
+                waiting.resume(throwing: timeoutError)
+                // Critical: a timed-out request proves this WebSocket stream is
+                // wedged or half-open. Tear it down immediately so queued and
+                // subsequent requests reconnect instead of hanging 20s each.
+                if self.task === currentTask {
+                    let wasConnected = self.isConnected
+                    self.stop()
+                    if wasConnected {
+                        self.onDisconnected?()
+                    }
+                }
+            }
+            currentTask.send(.string(String(data: data, encoding: .utf8) ?? "")) { [weak self] error in
                 Task { @MainActor in
                     if let error {
-                        // The task outlived its connection: stop claiming it is
-                        // usable so the next request reconnects instead of
-                        // sending into a dead socket again.
-                        self?.isConnected = false
-                        self?.pending.removeValue(forKey: id)?.resume(throwing: HostError.network(error.localizedDescription))
+                        guard let self, self.task === currentTask else { return }
+                        self.timeoutTasks.removeValue(forKey: id)?.cancel()
+                        let wasConnected = self.isConnected
+                        self.isConnected = false
+                        self.pending.removeValue(forKey: id)?.resume(throwing: HostError.network(error.localizedDescription))
+                        self.stop()
+                        if wasConnected {
+                            self.onDisconnected?()
+                        }
                     }
                 }
             }
@@ -384,8 +452,12 @@ final class TerminalSocket {
                 if task.closeCode == .policyViolation, let origin {
                     handleDeviceRevoked(origin: origin)
                 } else {
+                    let wasConnected = isConnected
                     isConnected = false
                     failPending(HostError.network(error.localizedDescription))
+                    if wasConnected {
+                        onDisconnected?()
+                    }
                 }
                 return
             }
@@ -502,6 +574,10 @@ final class TerminalSocket {
     }
 
     private func failPending(_ error: Error) {
+        for (_, timer) in timeoutTasks {
+            timer.cancel()
+        }
+        timeoutTasks.removeAll()
         let pending = self.pending
         self.pending.removeAll()
         for (_, continuation) in pending {
@@ -510,6 +586,7 @@ final class TerminalSocket {
     }
 
     private func handleReply(id: String, object: [String: Any]) {
+        timeoutTasks.removeValue(forKey: id)?.cancel()
         guard let continuation = pending.removeValue(forKey: id) else { return }
         let success = object["success"] as? Bool ?? false
         if success {

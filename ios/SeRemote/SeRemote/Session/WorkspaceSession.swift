@@ -409,13 +409,17 @@ final class WorkspaceSession {
         case .connected:
             let acpLiveness = await acp.probeLiveness()
             let terminalLiveness = await terminalSocket.probeLiveness()
-            guard acpLiveness.isDead || terminalLiveness.isDead else {
-                if acpLiveness == .unknown || terminalLiveness == .unknown {
-                    HostLog.session.info("Transport liveness inconclusive after \(reason, privacy: .public)")
+            guard acpLiveness.isDead else {
+                if acpLiveness == .unknown {
+                    HostLog.session.info("ACP liveness inconclusive after \(reason, privacy: .public)")
                 }
-                // The sockets survived: re-assert the viewport and pick up
-                // whatever state changed while polling was parked. This is
-                // the foreground-return path that used to fire at t=0.
+                // Half-open terminal WebSockets commonly fail to answer a ping
+                // within 4 s (`.unknown`) rather than reporting `-1004` right
+                // away; keeping them leaves `write` wedged until timeout.
+                if terminalLiveness != .alive {
+                    HostLog.session.info("Terminal transport \(String(describing: terminalLiveness), privacy: .public) after \(reason, privacy: .public); rebuilding terminal socket")
+                    await rebuildTerminalTransport()
+                }
                 await convergeAfterTransportRecovery()
                 return
             }
@@ -449,7 +453,11 @@ final class WorkspaceSession {
     /// This keeps one stale-path failure from surfacing as a failed open.
     func ensureTerminalTransport() async {
         guard phase == .connected else { return }
-        guard await terminalSocket.probeLiveness().isDead else { return }
+        guard await terminalSocket.probeLiveness() != .alive else { return }
+        await rebuildTerminalTransport()
+    }
+
+    private func rebuildTerminalTransport() async {
         HostLog.session.info("Terminal transport stale; reconnecting")
         terminalSocket.stop()
         do {

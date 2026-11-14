@@ -258,4 +258,13 @@ struct ReconnectAuthorizationTests {
         await store.recoverAfterReconnect()
         #expect(store.errorMessage == "previous failure")
     }
+
+    @Test("Recoverable write classifier retries stale transport and UNAUTHORIZED but never revoked or forbidden")
+    func recoverableWriteClassifier() {
+        #expect(TerminalStore.isRecoverableWriteFailure(HostError.network("timed out")) == true)
+        #expect(TerminalStore.isRecoverableWriteFailure(HostError.ipc("Unauthorized", "UNAUTHORIZED")) == true)
+        #expect(TerminalStore.isRecoverableWriteFailure(HostError.ipc("gone", "TERMINAL_NOT_FOUND")) == false)
+        #expect(TerminalStore.isRecoverableWriteFailure(HostError.deviceRevoked) == false)
+        #expect(TerminalStore.isRecoverableWriteFailure(HostError.forbidden("terminal.input")) == false)
+    }
 }

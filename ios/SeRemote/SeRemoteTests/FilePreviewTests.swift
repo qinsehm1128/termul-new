@@ -106,9 +106,14 @@ struct HTMLSandboxPolicyTests {
     @Test("Only about:blank and data URLs are local")
     func allowedSchemes() throws {
         #expect(HTMLSandboxPolicy.allows(nil))
-        #expect(HTMLSandboxPolicy.allows(try #require(URL(string: "about:blank"))))
-        #expect(HTMLSandboxPolicy.allows(try #require(URL(string: "data:text/html,<p>hi</p>"))))
-        #expect(HTMLSandboxPolicy.allows(try #require(URL(string: "data:image/png;base64,AAAA"))))
+        for raw in [
+            "about:blank",
+            "data:text/html,<p>hi</p>",
+            "data:image/png;base64,AAAA",
+        ] {
+            let url = try #require(URL(string: raw))
+            #expect(HTMLSandboxPolicy.allows(url))
+        }
     }
 
     @Test("Network, file and script URLs are blocked")

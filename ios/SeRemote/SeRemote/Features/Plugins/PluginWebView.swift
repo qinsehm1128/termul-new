@@ -56,12 +56,12 @@ struct PluginWebView: UIViewRepresentable {
 
         func observe(_ webView: WKWebView) {
             observations = [
-                webView.observe(\.estimatedProgress, options: [.new]) { [weak self] webView, _ in
-                    let value = webView.estimatedProgress
+                webView.observe(\.estimatedProgress, options: [.new]) { [weak self] _, change in
+                    guard let value = change.newValue else { return }
                     Task { @MainActor [weak self] in self?.parent.progress = value }
                 },
-                webView.observe(\.isLoading, options: [.new]) { [weak self] webView, _ in
-                    let value = webView.isLoading
+                webView.observe(\.isLoading, options: [.new]) { [weak self] _, change in
+                    guard let value = change.newValue else { return }
                     Task { @MainActor [weak self] in self?.parent.isLoading = value }
                 },
             ]
