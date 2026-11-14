@@ -455,6 +455,17 @@ final class TerminalStore {
                 scheduleRefit(force: true)
                 return
             }
+            // Same PTY on a new connection: resume at the tracked cursor. A
+            // watch from seq 0 resends the whole retained log, and every
+            // reply on this socket queues behind it.
+            if watchedId == terminalId {
+                await recoverAfterReconnect()
+                if isWatching(terminalId) {
+                    activeId = terminalId
+                    scheduleRefit(force: true)
+                    return
+                }
+            }
             if let watchedId, watchedId != terminalId {
                 await releaseDisplayMode(for: watchedId)
                 await socket.detach(terminalId: watchedId)
@@ -567,12 +578,20 @@ final class TerminalStore {
                 watchedGeneration = socket.connectionGeneration
             }
         }
+        let generation = socket.connectionGeneration
         do {
             try await socket.write(terminalId: terminalId, data: data)
         } catch {
+            // Only input the host provably did not apply is resent: it never
+            // left this device, or the host rejected it. An unacknowledged
+            // write (`TerminalWriteUnconfirmed`) is surfaced instead.
             guard Self.isRecoverableWriteFailure(error) else { throw error }
             HostLog.session.info("Reconnecting terminal socket to retry failed write")
-            socket.stop()
+            // Another path may already be rebuilding the socket; stopping
+            // here would cancel its handshake.
+            if socket.isConnected, socket.connectionGeneration == generation {
+                socket.stop()
+            }
             try await ensureConnected()
             if watchedId == nil { watchedId = terminalId }
             await recoverAfterReconnect()

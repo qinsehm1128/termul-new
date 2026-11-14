@@ -531,8 +531,15 @@ final class WorkspaceSession {
     }
 
     private func rebuildTerminalTransport() async {
-        HostLog.session.info("Terminal transport stale; reconnecting")
-        terminalSocket.stop()
+        // A handshake already in flight IS the rebuild. Stopping it failed the
+        // write or open awaiting it with "Disconnected from the host." and left
+        // the terminal offline until the next user action.
+        if terminalSocket.isConnecting {
+            HostLog.session.info("Terminal transport already reconnecting; joining handshake")
+        } else {
+            HostLog.session.info("Terminal transport stale; reconnecting")
+            terminalSocket.stop()
+        }
         do {
             try await terminals.ensureConnected()
             // The rebuilt socket is a new connection with an empty

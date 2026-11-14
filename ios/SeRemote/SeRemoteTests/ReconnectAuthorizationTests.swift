@@ -287,5 +287,61 @@ struct ReconnectAuthorizationTests {
     func disconnectedSocketIsNotRecentlyActive() {
         let socket = TerminalSocket()
         #expect(socket.isRecentlyActive() == false)
+        #expect(socket.isConnecting == false)
+    }
+
+    // MARK: - Mid-session drops
+
+    @Test("A late reply never resets a socket that is still receiving frames")
+    func timeoutKeepsABusySocket() {
+        let timeout = Duration.seconds(10)
+        // 10 s without a reply, but a frame arrived 2 s ago: keep waiting
+        // until 10 s of silence would have passed.
+        #expect(TerminalSocket.timeoutVerdict(
+            waited: .seconds(10), silentFor: .seconds(2), timeout: timeout
+        ) == .keepWaiting(.seconds(8)))
+        // Still busy at the cap: fail the request, keep the socket.
+        #expect(TerminalSocket.timeoutVerdict(
+            waited: .seconds(40), silentFor: .seconds(1), timeout: timeout
+        ) == .failKeepingSocket)
+        // The remaining wait never overshoots the cap.
+        #expect(TerminalSocket.timeoutVerdict(
+            waited: .seconds(37), silentFor: .seconds(1), timeout: timeout
+        ) == .keepWaiting(.seconds(3)))
+    }
+
+    @Test("Only a full timeout of inbound silence resets the socket")
+    func timeoutResetsASilentSocket() {
+        let timeout = Duration.seconds(10)
+        #expect(TerminalSocket.timeoutVerdict(
+            waited: .seconds(10), silentFor: .seconds(10), timeout: timeout
+        ) == .failAndResetSocket)
+        #expect(TerminalSocket.timeoutVerdict(
+            waited: .seconds(25), silentFor: .seconds(12), timeout: timeout
+        ) == .failAndResetSocket)
+    }
+
+    @Test("An unacknowledged write is never resent")
+    func unconfirmedWriteIsNotRecoverable() {
+        #expect(TerminalStore.isRecoverableWriteFailure(TerminalWriteUnconfirmed()) == false)
+    }
+
+    @Test("The socket message limit covers the host's largest frame")
+    func messageLimitCoversHostFrames() {
+        // Host outbound budget is 8 MiB per frame (web/sink.rs).
+        #expect(HostTunnelSession.maximumMessageBytes >= 8 * 1024 * 1024)
+    }
+
+    @Test("Input that never left the device stays resendable")
+    @MainActor
+    func writeWithoutASocketIsResendable() async {
+        let socket = TerminalSocket()
+        do {
+            try await socket.write(terminalId: "terminal-1", data: "x")
+            Issue.record("write without a socket must throw")
+        } catch {
+            #expect(error is TerminalWriteUnconfirmed == false)
+            #expect(TerminalStore.isRecoverableWriteFailure(error) == true)
+        }
     }
 }

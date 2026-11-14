@@ -89,6 +89,7 @@ final class AcpSocket {
         let session = HostTunnelSession.make(delegate: gate)
         self.session = session
         let wsTask = session.webSocketTask(with: urlRequest)
+        wsTask.maximumMessageSize = HostTunnelSession.maximumMessageBytes
         self.task = wsTask
         wsTask.resume()
         receiveTask = Task { await self.receiveLoop(for: wsTask) }

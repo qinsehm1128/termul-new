@@ -80,6 +80,31 @@ struct LiveTerminalSummary: Decodable, Identifiable, Sendable {
     var screenObservation: HostScreenObservation?
 }
 
+/// Input that was handed to the socket but never acknowledged. The host may
+/// already have applied it (its log shows `write` succeeding while the reply
+/// was still in transit), so it is never resent automatically: a duplicated
+/// Enter runs a command twice.
+nonisolated struct TerminalWriteUnconfirmed: LocalizedError {
+    var errorDescription: String? {
+        String(localized: "Send could not be confirmed. Check the terminal before sending again.")
+    }
+}
+
+/// The frame never reached the transport, so the host cannot have applied it.
+nonisolated struct TerminalFrameNotSent: Error {
+    let message: String
+}
+
+/// What to do with a request whose reply has not arrived yet.
+nonisolated enum TerminalRequestTimeoutVerdict: Equatable, Sendable {
+    /// Frames are still arriving: the reply is queued behind them.
+    case keepWaiting(Duration)
+    /// The socket is delivering but this request was never answered.
+    case failKeepingSocket
+    /// Nothing arrived for a whole timeout: the socket is presumed dead.
+    case failAndResetSocket
+}
+
 @MainActor
 @Observable
 final class TerminalSocket {
@@ -128,6 +153,29 @@ final class TerminalSocket {
     /// other and throwing spurious "Disconnected from the host." errors.
     private var connectTask: Task<Void, Error>?
     private var connectSerial = 0
+    /// Cumulative inbound counters, reported when a request times out so the
+    /// device log shows whether the link was silent or busy during the wait.
+    @ObservationIgnored private var inboundFrameCount = 0
+    @ObservationIgnored private var inboundByteCount = 0
+
+    /// True while a handshake is in flight. Stopping the socket now would fail
+    /// every caller awaiting it with "Disconnected from the host."
+    var isConnecting: Bool { connectTask != nil }
+
+    /// A reply is only declared lost after `timeout` of inbound silence. While
+    /// frames keep arriving the reply is queued behind them (replies and PTY
+    /// output share one ordered stream), so the wait continues up to four
+    /// timeouts in total before the request alone is failed.
+    nonisolated static func timeoutVerdict(
+        waited: Duration,
+        silentFor: Duration,
+        timeout: Duration
+    ) -> TerminalRequestTimeoutVerdict {
+        if silentFor >= timeout { return .failAndResetSocket }
+        let hardCap = timeout * 4
+        if waited >= hardCap { return .failKeepingSocket }
+        return .keepWaiting(min(timeout - silentFor, hardCap - waited))
+    }
 
     func connect(origin: URL, credentials: HostCredentials) async throws {
         guard !isRevoked else { throw HostError.deviceRevoked }
@@ -176,6 +224,10 @@ final class TerminalSocket {
         let session = HostTunnelSession.make(delegate: gate)
         self.session = session
         let wsTask = session.webSocketTask(with: urlRequest)
+        // The default 1 MiB limit fails the whole socket with "Message too
+        // long": PTY bytes travel as a JSON number array (up to 4 characters
+        // per byte), so a 256 KiB replay alone can exceed it.
+        wsTask.maximumMessageSize = HostTunnelSession.maximumMessageBytes
         self.task = wsTask
         wsTask.resume()
         receiveTask = Task { await self.receiveLoop(for: wsTask) }
@@ -288,13 +340,28 @@ final class TerminalSocket {
         )
     }
 
+    /// Throws `HostError.network` only when the input never left this device
+    /// (no live socket, or the transport refused the frame), which is safe to
+    /// resend after a reconnect. Any failure after the frame was handed to
+    /// the transport is `TerminalWriteUnconfirmed`: the host may have applied it.
     func write(terminalId: String, data: String) async throws {
-        _ = try await request(
-            "write",
-            payload: ["terminalId": terminalId, "data": data],
-            as: EmptyPayload.self,
-            timeoutSeconds: 6
-        )
+        guard task != nil, isConnected else {
+            throw HostError.network(String(localized: "Disconnected from the host."))
+        }
+        do {
+            _ = try await request(
+                "write",
+                payload: ["terminalId": terminalId, "data": data],
+                as: EmptyPayload.self,
+                timeoutSeconds: 10,
+                unsentAsNetwork: false
+            )
+        } catch let unsent as TerminalFrameNotSent {
+            throw HostError.network(unsent.message)
+        } catch HostError.network {
+            HostLog.session.error("Terminal write unconfirmed; not resending")
+            throw TerminalWriteUnconfirmed()
+        }
     }
 
     func resize(terminalId: String, cols: Int, rows: Int) async throws {
@@ -302,7 +369,7 @@ final class TerminalSocket {
             "resize",
             payload: ["terminalId": terminalId, "cols": cols, "rows": rows],
             as: EmptyPayload.self,
-            timeoutSeconds: 6
+            timeoutSeconds: 10
         )
     }
 
@@ -326,7 +393,7 @@ final class TerminalSocket {
             "set_display_mode",
             payload: payload,
             as: TerminalDisplayModeState.self,
-            timeoutSeconds: 8
+            timeoutSeconds: 10
         )
     }
 
@@ -442,7 +509,8 @@ final class TerminalSocket {
         _ type: String,
         payload: [String: Any],
         as _: T.Type,
-        timeoutSeconds: Double = 20
+        timeoutSeconds: Double = 20,
+        unsentAsNetwork: Bool = true
     ) async throws -> T {
         guard !isRevoked else { throw HostError.deviceRevoked }
         requestSerial += 1
@@ -457,23 +525,43 @@ final class TerminalSocket {
                 return
             }
             pending[id] = continuation
+            let timeout = Duration.seconds(timeoutSeconds)
+            let started = ContinuousClock.now
+            let framesAtStart = inboundFrameCount
+            let bytesAtStart = inboundByteCount
             timeoutTasks[id] = Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(timeoutSeconds))
-                guard let self, !Task.isCancelled,
-                      let waiting = self.pending.removeValue(forKey: id) else { return }
-                self.timeoutTasks.removeValue(forKey: id)
-                HostLog.session.error("Terminal request timed out type=\(type, privacy: .public); resetting stale socket")
-                let timeoutError = HostError.network(String(localized: "The terminal host did not respond. Try again."))
-                waiting.resume(throwing: timeoutError)
-                // Critical: a timed-out request proves this WebSocket stream is
-                // wedged or half-open. Tear it down immediately so queued and
-                // subsequent requests reconnect instead of hanging 20s each.
-                if self.task === currentTask {
-                    let wasConnected = self.isConnected
-                    self.stopSocketOnly()
-                    if wasConnected {
-                        self.onDisconnected?()
+                var wait = timeout
+                while true {
+                    try? await Task.sleep(for: wait)
+                    guard let self, !Task.isCancelled, self.pending[id] != nil else { return }
+                    let now = ContinuousClock.now
+                    let lastInbound = self.task === currentTask ? self.lastInboundAt : nil
+                    let quietSince = max(lastInbound ?? started, started)
+                    let waited = started.duration(to: now)
+                    let silentFor = quietSince.duration(to: now)
+                    let verdict = Self.timeoutVerdict(waited: waited, silentFor: silentFor, timeout: timeout)
+                    if case .keepWaiting(let more) = verdict {
+                        wait = more
+                        continue
                     }
+                    guard let waiting = self.pending.removeValue(forKey: id) else { return }
+                    self.timeoutTasks.removeValue(forKey: id)
+                    // A missing reply alone does not prove the socket is dead:
+                    // replies share one ordered stream with PTY output. Only
+                    // a full timeout of inbound silence resets the socket.
+                    let reset = verdict == .failAndResetSocket
+                    let frames = self.inboundFrameCount &- framesAtStart
+                    let bytes = self.inboundByteCount &- bytesAtStart
+                    HostLog.session.error("Terminal request timed out type=\(type, privacy: .public) waitedMs=\(Int(waited / .milliseconds(1)), privacy: .public) silentMs=\(Int(silentFor / .milliseconds(1)), privacy: .public) inboundFrames=\(frames, privacy: .public) inboundBytes=\(bytes, privacy: .public) resetSocket=\(reset, privacy: .public)")
+                    waiting.resume(throwing: HostError.network(String(localized: "The terminal host did not respond. Try again.")))
+                    if reset, self.task === currentTask {
+                        let wasConnected = self.isConnected
+                        self.stopSocketOnly()
+                        if wasConnected {
+                            self.onDisconnected?()
+                        }
+                    }
+                    return
                 }
             }
             currentTask.send(.string(String(data: data, encoding: .utf8) ?? "")) { [weak self] error in
@@ -482,7 +570,10 @@ final class TerminalSocket {
                         guard let self, self.task === currentTask else { return }
                         self.timeoutTasks.removeValue(forKey: id)?.cancel()
                         let wasConnected = self.isConnected
-                        self.pending.removeValue(forKey: id)?.resume(throwing: HostError.network(error.localizedDescription))
+                        let unsent: Error = unsentAsNetwork
+                            ? HostError.network(error.localizedDescription)
+                            : TerminalFrameNotSent(message: error.localizedDescription)
+                        self.pending.removeValue(forKey: id)?.resume(throwing: unsent)
                         self.stopSocketOnly()
                         if wasConnected {
                             self.onDisconnected?()
@@ -512,6 +603,8 @@ final class TerminalSocket {
                 @unknown default:
                     continue
                 }
+                inboundFrameCount &+= 1
+                inboundByteCount &+= data.count
                 handleFrame(data)
             } catch {
                 guard self.task === loopTask, !isRevoked else { return }

@@ -23,6 +23,9 @@ enum HostLog {
 
 enum HostTunnelSession {
     nonisolated static let handshakeSeconds: TimeInterval = 60
+    /// Above the host's 8 MiB outbound frame budget. URLSession's default is
+    /// 1 MiB, and an oversized frame fails the socket, not just the message.
+    nonisolated static let maximumMessageBytes = 16 * 1024 * 1024
 
     static func make(delegate: URLSessionDelegate) -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral

@@ -214,6 +214,7 @@ final class TerminalPTYViewer {
         if !isLiveOnCurrentConnection {
             await reattachAfterReconnect(claim: claimProvider?())
         }
+        let generation = socket.connectionGeneration
         do {
             try await socket.write(terminalId: terminalId, data: chunk)
         } catch {
@@ -221,7 +222,9 @@ final class TerminalPTYViewer {
                 throw error
             }
             HostLog.session.info("Reconnecting standalone viewer socket to retry write")
-            socket.stop()
+            if socket.isConnected, socket.connectionGeneration == generation {
+                socket.stop()
+            }
             try await ensureConnected()
             await reattachAfterReconnect(claim: claimProvider?())
             try await socket.write(terminalId: terminalId, data: chunk)
