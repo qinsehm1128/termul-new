@@ -9,7 +9,7 @@ struct SeRemoteApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView(store: store, settings: settings)
+            root
                 .environment(\.locale, settings.locale)
                 .environment(\.seHapticsEnabled, settings.hapticsEnabled)
                 .preferredColorScheme(settings.appearance.colorScheme)
@@ -17,6 +17,20 @@ struct SeRemoteApp: App {
                 .onOpenURL { store.openIncomingURL($0) }
         }
         .commands { appCommands }
+    }
+
+    @ViewBuilder
+    private var root: some View {
+        #if DEBUG
+        if TerminalHubPreviewScreen.isRequested {
+            TerminalHubPreviewScreen()
+                .seResolvedThemeMode()
+        } else {
+            RootView(store: store, settings: settings)
+        }
+        #else
+        RootView(store: store, settings: settings)
+        #endif
     }
 
     /// Hardware-keyboard surface: View menu (focus + zoom) and a Terminal menu,

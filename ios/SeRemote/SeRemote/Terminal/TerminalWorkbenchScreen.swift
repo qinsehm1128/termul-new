@@ -20,6 +20,8 @@ struct TerminalWorkbenchScreen: View {
     /// sheet, so a terminal never runs two hook pollers.
     var hasAgentInspector = false
     var onShowAgentInspector: () -> Void = {}
+    /// Opens the cross-project terminal switcher owned by the shell.
+    var onOpenSwitcher: (() -> Void)? = nil
 
     @Environment(\.remoteDeviceLink) private var deviceLink
     @Environment(\.sePalette) private var palette
@@ -64,7 +66,8 @@ struct TerminalWorkbenchScreen: View {
                     }
                 }
             },
-            onSpawnTerminal: { Task { await spawnTerminal() } }
+            onSpawnTerminal: { Task { await spawnTerminal() } },
+            onOpenSwitcher: onOpenSwitcher
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(palette.terminalCanvas)

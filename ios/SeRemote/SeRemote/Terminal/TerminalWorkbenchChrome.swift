@@ -19,6 +19,8 @@ struct TerminalWorkbenchChrome<Canvas: View>: View {
     var onNudgeTextScale: (Int) -> Void
     var onSelectTab: (String) -> Void
     var onSpawnTerminal: () -> Void
+    /// Tapping the title opens the cross-project switcher.
+    var onOpenSwitcher: (() -> Void)? = nil
 
     @Environment(\.sePalette) private var palette
     @Environment(\.seThemeMode) private var mode
@@ -100,12 +102,27 @@ struct TerminalWorkbenchChrome<Canvas: View>: View {
                 .frame(width: 1, height: 18)
                 .padding(.horizontal, 2)
 
-            Text(verbatim: presentation.title)
-                .font(SeNocturneType.font(12, weight: .medium, mono: true))
-                .foregroundStyle(palette.ink)
-                .lineLimit(1)
-                .frame(maxWidth: 190, alignment: .leading)
+            Button {
+                onOpenSwitcher?()
+            } label: {
+                HStack(spacing: 4) {
+                    Text(verbatim: presentation.title)
+                        .font(SeNocturneType.font(13, weight: .medium, mono: true))
+                        .foregroundStyle(palette.ink)
+                        .lineLimit(1)
+                        .frame(maxWidth: 190, alignment: .leading)
+                    if onOpenSwitcher != nil {
+                        SeIconView(icon: .chevronUpDown, size: 12, stroke: 1.6, color: palette.inkSecondary)
+                    }
+                }
                 .padding(.leading, 8)
+                .frame(height: 40)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(onOpenSwitcher == nil)
+            .accessibilityLabel(Text(verbatim: presentation.title))
+            .accessibilityHint(Text(verbatim: hubText("Switch terminal")))
 
             Text(verbatim: presentation.counter)
                 .font(SeNocturneType.font(9, mono: true))

@@ -29,30 +29,6 @@ struct MobileUIUXPolishTests {
         #expect(!meta.contains("· ·"))
     }
 
-    // MARK: - Terminals landing subtitle
-
-    @Test("Landing subtitle is nil at zero terminals: no duplicated host status")
-    func landingSubtitleIsNilWhenEmpty() {
-        #expect(TerminalLandingScreen.subtitle(for: 0) == nil)
-    }
-
-    @Test("Landing subtitle is a plain count once terminals exist")
-    func landingSubtitleCountsTerminals() {
-        let countOne = 1
-        let countThree = 3
-        #expect(TerminalLandingScreen.subtitle(for: countOne) == String(localized: "1 terminal"))
-        #expect(TerminalLandingScreen.subtitle(for: countThree) == String(localized: "\(countThree) terminals"))
-    }
-
-    @Test("Landing subtitle never carries a second host-status word")
-    func landingSubtitleNeverRepeatsHostMeta() {
-        for count in 0...5 {
-            let subtitle = TerminalLandingScreen.subtitle(for: count)
-            #expect(subtitle?.contains("Connected") != true)
-            #expect(subtitle?.contains("Connecting") != true)
-        }
-    }
-
     // MARK: - Initial-load state
 
     @Test("Hub reports loading while idle/loading with no summaries yet")

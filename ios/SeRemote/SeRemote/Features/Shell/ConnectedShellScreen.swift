@@ -37,6 +37,10 @@ struct ConnectedShellScreen: View {
     @State private var landingNotice: String?
     @State private var refreshingHub = false
     @State private var hubRefreshTask: Task<Void, Never>?
+    @State private var hubQuery = TerminalHubIndex.Query()
+    @State private var switcherQuery = TerminalHubIndex.Query()
+    @State private var showsSwitcher = false
+    @State private var newTerminalRoute: TerminalsHubScreen.NewTerminalRoute?
     @State private var didBootstrap = false
     /// The tab the user left when opening Settings, so Back returns there
     /// instead of always dropping them on Terminals.
@@ -82,17 +86,54 @@ struct ConnectedShellScreen: View {
 
     private var needSummary: LiveNeedsSummary { LivePresentation.summary(items: needs) }
 
-    /// The iPad rail is the terminal list, so it reads the same grouped model
-    /// T1 renders.
-    private var railGroups: [TerminalLandingModel.Group] {
-        TerminalLandingModel.make(
+    /// The hub, the in-terminal switcher and the rail read one merged index,
+    /// so every surface lists the same shells (quick-owned ones included).
+    private func hubIndex(query: TerminalHubIndex.Query = .init()) -> TerminalHubIndex {
+        TerminalHubIndex.make(
             summaries: hub.summaries,
             projects: session.projects.projects,
-            quickRecords: [],
-            runningAgentTerminalIDs: Set(session.liveAgents.sessions.map(\.terminalId)),
-            lastTerminalID: nil,
-            allowsCreate: false
-        ).groups
+            projectGroups: session.projects.groups,
+            quickRecords: session.quickTerminals.records,
+            agentTerminalIDs: Set(session.liveAgents.sessions.map(\.terminalId)),
+            lastTerminalID: terminalModel.activeID,
+            allowsCreate: link.allows("terminal.create"),
+            query: query
+        )
+    }
+
+    /// The rail keeps its compact project grouping, fed by the shared index.
+    private var railGroups: [TerminalLandingModel.Group] {
+        hubIndex().groups.flatMap(\.projects).map { project in
+            TerminalLandingModel.Group(
+                id: project.id,
+                name: project.name,
+                rows: project.shells.map { shell in
+                    TerminalLandingModel.Row(
+                        id: shell.id,
+                        title: shell.title,
+                        cwd: shell.cwd,
+                        branch: shell.branch,
+                        projectID: shell.projectID,
+                        projectName: shell.projectName,
+                        hasAgent: shell.hasAgent
+                    )
+                }
+            )
+        }
+    }
+
+    /// Open a shell listed by the rail, the hub or the switcher. Quick-owned
+    /// shells attach through their quick terminal so the claim matches.
+    private func openListed(terminalID: String) {
+        guard let shell = hubIndex().shells.first(where: { $0.id == terminalID }) else { return }
+        Task {
+            do {
+                await open(try await session.openRequest(for: shell))
+            } catch {
+                landingNotice = error.localizedDescription
+                HostLog.session.error("Opening listed terminal failed")
+            }
+        }
     }
 
     private var fileRoot: String? {
@@ -140,9 +181,7 @@ struct ConnectedShellScreen: View {
                             onOpenCommand: { showsCommand = true },
                             terminalGroups: railGroups,
                             selectedTerminalID: terminalModel.activeID,
-                            onOpenTerminal: { row in
-                                Task { await open(TerminalLandingModel.request(for: row)) }
-                            }
+                            onOpenTerminal: { row in openListed(terminalID: row.id) }
                         )
                     }
 
@@ -222,6 +261,24 @@ struct ConnectedShellScreen: View {
                 .presentationDragIndicator(.hidden)
         }
         .sheet(isPresented: $showsHosts) { hostPicker }
+        .sheet(isPresented: $showsSwitcher) { switcherSheet }
+        .sheet(item: $newTerminalRoute) { route in
+            NewTerminalSheet(
+                session: session,
+                allowsCreate: link.allows("terminal.create"),
+                preselectedProjectID: route.projectID,
+                onOpen: { request in
+                    newTerminalRoute = nil
+                    Task {
+                        await open(request)
+                        await refreshHub()
+                    }
+                },
+                onClose: { newTerminalRoute = nil }
+            )
+            .presentationDetents(route.projectID == nil ? [.large, .medium] : [.medium])
+            .presentationDragIndicator(.visible)
+        }
         .sheet(isPresented: $showsFiles) { filesSheet }
         .sheet(isPresented: $showsAttachment) { attachmentSheet }
         .fullScreenCover(item: $preview) { request in
@@ -290,30 +347,29 @@ struct ConnectedShellScreen: View {
     private func page(sidebar: Bool) -> some View {
         switch navigation.destination {
         case .terminals:
-            if sidebar {
-                iPadTerminalEmptyState
-            } else {
-                TerminalsHubScreen(
-                    session: session,
-                    store: hub,
-                    hostName: hostName,
-                    hostMeta: session.phase == .connected
-                        ? String(localized: "Connected")
-                        : String(localized: "Connecting"),
-                    themeIcon: themeIcon,
-                    lastTerminalID: navigation.openRequest?.terminalID,
-                    allowsCreate: link.allows("terminal.create"),
-                    isRefreshing: refreshingHub,
-                    notice: landingNotice,
-                    onRefresh: { Task { await refreshHub() } },
-                    onSelectHost: { showsHosts = true },
-                    onToggleTheme: { settings.appearance = mode.toggled.appearance },
-                    onOpenDrawer: { showsDrawer = true },
-                    onOpenCommand: { showsCommand = true },
-                    onOpen: { request in Task { await open(request) } },
-                    onDismissNotice: { landingNotice = nil }
-                )
-            }
+            TerminalsHubScreen(
+                session: session,
+                store: hub,
+                hostName: hostName,
+                hostMeta: session.phase == .connected
+                    ? String(localized: "Connected")
+                    : String(localized: "Connecting"),
+                themeIcon: themeIcon,
+                lastTerminalID: navigation.openRequest?.terminalID,
+                allowsCreate: link.allows("terminal.create"),
+                isRefreshing: refreshingHub,
+                notice: landingNotice,
+                query: $hubQuery,
+                onRefresh: { await refreshHub() },
+                onSelectHost: { showsHosts = true },
+                onToggleTheme: { settings.appearance = mode.toggled.appearance },
+                onOpenDrawer: {
+                    if sidebar { railCollapsed = false } else { showsDrawer = true }
+                },
+                onOpenCommand: { showsCommand = true },
+                onOpen: { request in Task { await open(request) } },
+                onDismissNotice: { landingNotice = nil }
+            )
         case .conversations:
             ConversationsScreen(
                 session: session,
@@ -348,47 +404,68 @@ struct ConnectedShellScreen: View {
         }
     }
 
-    /// iPad centre pane while the workbench is closed. Back only parks the
-    /// surface, so the placeholder keeps the way back into it.
-    private var iPadTerminalEmptyState: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            SeDisplayText(text: String(localized: "Terminals"))
-            Text("Pick a terminal from the sidebar.")
-                .font(SeNocturneType.font(11.5))
-                .foregroundStyle(palette.inkSecondary)
-            if let request = navigation.openRequest {
-                Button(action: reopenWorkbench) {
-                    HStack(spacing: 10) {
-                        SeIconView(icon: .terminal, size: 15, stroke: 1.6, color: palette.ink)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(String(localized: "Resume"))
-                                .font(SeNocturneType.font(12, weight: .semibold))
-                                .foregroundStyle(palette.ink)
-                            Text(request.title)
-                                .font(SeNocturneType.font(10, mono: true))
-                                .foregroundStyle(palette.inkSecondary)
-                                .lineLimit(1)
+    // MARK: - Workbench
+
+    /// The in-terminal switcher: the hub's own list, searchable and filterable
+    /// across every project, with the current shell highlighted.
+    private var switcherSheet: some View {
+        TerminalHubView(
+            index: hubIndex(query: switcherQuery),
+            query: $switcherQuery,
+            selectedTerminalID: terminalModel.activeID,
+            isLoading: TerminalsHubScreen.isLoading(state: hub.state, summaryCount: hub.summaries.count),
+            actions: TerminalHubActions(
+                openShell: { shell in
+                    showsSwitcher = false
+                    guard shell.id != terminalModel.activeID else { return }
+                    openListed(terminalID: shell.id)
+                },
+                openQuick: { quick in
+                    showsSwitcher = false
+                    Task {
+                        do {
+                            await open(try await session.openRequest(forQuick: quick))
+                        } catch {
+                            landingNotice = error.localizedDescription
                         }
-                        Spacer(minLength: 0)
-                        SeIconView(icon: .arrowRight, size: 13, stroke: 1.6, color: palette.inkTertiary)
                     }
-                    .padding(.horizontal, 14)
-                    .frame(minHeight: 52)
-                    .background(palette.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                },
+                newTerminal: {
+                    showsSwitcher = false
+                    newTerminalRoute = .init(projectID: nil)
+                },
+                newTerminalInProject: { id in
+                    showsSwitcher = false
+                    newTerminalRoute = .init(projectID: id)
+                },
+                renameQuick: { _ in },
+                closeQuick: { _ in },
+                deleteQuick: { _ in },
+                closeShell: { _ in },
+                refresh: { await refreshHub() }
+            )
+        ) {
+            HStack {
+                Text(verbatim: hubText("Switch terminal"))
+                    .font(SeNocturneType.font(17, weight: .semibold))
+                    .foregroundStyle(palette.ink)
+                Spacer(minLength: 0)
+                Button {
+                    showsSwitcher = false
+                } label: {
+                    SeIconView(icon: .close, size: 14, stroke: 1.7, color: palette.inkSecondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(SePressable())
-                .accessibilityLabel(Text(String(localized: "Resume")))
-                .accessibilityValue(Text(request.title))
+                .accessibilityLabel(Text(hubText("Close")))
             }
-            Spacer(minLength: 0)
+            .padding(.top, 8)
         }
-        .padding(NocturneToolMetrics.gutter)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(palette.canvas)
+        .background(mode.sheetSurface.ignoresSafeArea())
+        .presentationDetents([.large, .medium])
+        .presentationDragIndicator(.visible)
     }
-
-    // MARK: - Workbench
 
     private func workbench(sidebar: Bool) -> some View {
         TerminalWorkbenchScreen(
@@ -403,7 +480,12 @@ struct ConnectedShellScreen: View {
                 presentPreview(path)
             },
             hasAgentInspector: sidebar,
-            onShowAgentInspector: { inspectorSegment = .agent }
+            onShowAgentInspector: { inspectorSegment = .agent },
+            onOpenSwitcher: {
+                switcherQuery = .init()
+                showsSwitcher = true
+                Task { await refreshHub() }
+            }
         )
     }
 
@@ -491,7 +573,7 @@ struct ConnectedShellScreen: View {
                 selectedTerminalID: terminalModel.activeID,
                 onOpenTerminal: { row in
                     showsDrawer = false
-                    Task { await open(TerminalLandingModel.request(for: row)) }
+                    openListed(terminalID: row.id)
                 },
                 expandedWidth: 288,
                 onClose: { showsDrawer = false }
