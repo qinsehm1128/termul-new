@@ -2,7 +2,13 @@ import { useTranslation } from 'react-i18next'
 
 interface HtmlPreviewProps {
   /** Asset URL of the saved file, so relative stylesheets, images and scripts resolve. */
-  src: string
+  src?: string
+  /**
+   * Inline document source. Used while the buffer has unsaved edits (the asset
+   * URL still points at the saved file) and in the browser edition, where the
+   * asset protocol does not exist.
+   */
+  srcDoc?: string
   name: string
   /** The buffer has edits the saved file does not have yet. */
   unsaved: boolean
@@ -14,7 +20,7 @@ interface HtmlPreviewProps {
  * so it cannot reach the app, its storage or IPC, and the asset protocol's
  * CORS answer keeps it from reading other local files.
  */
-export function HtmlPreview({ src, name, unsaved }: HtmlPreviewProps): React.JSX.Element {
+export function HtmlPreview({ src, srcDoc, name, unsaved }: HtmlPreviewProps): React.JSX.Element {
   const { t } = useTranslation('settings')
 
   return (
@@ -26,7 +32,7 @@ export function HtmlPreview({ src, name, unsaved }: HtmlPreviewProps): React.JSX
       ) : null}
       <iframe
         title={t('editor.htmlPreviewTitle', { name })}
-        src={src}
+        {...(srcDoc === undefined ? { src } : { srcDoc })}
         sandbox="allow-scripts"
         className="min-h-0 w-full flex-1 border-0 bg-white"
       />

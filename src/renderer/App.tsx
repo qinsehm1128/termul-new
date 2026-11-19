@@ -5,6 +5,7 @@ import { PortableAppEffects } from '@/app/PortableAppEffects'
 import { createPortableRouter } from '@/app/portable-router'
 import { DirectoryPicker } from '@/components/DirectoryPicker'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
+import { FloatingDocPreview } from '@/components/editor/FloatingDocPreview'
 import { GlobalContextMenu } from '@/components/GlobalContextMenu'
 import { RemoteDesktopBanner } from '@/components/RemoteDesktopBanner'
 import { Toaster as Sonner } from '@/components/ui/sonner'
@@ -71,6 +72,7 @@ const App = () => {
             {/* Browser/remote mode provides an in-app picker instead of the native dialog. */}
             {!isTauriContext() && <DirectoryPicker />}
             <RouterProvider router={router} future={{ v7_startTransition: true }} />
+            <FloatingDocPreview />
             <WhatsNewModal
               isOpen={whatsNew.isOpen}
               version={whatsNew.version}

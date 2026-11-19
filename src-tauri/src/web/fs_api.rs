@@ -1217,18 +1217,25 @@ fn registered_roots(state: &AppState) -> Vec<PathBuf> {
         let Some(path) = project.path else {
             continue;
         };
+        if path.trim().is_empty() {
+            continue;
+        }
         let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| PathBuf::from(&path));
-        if seen.insert(canonical.clone()) {
+        if !canonical.as_os_str().is_empty() && seen.insert(canonical.clone()) {
             roots.push(canonical);
         }
     }
     let project_root = state.project_root.read().clone();
-    let canonical = std::fs::canonicalize(&project_root).unwrap_or(project_root);
-    if seen.insert(canonical.clone()) {
-        roots.push(canonical);
+    if !project_root.as_os_str().is_empty() {
+        let canonical = std::fs::canonicalize(&project_root).unwrap_or(project_root);
+        if !canonical.as_os_str().is_empty() && seen.insert(canonical.clone()) {
+            roots.push(canonical);
+        }
     }
     roots
 }
+
+const MAX_REMOTE_RESOLVE_CANDIDATES: usize = 128;
 
 /// `POST /fs/resolve-paths` — batch-resolve reported paths (diff headers, stack
 /// traces, terminal links) into existing absolute file paths.
@@ -1268,7 +1275,11 @@ pub async fn resolve_paths(
         }
         (
             crate::fs_resolver::ResolveFilePathsRequest {
-                candidates: request.candidates,
+                candidates: request
+                    .candidates
+                    .into_iter()
+                    .take(MAX_REMOTE_RESOLVE_CANDIDATES)
+                    .collect(),
                 roots: roots
                     .iter()
                     .map(|root| root.to_string_lossy().into_owned())

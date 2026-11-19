@@ -55,6 +55,8 @@ const SCAN_MAX_DEPTH: usize = 8;
 const SCAN_MAX_ENTRIES: usize = 20_000;
 /// Wall-clock budget per candidate for the suffix scan.
 const SCAN_BUDGET: Duration = Duration::from_millis(750);
+/// Total wall-clock budget across all suffix scans in a single request.
+const TOTAL_SCAN_BUDGET: Duration = Duration::from_millis(1000);
 
 /// Request shape mirrors `ResolveFilePathsRequest` in
 /// `src/shared/types/filesystem.types.ts`.
@@ -106,6 +108,7 @@ pub fn resolve_existing_paths(
 
     let mut hits = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    let request_started = Instant::now();
     for raw in request.candidates.into_iter().take(MAX_CANDIDATES) {
         let Some(candidate) = normalize_candidate(&raw) else {
             continue;
@@ -126,10 +129,17 @@ pub fn resolve_existing_paths(
             }
         }
 
-        if resolved.is_none() && candidate.contains('/') {
+        if resolved.is_none()
+            && candidate.contains('/')
+            && request_started.elapsed() < TOTAL_SCAN_BUDGET
+        {
             if let Some(scan_root) = roots.last() {
+                let remaining = TOTAL_SCAN_BUDGET.saturating_sub(request_started.elapsed());
+                let budget = remaining.min(SCAN_BUDGET);
                 for attempt in candidate_variants(&candidate) {
-                    if let Some(path) = suffix_scan(scan_root, &attempt, allowed.as_deref()) {
+                    if let Some(path) =
+                        suffix_scan(scan_root, &attempt, allowed.as_deref(), budget)
+                    {
                         resolved = Some(path);
                         break;
                     }
@@ -139,7 +149,7 @@ pub fn resolve_existing_paths(
 
         if let Some(path) = resolved {
             hits.push(ResolvedFilePathHit {
-                candidate,
+                candidate: raw,
                 resolved_path: path.to_string_lossy().into_owned(),
             });
         }
@@ -243,9 +253,11 @@ fn normalize_roots(roots: &[String]) -> Vec<PathBuf> {
 fn normalize_root_slice(roots: &[PathBuf]) -> Vec<PathBuf> {
     roots
         .iter()
+        .filter(|root| !root.as_os_str().is_empty())
         .map(|root| {
             std::fs::canonicalize(root).unwrap_or_else(|_| lexical_normalize(root))
         })
+        .filter(|root| !root.as_os_str().is_empty() && root.is_absolute())
         .collect()
 }
 
@@ -339,15 +351,23 @@ fn within_boundary(path: &Path, allowed: Option<&[PathBuf]>) -> bool {
     }
     let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     roots.iter().any(|root| {
+        if root.as_os_str().is_empty() {
+            return false;
+        }
         let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.clone());
-        canonical.starts_with(&root)
+        !root.as_os_str().is_empty() && root.is_absolute() && canonical.starts_with(&root)
     })
 }
 
 /// Breadth-first search under `root` for a path whose relative form ends with
 /// `suffix` on a path boundary. Returns only a unique match.
-fn suffix_scan(root: &Path, suffix: &str, allowed: Option<&[PathBuf]>) -> Option<PathBuf> {
-    if !root.is_dir() {
+fn suffix_scan(
+    root: &Path,
+    suffix: &str,
+    allowed: Option<&[PathBuf]>,
+    budget: Duration,
+) -> Option<PathBuf> {
+    if !root.is_dir() || budget.is_zero() {
         return None;
     }
     let suffix = suffix.trim_start_matches("./").trim_start_matches('/');
@@ -362,7 +382,7 @@ fn suffix_scan(root: &Path, suffix: &str, allowed: Option<&[PathBuf]>) -> Option
     let mut matches: Vec<PathBuf> = Vec::new();
 
     while let Some((dir, prefix, depth)) = queue.pop_front() {
-        if started.elapsed() > SCAN_BUDGET {
+        if started.elapsed() > budget {
             return None;
         }
         let entries = match std::fs::read_dir(&dir) {
@@ -625,5 +645,37 @@ mod tests {
         assert_eq!(strip_diff_prefix("b/x.ts").as_deref(), Some("x.ts"));
         assert_eq!(strip_diff_prefix("src/x.ts"), None);
         assert_eq!(strip_diff_prefix("ab/x.ts"), None);
+    }
+
+    #[test]
+    fn empty_allowed_root_never_grants_access() {
+        let dir = TempDir::new().expect("temp dir");
+        let file = write_file(dir.path(), "secret.md");
+        let raw = file.to_string_lossy().into_owned();
+
+        let response = resolve_existing_paths(
+            request(&[&raw], &[dir.path()]),
+            Some(&[PathBuf::new()]),
+        );
+
+        assert!(
+            response.hits.is_empty(),
+            "empty allowed root must fail closed, got {:?}",
+            response.hits
+        );
+    }
+
+    #[test]
+    fn echoes_raw_candidate_for_dot_slash_and_line_suffix() {
+        let dir = TempDir::new().expect("temp dir");
+        write_file(dir.path(), "scripts/build.sh");
+
+        let response = resolve_existing_paths(
+            request(&["./scripts/build.sh:10"], &[dir.path()]),
+            None,
+        );
+
+        assert_eq!(response.hits.len(), 1);
+        assert_eq!(response.hits[0].candidate, "./scripts/build.sh:10");
     }
 }

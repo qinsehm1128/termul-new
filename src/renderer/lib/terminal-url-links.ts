@@ -14,11 +14,21 @@ const WRAPPER_PAIRS: Array<[string, string]> = [
   ['"', '"'],
   ["'", "'"],
   ['(', ')'],
-  ['[', ']']
+  ['[', ']'],
+  ['（', '）'],
+  ['【', '】'],
+  ['「', '」'],
+  ['『', '』'],
+  ['《', '》'],
+  ['〈', '〉'],
+  ['“', '”'],
+  ['‘', '’']
 ]
 
-const TRAILING_PUNCTUATION = /[\]),.;:!?]+$/
-const URL_CANDIDATE_REGEX = /(?:https?:\/\/|[a-zA-Z][a-zA-Z0-9+.-]*:)[^\s<>{}"'`]+/g
+const TRAILING_PUNCTUATION = /[\]),.;:!?、，。；：？！（）【】「」『』《》〈〉“”‘’…—～]+$/
+/** CJK and full-width punctuation terminates a URL just like whitespace does. */
+const URL_CANDIDATE_REGEX =
+  /(?:https?:\/\/|[a-zA-Z][a-zA-Z0-9+.-]*:)[^\s<>{}"'`、，。；：？！（）【】「」『』《》〈〉“”‘’]+/g
 
 function trimWrapped(value: string): string {
   const result = value.trim()
@@ -58,9 +68,47 @@ export function isSupportedTerminalUrl(value: string): boolean {
   }
 }
 
+/**
+ * Schemes a terminal may legitimately print without `//`. Anything else that
+ * looks like `ext:12:3` or `App.tsx:42` is a path with a position suffix.
+ */
+const KNOWN_SCHEME_ONLY_PROTOCOLS = new Set([
+  'bitcoin',
+  'ftp',
+  'ftps',
+  'git',
+  'irc',
+  'ircs',
+  'magnet',
+  'mailto',
+  'matrix',
+  'obsidian',
+  'sftp',
+  'slack',
+  'ssh',
+  'tel',
+  'vscode',
+  'zulip'
+])
+
+const SCHEME_PREFIX_REGEX = /^([a-zA-Z][a-zA-Z0-9+.-]*):(.*)$/
+
 export function isTerminalUrlCandidate(value: string): boolean {
   if (/^[a-zA-Z]:[\\/]/.test(value)) {
     return false
+  }
+
+  if (!value.includes('://')) {
+    const schemeMatch = SCHEME_PREFIX_REGEX.exec(value)
+    if (schemeMatch) {
+      const [, scheme, rest] = schemeMatch
+      // `ts:12:3` / `App.tsx:42` are file paths with position suffixes, and a
+      // dotted "scheme" is a filename, not a protocol.
+      if (scheme.includes('.') || /^\d+(?::\d+)?(?:[,;)]|$)/.test(rest)) {
+        return false
+      }
+      return KNOWN_SCHEME_ONLY_PROTOCOLS.has(scheme.toLowerCase())
+    }
   }
 
   try {
@@ -90,10 +138,15 @@ export function buildTerminalUrlLinks(
       continue
     }
 
+    // Sanitizing may strip a leading wrapper, so anchor the range on where the
+    // clean URL actually starts instead of assuming it begins at the raw match.
+    const offsetInRaw = Math.max(raw.indexOf(cleaned), 0)
+    const cleanedStart = start + offsetInRaw
+
     links.push({
       range: {
-        start: { x: start + 1, y: lineNumber },
-        end: { x: start + cleaned.length, y: lineNumber }
+        start: { x: cleanedStart + 1, y: lineNumber },
+        end: { x: cleanedStart + cleaned.length, y: lineNumber }
       },
       text: cleaned,
       activate: onActivate

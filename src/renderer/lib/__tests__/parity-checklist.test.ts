@@ -2326,4 +2326,30 @@ describe('Parity Checklist Automation', () => {
       expect(router).toMatch(/\/editor-workspaces\/parse/)
     })
   })
+
+  describe('Terminal path resolution and external file open parity', () => {
+    it('tauri and web adapters both implement resolveExistingPaths', () => {
+      const tauriAdapter = readFileSync(join(LIB_DIR, 'tauri-filesystem-api.ts'), 'utf-8')
+      const webServer = readFileSync(join(LIB_DIR, 'web-server-api.ts'), 'utf-8')
+      const router = readFileSync(
+        join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'web', 'router.rs'),
+        'utf-8'
+      )
+      const commands = readFileSync(
+        join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'commands.rs'),
+        'utf-8'
+      )
+      expect(tauriAdapter).toContain("invoke<ResolveFilePathsResponse>('fs_resolve_existing_paths'")
+      expect(webServer).toContain('/fs/resolve-paths')
+      expect(router).toContain('/fs/resolve-paths')
+      expect(commands).toContain('pub async fn fs_resolve_existing_paths')
+    })
+
+    it('external-file-open-api explicitly gates OS file hand-off by isTauriContext()', () => {
+      const api = readFileSync(join(LIB_DIR, 'external-file-open-api.ts'), 'utf-8')
+      expect(api).toMatch(/isTauriContext\(\)/)
+      expect(api).toContain('take_pending_external_files')
+      expect(api).toContain('external-file-open')
+    })
+  })
 })

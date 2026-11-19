@@ -65,6 +65,12 @@ export const useResumeAgentSessionsOnRestore = () =>
   useAppSettingsStore((state) => state.settings.resumeAgentSessionsOnRestore)
 export const useTerminalUrlOpenMode = () =>
   useAppSettingsStore((state) => state.settings.terminalUrlOpenMode)
+export const useExternalFileDefaultProjectId = () =>
+  useAppSettingsStore((state) => state.settings.externalFileDefaultProjectId)
+export const useExternalFileOpenTarget = () =>
+  useAppSettingsStore((state) => state.settings.externalFileOpenTarget)
+export const useTerminalFileOpenTarget = () =>
+  useAppSettingsStore((state) => state.settings.terminalFileOpenTarget)
 export const useSidebarVisibilitySetting = () =>
   useAppSettingsStore((state) => state.settings.sidebarVisible)
 export const useFileExplorerVisibilitySetting = () =>

@@ -58,6 +58,21 @@ export interface FileSearchResponse {
   failedFiles: number
 }
 
+export interface ResolveFilePathsRequest {
+  candidates: string[]
+  roots: string[]
+  expandHome?: boolean
+}
+
+export interface ResolvedFilePathHit {
+  candidate: string
+  resolvedPath: string
+}
+
+export interface ResolveFilePathsResponse {
+  hits: ResolvedFilePathHit[]
+}
+
 export const FilesystemErrorCodes = {
   FILE_NOT_FOUND: 'FILE_NOT_FOUND',
   FILE_TOO_LARGE: 'FILE_TOO_LARGE',

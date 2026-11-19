@@ -209,7 +209,17 @@
     "autoSaveHint": "Automatically save editor files after you stop typing",
     "autoSaveDelay": "Auto Save Delay",
     "autoSaveDelayAria": "Auto save delay",
-    "autoSaveDelayHint": "Time to wait after your last edit before saving automatically."
+    "autoSaveDelayHint": "Time to wait after your last edit before saving automatically.",
+    "documentOpen": "Documents & External Files",
+    "externalFileDefaultProject": "Default project for external files",
+    "externalFileDefaultProjectHint": "Project used for files opened from outside any known project.",
+    "externalFileDefaultProjectAuto": "Match owning project automatically",
+    "externalFileOpenTarget": "Open external files in",
+    "externalFileOpenTargetHint": "Where files such as .md or .html opened from Finder appear.",
+    "terminalFileOpenTarget": "Open terminal and chat files in",
+    "terminalFileOpenTargetHint": "Where file links in terminal output or agent chats appear.",
+    "documentOpenFloating": "Floating preview window",
+    "documentOpenEditorTab": "Workspace tab"
   },
   "projectDefaults": {
     "description": "Set default options for new projects.",
@@ -496,6 +506,27 @@
     "button": "Reset to Defaults",
     "title": "Reset Settings",
     "message": "Are you sure you want to reset all application settings to their default values? This cannot be undone."
+  },
+  "floatingDoc": {
+    "title": "Document Preview",
+    "ballAria": "Document preview ({{count}} open: {{name}})",
+    "tabsAria": "Open documents",
+    "close": "Close",
+    "closeAll": "Close all",
+    "save": "Save",
+    "saveFailed": "Could not save {{path}}",
+    "openInWorkspace": "Open in workspace",
+    "fullscreen": "Fullscreen",
+    "exitFullscreen": "Exit fullscreen",
+    "collapse": "Collapse to floating ball",
+    "rendered": "Rendered view",
+    "source": "Source",
+    "unsavedDot": "Unsaved",
+    "unsavedWarning": "Unsaved changes",
+    "saveAndClose": "Save and close",
+    "discardAndClose": "Discard and close",
+    "cancel": "Cancel",
+    "openFailed": "Could not open {{path}}"
   },
   "options": {
     "lineCount_one": "{{formattedCount}} line",

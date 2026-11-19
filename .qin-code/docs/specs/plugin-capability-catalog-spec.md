@@ -535,6 +535,7 @@ Source of truth: `src-tauri/src/lib.rs:3757-4120` invoke_handler; implementation
 | se.shell.homeDirectory | get_home_directory — lib.rs:517 | R | global | none | OPEN | `()` → `$HOME` / `%USERPROFILE%`. |
 | se.editor.listWorkspaces | list_editor_workspaces — commands.rs:5002 | R | global | none | OPEN | `()` → `EditorWorkspaceList` (VS Code / Zed recent workspaces). Discloses local project paths. |
 | se.editor.parseWorkspaceFile | parse_code_workspace_file — commands.rs:5010 | R | global | none | OPEN | `{path}` → `EditorWorkspaceList` of folders. Reads any `.code-workspace` path. |
+| se.fs.resolveExistingPaths | fs_resolve_existing_paths — commands.rs:8909; HTTP `POST /api/fs/resolve-paths` — web/fs_api.rs:1241, web/router.rs | R | global (desktop); project (remote HTTP) | none | OPEN | `{candidates[], roots[], expandHome?}` → `{hits: [{candidate, resolvedPath}]}`. Resolves terminal/chat path candidates (supports `~/` on desktop, `a/`/`b/` diff prefixes, bounded unique suffix fallback). Remote HTTP enforces registered project roots and disables `~/` expansion. |
 
 #### SSH / SFTP (19)
 
@@ -719,6 +720,7 @@ Legend — class: **R** read, **W** write, **D** destructive, **SEC** secret-bea
 | keybindings.load_schemes | keybinding_schemes_load `src-tauri/src/keybinding_schemes.rs:92` | R/W | scheme dir | none | OPEN | rust-main | `ensure_dir` makes the directory; otherwise a disk read. |
 | quit.set_end_core_sessions | set_quit_ends_core_sessions `src-tauri/src/lib.rs:1624` | W | global preference | none | OPEN | rust-main | Stores an atomic; only meaningful on the next quit. |
 | app.restart | restart_app `src-tauri/src/lib.rs:1649` | W | GUI process lifecycle | none | OPEN | rust-main | Runs the graceful exit cleanup, then restarts the GUI; Cores keep running and are adopted. Used by update install and Restart GUI. |
+| app.take_pending_external_files | take_pending_external_files `src-tauri/src/commands.rs:8889` | R | GUI process lifecycle | none | INTERNAL | rust-main | Drains OS-queued cold-start file paths (`RunEvent::Opened` / argv / single-instance) and marks the renderer ready for `external-file-open` `{paths[]}` events. |
 
 ##### 1.7 Logs and diagnostics
 
@@ -807,6 +809,8 @@ All of these persist through `persistenceApi` (`src/renderer/lib/persistence-api
 | op id | source | class | scope | confirm | exposure | provider | notes |
 |---|---|---|---|---|---|---|---|
 | editor.open_file | editor-store.ts:118 (sig :97, action :488) | R/W | one file in editor | none | OPEN | renderer | Reads via fs_* (A/B) and opens a tab; path checks belong to fs.read. |
+| editor.floating_preview | floating-doc-store.ts + FloatingDocPreview.tsx | R/W | floating document preview | none | OPEN | renderer | Manages floating doc list/mode (`collapsed`/`floating`/`fullscreen`), Markdown/HTML live preview and source editing, and workspace tab promotion. |
+| settings.external_file_routing | types/settings.ts + external-file-router.ts | R/W | settings/app doc | none | OPEN | renderer | Configures `externalFileDefaultProjectId`, `externalFileOpenTarget`, and `terminalFileOpenTarget` (covered by `settings.set` / `settings.changed`). |
 | terminal.open/select | terminal-store.ts:169 (`addTerminal`) / :166 (`selectTerminal`) | W | terminal list | none | OPEN | renderer | Spawn itself is `terminal_spawn` (A/B). |
 | terminal.close/reopen | terminal-store.ts:191 / :192 / :193 | W | one terminal view | none | OPEN | renderer | View lifecycle, not process kill. |
 | terminal.quick.adopt | terminal-store.ts:183 (`adoptQuickTerminal`) / :190 (`forgetQuickTerminal`) | W | quick terminal UI | none | OPEN | renderer | UI-side identity for a quick terminal. |

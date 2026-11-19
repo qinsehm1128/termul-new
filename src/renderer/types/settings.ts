@@ -41,6 +41,7 @@ export const DEFAULT_TOC_SETTINGS: TocSettings = {
 export const TOC_SETTINGS_KEY = 'settings/toc'
 
 export type TerminalUrlOpenMode = 'system' | 'se'
+export type DocumentOpenTarget = 'floating' | 'editor-tab'
 export type UiLanguage = 'en' | 'zh-CN'
 export type UiLanguagePreference = 'system' | UiLanguage
 
@@ -128,6 +129,12 @@ export interface AppSettings {
    */
   resumeAgentSessionsOnRestore: boolean
   terminalUrlOpenMode: TerminalUrlOpenMode // Controls how Ctrl/Cmd+Click terminal URLs are opened
+  /** Project id used when opening external files (e.g. Finder .md) that are not inside any known project; null = auto-match only. */
+  externalFileDefaultProjectId: string | null
+  /** Where externally opened files (.md/.html/etc.) open: floating preview window or workspace editor tab. */
+  externalFileOpenTarget: DocumentOpenTarget
+  /** Where files clicked in terminals / agent chat open: floating preview window or workspace editor tab. */
+  terminalFileOpenTarget: DocumentOpenTarget
   sidebarVisible: boolean
   fileExplorerVisible: boolean
   sshPanelVisible: boolean
@@ -419,6 +426,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   confirmTerminalTerminate: true,
   resumeAgentSessionsOnRestore: true,
   terminalUrlOpenMode: 'system',
+  externalFileDefaultProjectId: null,
+  externalFileOpenTarget: 'floating',
+  terminalFileOpenTarget: 'floating',
   sidebarVisible: true,
   fileExplorerVisible: true,
   sshPanelVisible: true,

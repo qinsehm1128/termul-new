@@ -59,6 +59,38 @@ export async function takePendingExternalFiles(): Promise<string[]> {
 }
 
 /**
+ * Subscribe to files opened while the app is already running, resolving only
+ * after the Tauri listener is registered so a subsequent `takePendingExternalFiles`
+ * call cannot drop events in between.
+ */
+export async function subscribeExternalFileOpen(
+  callback: (paths: string[]) => void
+): Promise<() => void> {
+  if (!isTauriContext()) return () => {}
+
+  try {
+    const unlisten = await listen<{ paths?: unknown }>(EXTERNAL_FILE_OPEN_EVENT, ({ payload }) => {
+      const paths = toPaths(payload?.paths)
+      if (paths.length > 0) callback(paths)
+    })
+    return () => {
+      try {
+        unlisten()
+      } catch {
+        // Listener may already be detached during teardown.
+      }
+    }
+  } catch (error) {
+    void logFrontendError({
+      level: 'warn',
+      message: `external-file-open subscribe failed: ${String(error)}`,
+      source: 'external-file-open-api'
+    })
+    return () => {}
+  }
+}
+
+/**
  * Subscribe to files opened while the app is already running.
  *
  * Returns a cleanup function; on the web it is a no-op and no listener is

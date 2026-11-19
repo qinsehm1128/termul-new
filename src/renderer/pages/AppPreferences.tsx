@@ -87,6 +87,8 @@ import {
   useDefaultShell,
   useEditorAutoSave,
   useEditorAutoSaveDelayMs,
+  useExternalFileDefaultProjectId,
+  useExternalFileOpenTarget,
   useLogRetentionDays,
   useMaxTerminalsPerProject,
   useOrphanDetectionEnabled,
@@ -94,6 +96,7 @@ import {
   useResumeAgentSessionsOnRestore,
   useSidebarFontSize,
   useTerminalBufferSize,
+  useTerminalFileOpenTarget,
   useTerminalFontFamily,
   useTerminalFontSize,
   useTerminalImages,
@@ -109,6 +112,7 @@ import {
   detectShortcutConflicts,
   useKeyboardShortcutsStore
 } from '@/stores/keyboard-shortcuts-store'
+import { useProjectStore } from '@/stores/project-store'
 import { useUpdaterActions, useUpdaterState } from '@/stores/updater-store'
 import type { ProjectColor } from '@/types/project'
 import {
@@ -119,6 +123,7 @@ import {
   ACP_TURN_TIMEOUT_OPTIONS,
   BUFFER_SIZE_OPTIONS,
   DEFAULT_APP_SETTINGS,
+  type DocumentOpenTarget,
   EDITOR_AUTO_SAVE_DELAY_OPTIONS,
   FONT_FAMILY_OPTIONS,
   LOG_RETENTION_OPTIONS,
@@ -272,6 +277,18 @@ const APP_PREF_SEARCH_DEFS = [
     labelKey: 'behavior.autoSaveDelay',
     descriptionKey: 'behavior.autoSaveDelayHint',
     keywords: ['editor', 'autosave', 'delay', 'timeout']
+  },
+  {
+    categoryId: 'behavior',
+    labelKey: 'behavior.documentOpen',
+    descriptionKey: 'behavior.externalFileOpenTargetHint',
+    keywords: ['external file', 'finder', 'open with', 'floating', 'preview', 'project']
+  },
+  {
+    categoryId: 'behavior',
+    labelKey: 'behavior.terminalFileOpenTarget',
+    descriptionKey: 'behavior.terminalFileOpenTargetHint',
+    keywords: ['terminal', 'chat', 'file link', 'floating', 'preview']
   },
   {
     categoryId: 'project-defaults',
@@ -506,6 +523,10 @@ export default function AppPreferences(): React.JSX.Element {
   const acpFirstPromptWarmupSecs = useAcpFirstPromptWarmup()
   const acpPreferLocalNpmInstall = useAcpPreferLocalNpmInstall()
   const acpPrewarm = useAcpPrewarm()
+  const externalFileDefaultProjectId = useExternalFileDefaultProjectId()
+  const externalFileOpenTarget = useExternalFileOpenTarget()
+  const terminalFileOpenTarget = useTerminalFileOpenTarget()
+  const projects = useProjectStore((state) => state.projects)
   const updateSetting = useUpdateAppSetting()
   const resetSettings = useResetAppSettings()
 
@@ -779,6 +800,20 @@ export default function AppPreferences(): React.JSX.Element {
 
   const handleEditorAutoSaveDelayChange = async (value: number) => {
     await updateSetting('editorAutoSaveDelayMs', value)
+  }
+
+  const handleExternalFileOpenTargetChange = (value: string) => {
+    if (value !== 'floating' && value !== 'editor-tab') return
+    void updateSetting('externalFileOpenTarget', value as DocumentOpenTarget)
+  }
+
+  const handleTerminalFileOpenTargetChange = (value: string) => {
+    if (value !== 'floating' && value !== 'editor-tab') return
+    void updateSetting('terminalFileOpenTarget', value as DocumentOpenTarget)
+  }
+
+  const handleExternalFileDefaultProjectChange = (value: string) => {
+    void updateSetting('externalFileDefaultProjectId', value === '' ? null : value)
   }
 
   const handleAcpTurnIdleTimeoutChange = async (value: number | null) => {
@@ -1547,6 +1582,93 @@ export default function AppPreferences(): React.JSX.Element {
                   <p className="text-xs text-muted-foreground mt-1">
                     {tSettings('behavior.autoSaveDelayHint')}
                   </p>
+                </div>
+
+                {/* Documents & external files */}
+                <div>
+                  <div className="block text-sm font-medium text-secondary-foreground mb-2">
+                    {tSettings('behavior.documentOpen')}
+                  </div>
+                  <div className="space-y-4 rounded-md bg-secondary/25 px-3 py-3 shadow-[inset_0_1px_0_0_hsl(var(--foreground)/0.035)]">
+                    <div>
+                      <label
+                        htmlFor="external-file-default-project"
+                        className="block text-xs text-muted-foreground mb-1"
+                      >
+                        {tSettings('behavior.externalFileDefaultProject')}
+                      </label>
+                      <select
+                        id="external-file-default-project"
+                        value={externalFileDefaultProjectId ?? ''}
+                        onChange={(e) => handleExternalFileDefaultProjectChange(e.target.value)}
+                        className="h-8 w-full rounded-md border border-input/80 bg-secondary/35 px-2.5 text-sm text-foreground outline-none transition-[border-color,background-color] duration-150 focus-visible:border-ring/70 focus-visible:bg-secondary/50 focus-visible:ring-1 focus-visible:ring-ring/35"
+                      >
+                        <option value="">
+                          {tSettings('behavior.externalFileDefaultProjectAuto')}
+                        </option>
+                        {projects
+                          .filter((project) => !project.isArchived)
+                          .map((project) => (
+                            <option key={project.id} value={project.id}>
+                              {project.name}
+                            </option>
+                          ))}
+                      </select>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {tSettings('behavior.externalFileDefaultProjectHint')}
+                      </p>
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="external-file-open-target"
+                        className="block text-xs text-muted-foreground mb-1"
+                      >
+                        {tSettings('behavior.externalFileOpenTarget')}
+                      </label>
+                      <select
+                        id="external-file-open-target"
+                        value={externalFileOpenTarget}
+                        onChange={(e) => handleExternalFileOpenTargetChange(e.target.value)}
+                        className="h-8 w-full rounded-md border border-input/80 bg-secondary/35 px-2.5 text-sm text-foreground outline-none transition-[border-color,background-color] duration-150 focus-visible:border-ring/70 focus-visible:bg-secondary/50 focus-visible:ring-1 focus-visible:ring-ring/35"
+                      >
+                        <option value="floating">
+                          {tSettings('behavior.documentOpenFloating')}
+                        </option>
+                        <option value="editor-tab">
+                          {tSettings('behavior.documentOpenEditorTab')}
+                        </option>
+                      </select>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {tSettings('behavior.externalFileOpenTargetHint')}
+                      </p>
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="terminal-file-open-target"
+                        className="block text-xs text-muted-foreground mb-1"
+                      >
+                        {tSettings('behavior.terminalFileOpenTarget')}
+                      </label>
+                      <select
+                        id="terminal-file-open-target"
+                        value={terminalFileOpenTarget}
+                        onChange={(e) => handleTerminalFileOpenTargetChange(e.target.value)}
+                        className="h-8 w-full rounded-md border border-input/80 bg-secondary/35 px-2.5 text-sm text-foreground outline-none transition-[border-color,background-color] duration-150 focus-visible:border-ring/70 focus-visible:bg-secondary/50 focus-visible:ring-1 focus-visible:ring-ring/35"
+                      >
+                        <option value="floating">
+                          {tSettings('behavior.documentOpenFloating')}
+                        </option>
+                        <option value="editor-tab">
+                          {tSettings('behavior.documentOpenEditorTab')}
+                        </option>
+                      </select>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {tSettings('behavior.terminalFileOpenTargetHint')}
+                      </p>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>

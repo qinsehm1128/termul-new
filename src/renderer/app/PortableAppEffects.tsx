@@ -19,6 +19,7 @@ import { useConversationLifecycle } from '@/hooks/use-conversation-lifecycle'
 import { useCrashRecovery } from '@/hooks/use-crash-recovery'
 import { useCwd } from '@/hooks/use-cwd'
 import { useExitCode } from '@/hooks/use-exit-code'
+import { useExternalFileOpen } from '@/hooks/use-external-file-open'
 import { useGitBranch } from '@/hooks/use-git-branch'
 import { useGitStatus } from '@/hooks/use-git-status'
 import { useHostTerminalCatalog } from '@/hooks/use-host-terminal-catalog'
@@ -109,6 +110,7 @@ export function PortableAppEffects(): React.JSX.Element | null {
   // while covering portaled overlays on both browser and native webview roots.
   usePreventNativeContextMenu()
   usePluginHostContext()
+  useExternalFileOpen()
 
   useEffect(() => {
     return usePluginsStore.getState().subscribe()

@@ -47,7 +47,14 @@ import { isTerminalPendingPtyAssignment } from '@/hooks/use-terminal-restore'
 import { systemApi, terminalApi } from '@/lib/api'
 import { openTerminalUrl } from '@/lib/browser/terminal-url-navigation'
 import { prepareCommandForHistory } from '@/lib/command-capture'
-import { buildTerminalPathLinks, openFilePathFromTerminal } from '@/lib/file-path-links'
+import type { FilePathMatch, FilePathResolutionContext } from '@/lib/file-path-links'
+import {
+  buildPathLinksFromMatches,
+  findFilePathMatches,
+  isAmbiguousPathMatch,
+  openFilePathFromTerminal,
+  resolveExistingTerminalPathMatches
+} from '@/lib/file-path-links'
 import { logFrontendError } from '@/lib/log-api'
 import { isMac, isPlatformModifier } from '@/lib/platform'
 import { addRendererRef, registerPrimaryTerminalData, removeRendererRef } from '@/lib/terminal-api'
@@ -1217,6 +1224,25 @@ function ConnectedTerminalComponent({
     fitAddonRef.current = fitAddon
     searchAddonRef.current = searchAddon
 
+    // Resolve against the terminal's OWN project, not whichever project the
+    // sidebar happens to have selected — clicking a path in a background
+    // project's terminal otherwise joins it to the wrong root and reports a
+    // spurious "file not found".
+    const resolveLinkContext = (): FilePathResolutionContext => {
+      const record = useTerminalStore.getState().findTerminalByPtyId(ptyIdRef.current || '')
+      const conversation = record?.conversationId
+        ? getCurrentConversation(useConversationStore.getState(), record.conversationId)
+        : null
+      const ownerProjectId = record?.projectId ?? conversation?.projectAttachment?.projectId
+      return {
+        cwd: record?.cwd,
+        workspaceCwd: conversation?.workspaceCwd,
+        projectRoot: ownerProjectId
+          ? getDefaultCwdForProject(ownerProjectId) || undefined
+          : undefined
+      }
+    }
+
     const handleFilePathActivate = async (event: MouseEvent, uri: string): Promise<void> => {
       if (!event.ctrlKey && !event.metaKey) {
         return
@@ -1225,22 +1251,7 @@ function ConnectedTerminalComponent({
       event.preventDefault()
 
       try {
-        const record = useTerminalStore.getState().findTerminalByPtyId(ptyIdRef.current || '')
-        // Resolve against the terminal's OWN project, not whichever project the
-        // sidebar happens to have selected — clicking a path in a background
-        // project's terminal otherwise joins it to the wrong root and reports a
-        // spurious "file not found".
-        const conversation = record?.conversationId
-          ? getCurrentConversation(useConversationStore.getState(), record.conversationId)
-          : null
-        const ownerProjectId = record?.projectId ?? conversation?.projectAttachment?.projectId
-        const result = await openFilePathFromTerminal(uri, {
-          cwd: record?.cwd,
-          workspaceCwd: conversation?.workspaceCwd,
-          projectRoot: ownerProjectId
-            ? getDefaultCwdForProject(ownerProjectId) || undefined
-            : undefined
-        })
+        const result = await openFilePathFromTerminal(uri, resolveLinkContext())
 
         if (!result.ok) {
           toast.error(result.message)
@@ -1279,15 +1290,48 @@ function ConnectedTerminalComponent({
       }
     }
 
+    let linkProviderDisposed = false
+
+    // A URL and a path can cover the same cells (e.g. `https://x/y/z.ts`).
+    // URLs win: a path link is dropped whenever it overlaps one.
+    const mergeUrlAndPathLinks = (
+      logicalLine: TerminalLogicalLine,
+      y: number,
+      pathMatches: FilePathMatch[]
+    ): ILink[] => {
+      const urlLinks = buildTerminalUrlLinks(logicalLine.text, y, handleUrlActivate)
+      const pathLinks = buildPathLinksFromMatches(pathMatches, y, handleFilePathActivate)
+      const withoutOverlap = pathLinks.filter(
+        (pathLink) =>
+          !urlLinks.some(
+            (urlLink) =>
+              pathLink.range.start.x <= urlLink.range.end.x &&
+              urlLink.range.start.x <= pathLink.range.end.x
+          )
+      )
+      const ordered = [...urlLinks, ...withoutOverlap].sort(
+        (left, right) => left.range.start.x - right.range.start.x
+      )
+      return mapTerminalLinksToCells(ordered, logicalLine, y)
+    }
+
+    let linkRequestSeq = 0
     fileLinkProviderDisposableRef.current = terminal.registerLinkProvider({
       provideLinks(y, callback) {
+        const requestSeq = ++linkRequestSeq
         let links: ILink[] = []
+        let ambiguous: FilePathMatch[] = []
+        let lineText: string | null = null
+        let logicalLine: TerminalLogicalLine | null = null
+        let unambiguous: FilePathMatch[] = []
         try {
-          const logicalLine = readTerminalLogicalLine(terminal, y)
+          logicalLine = readTerminalLogicalLine(terminal, y) ?? null
           if (logicalLine) {
-            const pathLinks = buildTerminalPathLinks(logicalLine.text, y, handleFilePathActivate)
-            const urlLinks = buildTerminalUrlLinks(logicalLine.text, y, handleUrlActivate)
-            links = mapTerminalLinksToCells([...urlLinks, ...pathLinks], logicalLine, y)
+            lineText = logicalLine.text
+            const matches = findFilePathMatches(logicalLine.text)
+            unambiguous = matches.filter((match) => !isAmbiguousPathMatch(match.text))
+            ambiguous = matches.filter((match) => isAmbiguousPathMatch(match.text))
+            links = mergeUrlAndPathLinks(logicalLine, y, unambiguous)
           }
         } catch {
           // Buffer reads can race disposal/reflow. Never include terminal text,
@@ -1299,6 +1343,29 @@ function ConnectedTerminalComponent({
           })
         }
         callback(links)
+
+        // Ambiguous tokens (bare file names, `application/json`, `12/31`) only
+        // become clickable once the host confirms they exist. The first callback
+        // stays synchronous so obvious paths keep working without the probe.
+        if (linkProviderDisposed || ambiguous.length === 0 || lineText === null) return
+
+        void resolveExistingTerminalPathMatches(ambiguous, resolveLinkContext())
+          .then((confirmed) => {
+            if (linkProviderDisposed || requestSeq !== linkRequestSeq || confirmed.length === 0) {
+              return
+            }
+            // Re-read so wrap/reflow changes cannot produce stale ranges.
+            const current = readTerminalLogicalLine(terminal, y)
+            if (!current || current.text !== lineText) return
+            callback(mergeUrlAndPathLinks(current, y, [...unambiguous, ...confirmed]))
+          })
+          .catch(() => {
+            void logFrontendError({
+              level: 'warn',
+              source: 'ConnectedTerminal.links',
+              message: 'Terminal link existence probe failed'
+            })
+          })
       }
     })
 
@@ -2434,6 +2501,7 @@ function ConnectedTerminalComponent({
 
       // Dispose WebGL addon BEFORE terminal disposal for proper cursor layer cleanup
       disposeWebglAddon()
+      linkProviderDisposed = true
       if (fileLinkProviderDisposableRef.current) {
         fileLinkProviderDisposableRef.current.dispose()
         fileLinkProviderDisposableRef.current = null

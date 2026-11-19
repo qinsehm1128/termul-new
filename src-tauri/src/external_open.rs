@@ -30,6 +30,9 @@ pub struct ExternalFileOpenPayload {
     pub paths: Vec<String>,
 }
 
+/// Maximum queued paths before the renderer drains the cold-start buffer.
+const MAX_PENDING_PATHS: usize = 64;
+
 #[derive(Debug, Default)]
 struct PendingState {
     paths: Vec<String>,
@@ -70,12 +73,35 @@ impl PendingExternalFiles {
         let mut state = self.state.lock().unwrap_or_else(|poison| poison.into_inner());
         let mut added = 0;
         for path in paths {
+            if state.paths.len() >= MAX_PENDING_PATHS {
+                break;
+            }
             if !state.paths.iter().any(|existing| existing == &path) {
                 state.paths.push(path);
                 added += 1;
             }
         }
         added
+    }
+
+    /// Atomically queue `paths` if the renderer has not called `take_all` yet,
+    /// or hand back `Err(paths)` when the listener is already ready.
+    pub fn push_unless_ready(&self, paths: Vec<String>) -> Result<usize, Vec<String>> {
+        let mut state = self.state.lock().unwrap_or_else(|poison| poison.into_inner());
+        if state.frontend_ready {
+            return Err(paths);
+        }
+        let mut added = 0;
+        for path in paths {
+            if state.paths.len() >= MAX_PENDING_PATHS {
+                break;
+            }
+            if !state.paths.iter().any(|existing| existing == &path) {
+                state.paths.push(path);
+                added += 1;
+            }
+        }
+        Ok(added)
     }
 
     /// Append filesystem paths, dropping duplicates.
@@ -149,10 +175,13 @@ pub fn cold_start_paths() -> Vec<String> {
 }
 
 /// True for an argument that belongs to another process role or to the launcher
-/// itself (`--flag`, `-psn_0_12345`).
+/// itself (`--flag`, `-psn_0_12345`). Single-dash filenames like `-notes.md`
+/// are preserved.
 #[must_use]
 pub fn is_internal_flag(argument: &str) -> bool {
-    argument.starts_with('-')
+    argument.starts_with("--")
+        || argument.starts_with("-psn_")
+        || matches!(argument, "-h" | "-help" | "-v" | "-version")
 }
 
 /// Extract candidate files from one launcher argument.
@@ -173,7 +202,7 @@ pub fn paths_from_arg(argument: &str, cwd: Option<&Path>) -> Vec<PathBuf> {
         // `Url::parse` needs the scheme back; `file:///a` keeps three slashes.
         let normalized = format!("file://{rest}");
         return match url::Url::parse(&normalized).ok().and_then(|url| url.to_file_path().ok()) {
-            Some(path) if path.exists() => vec![path],
+            Some(path) if path.is_file() => vec![path],
             Some(_) => Vec::new(),
             None => Vec::new(),
         };
@@ -192,7 +221,7 @@ pub fn paths_from_arg(argument: &str, cwd: Option<&Path>) -> Vec<PathBuf> {
         };
         cwd.join(path)
     };
-    if candidate.exists() {
+    if candidate.is_file() {
         vec![candidate]
     } else {
         Vec::new()
@@ -238,29 +267,30 @@ pub fn dispatch_paths(app: &AppHandle, paths: Vec<PathBuf>) -> usize {
 
     let delivered = paths.len();
     let pending = app.try_state::<PendingExternalFiles>();
-    let frontend_ready = pending
-        .as_ref()
-        .is_some_and(|pending| pending.is_frontend_ready());
-
-    if !frontend_ready {
-        if let Some(pending) = pending.as_ref() {
-            pending.push_strings(paths);
-            log::info!(
-                "[external-open] operation=queue stable_code=FRONTEND_NOT_READY result=QUEUED count={delivered}"
-            );
-        } else {
+    let emit_paths = match pending.as_ref() {
+        Some(pending) => match pending.push_unless_ready(paths) {
+            Ok(queued) => {
+                log::info!(
+                    "[external-open] operation=queue stable_code=FRONTEND_NOT_READY result=QUEUED count={queued}"
+                );
+                focus_main_window(app);
+                return queued;
+            }
+            Err(paths) => paths,
+        },
+        None => {
             log::warn!(
                 "[external-open] operation=queue stable_code=PENDING_STATE_MISSING result=DROPPED count={delivered}"
             );
+            focus_main_window(app);
+            return delivered;
         }
-        focus_main_window(app);
-        return delivered;
-    }
+    };
 
     match app.emit(
         EXTERNAL_FILE_OPEN_EVENT,
         ExternalFileOpenPayload {
-            paths: paths.clone(),
+            paths: emit_paths.clone(),
         },
     ) {
         Ok(()) => log::info!(
@@ -274,7 +304,7 @@ pub fn dispatch_paths(app: &AppHandle, paths: Vec<PathBuf>) -> usize {
                 "[external-open] operation=emit stable_code=EMIT_FAILED result=QUEUED count={delivered} error={error}"
             );
             if let Some(pending) = pending.as_ref() {
-                pending.push_strings(paths);
+                pending.push_strings(emit_paths);
             }
         }
     }
@@ -376,5 +406,29 @@ mod tests {
         // construction never panics and that the accessor is stable.
         let first = cold_start_paths();
         assert_eq!(first, cold_start_paths());
+    }
+
+    #[test]
+    fn push_unless_ready_atomically_stops_queueing_after_take() {
+        let pending = PendingExternalFiles::new();
+        assert_eq!(pending.push_unless_ready(vec!["/tmp/a.md".to_string()]), Ok(1));
+        assert_eq!(pending.take_all(), vec!["/tmp/a.md"]);
+        assert_eq!(
+            pending.push_unless_ready(vec!["/tmp/b.md".to_string()]),
+            Err(vec!["/tmp/b.md".to_string()])
+        );
+        assert_eq!(pending.pending_count(), 0);
+    }
+
+    #[test]
+    fn ignores_directories_and_allows_dash_prefixed_filenames() {
+        let dir = TempDir::new().expect("temp dir");
+        let sub = dir.path().join("docs");
+        fs::create_dir_all(&sub).expect("mkdir");
+        let dash_file = dir.path().join("-notes.md");
+        fs::write(&dash_file, "x").expect("write");
+
+        assert!(paths_from_arg(&sub.to_string_lossy(), None).is_empty());
+        assert_eq!(paths_from_arg("-notes.md", Some(dir.path())), vec![dash_file]);
     }
 }

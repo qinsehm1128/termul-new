@@ -209,7 +209,17 @@
     "autoSaveHint": "停止输入后自动保存编辑器文件",
     "autoSaveDelay": "自动保存延迟",
     "autoSaveDelayAria": "自动保存延迟",
-    "autoSaveDelayHint": "最后一次编辑后等待多长时间再自动保存。"
+    "autoSaveDelayHint": "最后一次编辑后等待多长时间再自动保存。",
+    "documentOpen": "文档与外部文件",
+    "externalFileDefaultProject": "外部文件默认项目",
+    "externalFileDefaultProjectHint": "不属于任何已知项目的外部文件在哪个项目中打开。",
+    "externalFileDefaultProjectAuto": "自动匹配所属项目",
+    "externalFileOpenTarget": "外部文件打开方式",
+    "externalFileOpenTargetHint": "在 Finder 中打开的 .md、.html 等文件显示在哪里。",
+    "terminalFileOpenTarget": "终端与对话文件打开方式",
+    "terminalFileOpenTargetHint": "点击终端输出或对话中的文件链接时显示在哪里。",
+    "documentOpenFloating": "悬浮预览窗",
+    "documentOpenEditorTab": "工作区标签页"
   },
   "projectDefaults": {
     "description": "设置新项目的默认选项。",
@@ -496,6 +506,27 @@
     "button": "重置为默认值",
     "title": "重置设置",
     "message": "确定要将所有应用设置重置为默认值吗？此操作无法撤销。"
+  },
+  "floatingDoc": {
+    "title": "文档预览",
+    "ballAria": "文档预览（{{count}} 个文档：{{name}}）",
+    "tabsAria": "已打开的文档",
+    "close": "关闭",
+    "closeAll": "全部关闭",
+    "save": "保存",
+    "saveFailed": "无法保存 {{path}}",
+    "openInWorkspace": "在工作区打开",
+    "fullscreen": "全屏",
+    "exitFullscreen": "退出全屏",
+    "collapse": "收起为悬浮球",
+    "rendered": "渲染视图",
+    "source": "源代码",
+    "unsavedDot": "未保存",
+    "unsavedWarning": "有未保存的修改",
+    "saveAndClose": "保存并关闭",
+    "discardAndClose": "放弃修改并关闭",
+    "cancel": "取消",
+    "openFailed": "无法打开 {{path}}"
   },
   "options": {
     "lineCount_one": "{{formattedCount}} 行",

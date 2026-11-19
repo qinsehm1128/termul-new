@@ -1,8 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { filesystemApi } from '@/lib/api'
 import {
   buildTerminalPathLinks,
   extractPathCandidate,
+  isAmbiguousPathMatch,
   openFilePathFromTerminal,
+  resolveExistingTerminalPathMatches,
   resolveFilePathCandidate,
   stripLineColumnSuffix,
   trimWrappedPath
@@ -10,6 +13,7 @@ import {
 
 const mocks = vi.hoisted(() => ({
   getFileInfo: vi.fn(),
+  resolveExistingPaths: vi.fn(),
   openFile: vi.fn(),
   updateCursorPosition: vi.fn(),
   addEditorTab: vi.fn(),
@@ -43,8 +47,19 @@ vi.mock('@/stores/editor-store', () => ({
 }))
 
 vi.mock('@/stores/workspace-store', () => ({
+  getAllLeafPanes: () => [],
   useWorkspaceStore: {
     getState: () => ({ addEditorTab: mocks.addEditorTab })
+  }
+}))
+
+// `showOpenedFile` routes terminal opens by setting; pin the workspace-tab
+// target so these tests assert on `addEditorTab` rather than floating previews.
+vi.mock('@/stores/app-settings-store', () => ({
+  useAppSettingsStore: {
+    getState: () => ({
+      settings: { terminalFileOpenTarget: 'editor-tab', externalFileOpenTarget: 'editor-tab' }
+    })
   }
 }))
 
@@ -686,5 +701,268 @@ describe('file-path-links resolution', () => {
     })
     expect(mocks.updateCursorPosition).not.toHaveBeenCalled()
     expect(mocks.addEditorTab).not.toHaveBeenCalled()
+  })
+})
+
+describe('file-path-links CJK, wrapper and bare-name parsing', () => {
+  const texts = (line: string): string[] =>
+    buildTerminalPathLinks(line, 1, vi.fn()).map((link) => link.text)
+  const starts = (line: string): number[] =>
+    buildTerminalPathLinks(line, 1, vi.fn()).map((link) => link.range.start.x - 1)
+
+  it.each([
+    ['(src/App.tsx)', ['src/App.tsx']],
+    ['（src/App.tsx）', ['src/App.tsx']],
+    ['【docs/说明.md:12】', ['docs/说明.md:12']],
+    ['“README.md”', ['README.md']],
+    ['「src/App.tsx」', ['src/App.tsx']],
+    ['『docs/guide.md』', ['docs/guide.md']],
+    ['《src/App.tsx》', ['src/App.tsx']],
+    ['〈src/App.tsx〉', ['src/App.tsx']],
+    ['打开(src/App.tsx)，然后继续', ['src/App.tsx']],
+    ['请查看 src/App.tsx。然后运行', ['src/App.tsx']],
+    ['请查看 docs/说明.md、src/App.tsx', ['docs/说明.md', 'src/App.tsx']]
+  ])('never swallows wrappers or CJK punctuation: %s', (line, expected) => {
+    expect(texts(line)).toEqual(expected)
+  })
+
+  it('reports the index of the path itself, not the wrapper', () => {
+    expect(starts('(src/App.tsx)')).toEqual([1])
+    expect(starts('【docs/说明.md:12】')).toEqual([1])
+    expect(starts('请查看 src/App.tsx。然后运行')).toEqual([4])
+    expect(starts('（src/App.tsx）')).toEqual([1])
+  })
+
+  it.each([
+    ['src/App.tsx报错了', 'src/App.tsx'],
+    ['文档/说明.md里面', '文档/说明.md'],
+    ['src/main.rs:12:5行', 'src/main.rs:12:5'],
+    ['package.json的配置', 'package.json'],
+    ['请打开 src/App.tsx，然后检查', 'src/App.tsx']
+  ])('cuts a token where Chinese prose follows: %s', (line, expected) => {
+    expect(texts(line)).toEqual([expected])
+  })
+
+  it('keeps Chinese inside real directory and file names', () => {
+    expect(texts('文档/设计说明.md')).toEqual(['文档/设计说明.md'])
+    expect(texts('参见 docs/设计说明.md 文件')).toEqual(['docs/设计说明.md'])
+  })
+
+  it.each([
+    'README.md',
+    'package.json',
+    'Cargo.toml',
+    'index.html',
+    'App.tsx:42',
+    'Makefile',
+    'Dockerfile',
+    'tsconfig.json'
+  ])('matches a standalone file name %s', (token) => {
+    expect(texts(`see ${token} now`)).toEqual([token])
+  })
+
+  it.each([
+    'v1.2.3',
+    '1.0.0',
+    'console.log(',
+    'window.location',
+    'res.json('
+  ])('rejects versions and member/call chains: %s', (token) => {
+    expect(texts(`see ${token} now`)).toEqual([])
+  })
+
+  it('keeps a quoted single path with spaces intact', () => {
+    expect(texts('"My Docs/设计 稿.md"')).toEqual(['My Docs/设计 稿.md'])
+    expect(texts('"scripts/my task.ts":12:3')).toEqual(['"scripts/my task.ts":12:3'])
+  })
+
+  it('scans quoted prose token by token instead of swallowing it', () => {
+    expect(texts('"see src/App.tsx and docs/guide.md"')).toEqual(['src/App.tsx', 'docs/guide.md'])
+  })
+
+  it.each([
+    ['src/App.tsx#L12', 'src/App.tsx#L12'],
+    ['src/App.tsx#L12C3', 'src/App.tsx#L12C3'],
+    ['src/App.tsx(12,3)', 'src/App.tsx(12,3)'],
+    ['src/App.tsx:12:3:', 'src/App.tsx:12:3']
+  ])('recognizes explicit position syntax %s', (line, expected) => {
+    expect(texts(line)).toEqual([expected])
+  })
+
+  it('recognizes git diff prefixes and home-relative paths', () => {
+    expect(texts('diff --git a/src/App.tsx b/src/App.tsx')).toEqual([
+      'a/src/App.tsx',
+      'b/src/App.tsx'
+    ])
+    expect(texts('see ~/notes.md')).toEqual(['~/notes.md'])
+  })
+
+  it('never treats url= adjacency or scheme tokens as paths', () => {
+    expect(texts('url=https://example.com/src/App.tsx')).toEqual([])
+    expect(texts('see https://example.com/docs/guide.md')).toEqual([])
+    expect(texts('//example.com/docs/guide.md')).toEqual([])
+  })
+
+  it('extracts CJK-wrapped paths through extractPathCandidate', () => {
+    expect(extractPathCandidate('【docs/说明.md:12】')).toBe('docs/说明.md')
+    expect(extractPathCandidate('“README.md”')).toBe('README.md')
+    expect(extractPathCandidate('src/App.tsx#L12C3')).toBe('src/App.tsx')
+    expect(extractPathCandidate('src/App.tsx(12,3)')).toBe('src/App.tsx')
+    expect(extractPathCandidate('src/App.tsx:12:3:')).toBe('src/App.tsx')
+  })
+
+  it('preserves dots in Chinese filenames while stripping leading/trailing Chinese prose', () => {
+    expect(texts('查看 logs/构建日志.2024年11月.txt。')).toEqual(['logs/构建日志.2024年11月.txt'])
+    expect(texts('修改 src/v1.0版本.tsx后继续')).toEqual(['src/v1.0版本.tsx'])
+    expect(texts('请查看src/App.tsx和src/main.rs')).toEqual(['src/App.tsx', 'src/main.rs'])
+    expect(texts('修改package.json、文档/设计说明.md')).toEqual([
+      'package.json',
+      '文档/设计说明.md'
+    ])
+    expect(texts('查看 我的文档/设计说明.md')).toEqual(['我的文档/设计说明.md'])
+  })
+})
+
+describe('file-path-links resolution additions', () => {
+  beforeEach(() => {
+    mocks.getFileInfo.mockReset()
+    mocks.openFile.mockReset()
+    mocks.updateCursorPosition.mockReset()
+    mocks.addEditorTab.mockReset()
+    mocks.toastError.mockReset()
+    mocks.getHomeDirectory.mockReset().mockResolvedValue({ success: true, data: '/Users/tester' })
+    mocks.resolveExistingPaths.mockReset()
+    mocks.logError.mockReset()
+  })
+
+  afterEach(() => {
+    delete (filesystemApi as { resolveExistingPaths?: unknown }).resolveExistingPaths
+  })
+
+  it('prefers batch resolveExistingPaths over per-path stat calls', async () => {
+    filesystemApi.resolveExistingPaths = mocks.resolveExistingPaths
+    mocks.resolveExistingPaths.mockResolvedValue({
+      success: true,
+      data: { hits: [{ candidate: '/repo/src/App.tsx', resolvedPath: '/repo/src/App.tsx' }] }
+    })
+
+    await expect(resolveFilePathCandidate('src/App.tsx', { cwd: '/repo' })).resolves.toEqual({
+      ok: true,
+      path: '/repo/src/App.tsx'
+    })
+    expect(mocks.resolveExistingPaths).toHaveBeenCalledWith({
+      candidates: ['/repo/src/App.tsx'],
+      roots: ['/repo'],
+      expandHome: true
+    })
+    expect(mocks.getFileInfo).not.toHaveBeenCalled()
+  })
+
+  it('falls back to getFileInfo when the batch capability misses', async () => {
+    filesystemApi.resolveExistingPaths = mocks.resolveExistingPaths
+    mocks.resolveExistingPaths.mockResolvedValue({ success: true, data: { hits: [] } })
+    mocks.getFileInfo.mockResolvedValue({ success: true, data: { type: 'file' } })
+
+    await expect(resolveFilePathCandidate('src/App.tsx', { cwd: '/repo' })).resolves.toEqual({
+      ok: true,
+      path: '/repo/src/App.tsx'
+    })
+    expect(mocks.getFileInfo).toHaveBeenCalledWith('/repo/src/App.tsx')
+  })
+
+  it('accepts a ../ hop that leaves cwd but stays inside another allowed root', async () => {
+    mocks.getFileInfo.mockImplementation(async (path: string) =>
+      path === '/repo/packages/scripts/x.ts'
+        ? { success: true, data: { type: 'file' } }
+        : { success: false }
+    )
+
+    await expect(
+      resolveFilePathCandidate('../scripts/x.ts', {
+        cwd: '/repo/packages/client',
+        workspaceCwd: '/repo'
+      })
+    ).resolves.toEqual({ ok: true, path: '/repo/packages/scripts/x.ts' })
+  })
+
+  it('strips a git diff a/ or b/ prefix before resolving', async () => {
+    mocks.getFileInfo.mockImplementation(async (path: string) =>
+      path === '/repo/src/app.ts' ? { success: true, data: { type: 'file' } } : { success: false }
+    )
+
+    await expect(resolveFilePathCandidate('b/src/app.ts', { cwd: '/repo' })).resolves.toEqual({
+      ok: true,
+      path: '/repo/src/app.ts'
+    })
+  })
+
+  it('expands ~ against the home directory', async () => {
+    mocks.getFileInfo.mockImplementation(async (path: string) =>
+      path === '/Users/tester/notes.md'
+        ? { success: true, data: { type: 'file' } }
+        : { success: false }
+    )
+
+    await expect(resolveFilePathCandidate('~/notes.md', { cwd: '/repo' })).resolves.toEqual({
+      ok: true,
+      path: '/Users/tester/notes.md'
+    })
+    expect(mocks.getHomeDirectory).toHaveBeenCalled()
+  })
+
+  it.each([
+    ['src/App.tsx#L12C3', 12, 3],
+    ['src/App.tsx(12,3)', 12, 3],
+    ['src/App.tsx:7', 7, 1]
+  ])('opens %s at its explicit position', async (candidate, line, column) => {
+    mocks.getFileInfo.mockResolvedValue({ success: true, data: { type: 'file' } })
+
+    await expect(openFilePathFromTerminal(candidate, { cwd: '/repo' })).resolves.toEqual({
+      ok: true
+    })
+    expect(mocks.openFile).toHaveBeenCalledWith('/repo/src/App.tsx')
+    expect(mocks.updateCursorPosition).toHaveBeenCalledWith('/repo/src/App.tsx', line, column)
+  })
+
+  it.each([
+    ['src/App.tsx', false],
+    ['/repo/src/App.tsx', false],
+    ['~/notes.md', false],
+    ['application/json', true],
+    ['12/31', true],
+    ['yes/no', true],
+    ['feat/login', true],
+    ['README.md', true]
+  ])('classifies %s as ambiguous=%s', (token, ambiguous) => {
+    expect(isAmbiguousPathMatch(token)).toBe(ambiguous)
+  })
+
+  it('only confirms ambiguous tokens that exist and caches the answer', async () => {
+    filesystemApi.resolveExistingPaths = mocks.resolveExistingPaths
+    mocks.resolveExistingPaths.mockResolvedValue({
+      success: true,
+      data: { hits: [{ candidate: 'README.md', resolvedPath: '/repo/README.md' }] }
+    })
+    const matches = [
+      { text: 'README.md', start: 0 },
+      { text: 'application/json', start: 11 }
+    ]
+
+    await expect(resolveExistingTerminalPathMatches(matches, { cwd: '/repo' })).resolves.toEqual([
+      { text: 'README.md', start: 0 }
+    ])
+
+    mocks.resolveExistingPaths.mockClear()
+    await expect(resolveExistingTerminalPathMatches(matches, { cwd: '/repo' })).resolves.toEqual([
+      { text: 'README.md', start: 0 }
+    ])
+    // The second call is served entirely from the TTL cache.
+    expect(mocks.resolveExistingPaths).not.toHaveBeenCalled()
+  })
+
+  it('shows no ambiguous links when the batch capability is unavailable', async () => {
+    await expect(
+      resolveExistingTerminalPathMatches([{ text: 'README.md', start: 0 }], { cwd: '/repo' })
+    ).resolves.toEqual([])
   })
 })

@@ -920,6 +920,9 @@ export interface FilesystemApi {
   readDirectory: (dirPath: string) => Promise<IpcResult<DirectoryEntry[]>>
   readFile: (filePath: string) => Promise<IpcResult<FileContent>>
   getFileInfo: (filePath: string) => Promise<IpcResult<FileInfo>>
+  resolveExistingPaths?: (
+    request: import('./filesystem.types').ResolveFilePathsRequest
+  ) => Promise<IpcResult<import('./filesystem.types').ResolveFilePathsResponse>>
   searchContent: (
     scopeRoot: string,
     rootPath: string,

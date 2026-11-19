@@ -4,6 +4,7 @@ import { RouterProvider } from 'react-router-dom'
 import { PortableAppEffects } from '@/app/PortableAppEffects'
 import { createPortableRouter } from '@/app/portable-router'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
+import { FloatingDocPreview } from '@/components/editor/FloatingDocPreview'
 import { GlobalContextMenu } from '@/components/GlobalContextMenu'
 import { BrandMigrationBanner } from '@/components/migration/BrandMigrationBanner'
 import { RemoteDesktopBanner } from '@/components/RemoteDesktopBanner'
@@ -60,6 +61,7 @@ export default function TauriApp(): React.JSX.Element {
             {/* In-app confirmations (never native NSAlert sheets: they deadlock macOS). */}
             <InAppConfirmHost />
             <RouterProvider router={router} future={{ v7_startTransition: true }} />
+            <FloatingDocPreview />
             <WhatsNewModal
               isOpen={whatsNew.isOpen}
               version={whatsNew.version}
