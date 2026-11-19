@@ -8880,6 +8880,49 @@ pub async fn workspace_manifest_delete(
     }
 }
 
+/// Drain the files the OS handed to this app before the renderer was ready.
+///
+/// The first call also marks the renderer as listening, so later external
+/// opens are emitted as `external-file-open` events instead of being queued.
+/// Paths are user documents and are never logged.
+#[tauri::command]
+pub async fn take_pending_external_files(app: AppHandle) -> Vec<String> {
+    let Some(pending) = app.try_state::<crate::external_open::PendingExternalFiles>() else {
+        log::warn!("[external-open] operation=take stable_code=PENDING_STATE_MISSING result=EMPTY");
+        return Vec::new();
+    };
+    let paths = pending.take_all();
+    log::info!(
+        "[external-open] operation=take stable_code=FRONTEND_READY result=PASS count={}",
+        paths.len()
+    );
+    paths
+}
+
+/// Resolve reported file paths (diff headers, stack traces, terminal links)
+/// into existing absolute paths.
+///
+/// Desktop breadth: any readable file, matching the deliberate `/fs/*` policy
+/// (ADR-007). The web/remote equivalent restricts to registered project roots
+/// in `web::fs_api::resolve_paths`.
+#[tauri::command]
+pub async fn fs_resolve_existing_paths(
+    request: crate::fs_resolver::ResolveFilePathsRequest,
+) -> Result<crate::fs_resolver::ResolveFilePathsResponse, String> {
+    let candidates = request.candidates.len();
+    let response = tauri::async_runtime::spawn_blocking(move || {
+        crate::fs_resolver::resolve_existing_paths(request, None)
+    })
+    .await
+    .map_err(|error| format!("path resolution task failed: {error}"))?;
+    log::info!(
+        "[fs-resolver] operation=resolve_existing_paths stable_code=OK result=PASS candidates={} hits={}",
+        candidates,
+        response.hits.len()
+    );
+    Ok(response)
+}
+
 /// Get available shells
 #[cfg(test)]
 mod tests {

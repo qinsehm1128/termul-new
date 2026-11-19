@@ -1191,6 +1191,125 @@ fn sort_directory_entries(entries: &mut [DirectoryEntryDto]) {
     });
 }
 
+/// `POST /fs/resolve-paths` request body. Mirrors `ResolveFilePathsRequest` in
+/// `src/shared/types/filesystem.types.ts`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvePathsRequest {
+    pub candidates: Vec<String>,
+    #[serde(default)]
+    pub roots: Vec<String>,
+    #[serde(default)]
+    pub expand_home: Option<bool>,
+}
+
+/// Registered, non-archived project roots plus the active `project_root`.
+///
+/// This is the remote caller's whole search space: unlike desktop, a web/remote
+/// request must not be able to probe the host's disk through path resolution.
+fn registered_roots(state: &AppState) -> Vec<PathBuf> {
+    let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for project in state.registry.snapshot().projects {
+        if project.is_archived {
+            continue;
+        }
+        let Some(path) = project.path else {
+            continue;
+        };
+        let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| PathBuf::from(&path));
+        if seen.insert(canonical.clone()) {
+            roots.push(canonical);
+        }
+    }
+    let project_root = state.project_root.read().clone();
+    let canonical = std::fs::canonicalize(&project_root).unwrap_or(project_root);
+    if seen.insert(canonical.clone()) {
+        roots.push(canonical);
+    }
+    roots
+}
+
+/// `POST /fs/resolve-paths` — batch-resolve reported paths (diff headers, stack
+/// traces, terminal links) into existing absolute file paths.
+///
+/// Local-operator ingress keeps the desktop `/fs/*` breadth (ADR-007). Remote
+/// ingress is confined to the registered project roots: candidates that resolve
+/// elsewhere are dropped rather than reported, so the route cannot be used as an
+/// existence oracle for the host's filesystem. The client's `roots` are ignored
+/// in that case — they are a hint for relative joins, never authority.
+pub async fn resolve_paths(
+    State(state): State<AppState>,
+    axum::Extension(provenance): axum::Extension<IngressProvenance>,
+    Json(request): Json<ResolvePathsRequest>,
+) -> impl IntoResponse {
+    let (request, allowed) = if provenance.allows_local_operator_mutation() {
+        (
+            crate::fs_resolver::ResolveFilePathsRequest {
+                candidates: request.candidates,
+                roots: request.roots,
+                expand_home: request.expand_home,
+            },
+            None,
+        )
+    } else {
+        let roots = registered_roots(&state);
+        if roots.is_empty() {
+            log::warn!(
+                "[fs-resolver] operation=resolve_paths stable_code=NO_REGISTERED_ROOT result=REFUSED"
+            );
+            return (
+                StatusCode::OK,
+                Json(IpcBody::<crate::fs_resolver::ResolveFilePathsResponse>::err(
+                    "no registered project root is available to resolve paths in",
+                    "OUTSIDE_PROJECT_ROOT",
+                )),
+            );
+        }
+        (
+            crate::fs_resolver::ResolveFilePathsRequest {
+                candidates: request.candidates,
+                roots: roots
+                    .iter()
+                    .map(|root| root.to_string_lossy().into_owned())
+                    .collect(),
+                // A remote client must not reach the server's home directory by
+                // asking us to expand `~`.
+                expand_home: Some(false),
+            },
+            Some(roots),
+        )
+    };
+
+    let candidates = request.candidates.len();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::fs_resolver::resolve_existing_paths(request, allowed.as_deref())
+    })
+    .await;
+    match result {
+        Ok(response) => {
+            log::info!(
+                "[fs-resolver] operation=resolve_paths stable_code=OK result=PASS candidates={} hits={}",
+                candidates,
+                response.hits.len()
+            );
+            (StatusCode::OK, Json(IpcBody::ok(response)))
+        }
+        Err(error) => {
+            log::error!(
+                "[fs-resolver] operation=resolve_paths stable_code=RESOLVE_TASK_FAILED result=FAILED error={error}"
+            );
+            (
+                StatusCode::OK,
+                Json(IpcBody::<crate::fs_resolver::ResolveFilePathsResponse>::err(
+                    format!("path resolution task failed: {error}"),
+                    "RESOLVE_ERROR",
+                )),
+            )
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1333,6 +1452,7 @@ mod tests {
             .route("/fs/rename", axum::routing::post(rename))
             .route("/fs/copy", axum::routing::post(copy))
             .route("/fs/copy-into", axum::routing::post(copy_into))
+            .route("/fs/resolve-paths", axum::routing::post(resolve_paths))
             .route("/git/init", axum::routing::post(git_init))
             .route("/git/ignore-rules", axum::routing::post(git_ignore_rules))
             .route(
@@ -3009,5 +3129,90 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body: IpcBody<Vec<DirectoryEntryDto>> = body_as_json(resp.into_body()).await;
         assert!(body.success, "/fs/ls on registered project must succeed");
+    }
+
+    /// `/fs/resolve-paths`: local-operator ingress keeps the desktop breadth, so
+    /// an absolute file anywhere the user can read resolves.
+    #[tokio::test]
+    async fn resolve_paths_local_operator_resolves_absolute_file() {
+        let root = TempDir::new("resolve-local-root");
+        let outside = TempDir::new("resolve-local-outside");
+        let file = outside.path().join("notes.md");
+        fs::write(&file, "x").expect("write file");
+        let state = test_state_with_root(root.path());
+
+        let resp = post_json(
+            state,
+            "/fs/resolve-paths",
+            &serde_json::json!({
+                "candidates": [file.to_string_lossy()],
+                "roots": [root.path().to_string_lossy()],
+            }),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<crate::fs_resolver::ResolveFilePathsResponse> =
+            body_as_json(resp.into_body()).await;
+        assert!(body.success, "local operator resolution must succeed");
+        let data = body.data.expect("hits");
+        assert_eq!(data.hits.len(), 1);
+        assert_eq!(
+            std::path::PathBuf::from(&data.hits[0].resolved_path),
+            file.canonicalize().expect("canonical")
+        );
+    }
+
+    /// `/fs/resolve-paths`: remote ingress is confined to registered roots. A
+    /// candidate inside resolves; one outside is dropped rather than reported,
+    /// so the route cannot be used to probe the host's disk.
+    #[tokio::test]
+    async fn resolve_paths_remote_ingress_is_confined_to_registered_roots() {
+        let root = TempDir::new("resolve-remote-root");
+        let outside = TempDir::new("resolve-remote-outside");
+        let inside_file = root.path().join("inside.md");
+        let outside_file = outside.path().join("secret.md");
+        fs::write(&inside_file, "x").expect("write inside");
+        fs::write(&outside_file, "x").expect("write outside");
+        let state = test_state_with_root(root.path());
+        state.registry.set(
+            vec![ProjectSummary {
+                id: "default".to_string(),
+                name: "Default".to_string(),
+                color: "blue".to_string(),
+                path: Some(root.path().to_string_lossy().into_owned()),
+                is_archived: false,
+                is_default: true,
+                live_terminal_count: 0,
+                terminal_screen_engine: Default::default(),
+            }],
+            Some("default".to_string()),
+        );
+
+        let resp = post_json_from(
+            state,
+            "/fs/resolve-paths",
+            &serde_json::json!({
+                "candidates": [
+                    inside_file.to_string_lossy(),
+                    outside_file.to_string_lossy(),
+                ],
+                // A remote client's own roots are hints, never authority.
+                "roots": [outside.path().to_string_lossy()],
+            }),
+            SocketAddr::from(([192, 0, 2, 10], 50000)),
+        )
+        .await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<crate::fs_resolver::ResolveFilePathsResponse> =
+            body_as_json(resp.into_body()).await;
+        assert!(body.success, "remote resolution must succeed");
+        let data = body.data.expect("hits");
+        assert_eq!(data.hits.len(), 1, "outside root must be dropped: {data:?}");
+        assert_eq!(
+            std::path::PathBuf::from(&data.hits[0].resolved_path),
+            inside_file.canonicalize().expect("canonical")
+        );
     }
 }

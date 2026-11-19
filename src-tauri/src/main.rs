@@ -59,6 +59,14 @@ fn main() {
         std::process::exit(se_manager_lib::host_mcp::child::run());
     }
 
+    // GUI role only. Every non-GUI role has already exited above, so anything
+    // left in argv belongs to this window: files opened from Finder/Explorer
+    // ("Open With"), or a path typed after the executable. Absolute and
+    // `file://` entries are validated and queued here; the queue is drained by
+    // `take_pending_external_files` once the renderer asks. Arguments are never
+    // logged.
+    se_manager_lib::external_open::seed_cold_start_args(std::env::args_os().skip(1));
+
     // Seed a default RUST_LOG so module-level overrides keep working, e.g.:
     //   RUST_LOG=trace npm run dev
     //   RUST_LOG=se_manager_lib=debug npm run dev

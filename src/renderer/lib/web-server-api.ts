@@ -42,6 +42,10 @@ import {
 } from '@shared/types/cli-session.types'
 import type { EditorWorkspaceList } from '@shared/types/editor-workspace.types'
 import type {
+  ResolveFilePathsRequest,
+  ResolveFilePathsResponse
+} from '@shared/types/filesystem.types'
+import type {
   BranchInfo,
   DetectedShells,
   DirectoryEntry,
@@ -288,6 +292,19 @@ export const webServerFilesystem = {
   async getFileInfo(filePath: string): Promise<IpcResult<FileInfo>> {
     const encoded = encodeURIComponent(filePath)
     return getJson<FileInfo>(`/fs/info?path=${encoded}`)
+  },
+
+  /**
+   * Resolve reported paths to existing absolute files on the server host.
+   *
+   * The server confines remote callers to the registered project roots, so a
+   * candidate outside every project is omitted from `hits` rather than
+   * reported as out of bounds.
+   */
+  async resolveExistingPaths(
+    request: ResolveFilePathsRequest
+  ): Promise<IpcResult<ResolveFilePathsResponse>> {
+    return postJson<ResolveFilePathsResponse>('/fs/resolve-paths', request)
   },
 
   async deletePath(path: string, options?: { recursive?: boolean }): Promise<IpcResult<void>> {

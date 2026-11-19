@@ -78,6 +78,22 @@
 		},
 		"active": true,
 		"targets": "all",
+		"fileAssociations": [
+			{
+				"ext": ["md", "markdown", "mdx"],
+				"name": "Markdown Document",
+				"description": "Markdown document",
+				"mimeType": "text/markdown",
+				"role": "Editor"
+			},
+			{
+				"ext": ["html", "htm"],
+				"name": "HTML Document",
+				"description": "HTML document",
+				"mimeType": "text/html",
+				"role": "Viewer"
+			}
+		],
 		"externalBin": [
 			"bin/rg"
 		],

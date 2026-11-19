@@ -21,8 +21,15 @@ pub mod core;
 /// external dependency and has to be able to substitute the backend.
 pub mod credentials;
 mod editor_workspaces;
+/// OS-level "open with" hand-off: cold-start arguments, second-instance
+/// launches, and `RunEvent::Opened` URLs. Public because `main` records the
+/// launcher arguments before Tauri starts.
+pub mod external_open;
 mod file_pasteboard;
 mod fs_copy;
+/// Batch resolution of reported file paths (diff headers, stack traces,
+/// terminal links) into existing absolute paths.
+mod fs_resolver;
 mod fs_watcher;
 mod git_clone;
 use se_foundation::host_admission;
@@ -3001,6 +3008,10 @@ pub fn run() {
 
     let builder = tauri::Builder::default()
         .manage(Arc::new(plugin_ui_protocol::PluginUiSessions::default()))
+        // Seeded from the launcher arguments collected in `main`, so files
+        // opened from Finder/Explorer before the webview exists survive the
+        // boot and are drained by `take_pending_external_files`.
+        .manage(external_open::PendingExternalFiles::from_cold_start())
         .register_asynchronous_uri_scheme_protocol("se-plugin", |context, request, responder| {
             let app = context.app_handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -3046,7 +3057,21 @@ pub fn run() {
     // registration order, so duplicate launches must be rejected before any
     // other plugin performs setup or side effects. The plugin is desktop-only.
     #[cfg(desktop)]
-    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+        // A second launch carries the files the user opened with this app.
+        // `cwd` is the launcher's working directory, so relative arguments
+        // resolve the same way they did for the original process.
+        let files = external_open::collect_paths_from_args(
+            args.iter().skip(1).map(std::ffi::OsString::from),
+            Some(std::path::Path::new(&cwd)),
+        );
+        if !files.is_empty() {
+            external_open::dispatch_paths(
+                app,
+                files.into_iter().map(std::path::PathBuf::from).collect(),
+            );
+            return;
+        }
         if let Some(window) = app.get_webview_window("main") {
             let _ = window.show();
             // Unminimize before focus so the restored window is reliably
@@ -4238,6 +4263,9 @@ pub fn run() {
             commands::get_mcp_oauth_status,
             fs_watcher::fs_watcher_subscribe,
             fs_watcher::fs_watcher_set_roots,
+            // OS "open with" hand-off + precise path resolution
+            commands::take_pending_external_files,
+            commands::fs_resolve_existing_paths,
             fs_copy::fs_copy_entries,
             file_pasteboard::pasteboard_write_file_paths,
             file_pasteboard::pasteboard_read_file_paths,
@@ -4303,6 +4331,22 @@ pub fn run() {
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| {
+        // macOS/iOS hand "Open With" documents to the running app as Apple
+        // Events, which surface here and never as argv. Windows/Linux deliver
+        // the same files through argv (cold start) or the single-instance
+        // callback. The variant does not exist on other platforms.
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+        if let RunEvent::Opened { urls } = &event {
+            let paths: Vec<std::path::PathBuf> = urls
+                .iter()
+                .filter(|url| url.scheme() == "file")
+                .filter_map(|url| url.to_file_path().ok())
+                .collect();
+            if !paths.is_empty() {
+                external_open::dispatch_paths(app_handle, paths);
+            }
+        }
+
         // `ExitRequested` is emitted by tauri-runtime-wry in exactly two places:
         // when the LAST window is Destroyed, and when `AppHandle::exit()` is
         // called. macOS Cmd+Q takes neither path — `applicationWillTerminate`

@@ -1,4 +1,8 @@
 import type {
+  ResolveFilePathsRequest,
+  ResolveFilePathsResponse
+} from '@shared/types/filesystem.types'
+import type {
   DirectoryEntry,
   FileChangeCallback,
   FileChangeEvent,
@@ -591,6 +595,30 @@ export function createTauriFilesystemApi(): PreviewFilesystemApi {
         }
       } catch (err) {
         return { success: false, error: String(err), code: 'STAT_ERROR' }
+      }
+    },
+
+    /**
+     * Resolve reported paths (diff headers, stack traces, terminal links) to
+     * existing absolute files.
+     *
+     * Desktop breadth: the host accepts any readable file, matching `/fs/*`
+     * (ADR-007). A candidate that does not resolve is omitted rather than
+     * reported per-candidate.
+     */
+    async resolveExistingPaths(
+      request: ResolveFilePathsRequest
+    ): Promise<IpcResult<ResolveFilePathsResponse>> {
+      if (!isTauriContext()) {
+        return webServerFilesystem.resolveExistingPaths(request)
+      }
+      try {
+        const response = await invoke<ResolveFilePathsResponse>('fs_resolve_existing_paths', {
+          request
+        })
+        return { success: true, data: response }
+      } catch (err) {
+        return { success: false, error: String(err), code: 'RESOLVE_ERROR' }
       }
     },
 
