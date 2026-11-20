@@ -297,10 +297,20 @@ export interface BoardRowFacts {
   lastActiveAt: number | undefined
 }
 
-/** Most urgent first, then most recently active; ties keep their input order. */
+/**
+ * Rows that are still printing advance their stamp on every tick; ordering them
+ * by it made two busy terminals swap places every few seconds.
+ */
+const RECENCY_ORDERED_STATES: ReadonlySet<TerminalRowState> = new Set(['idle', 'exited'])
+
+/**
+ * Most urgent first. Quiet rows (idle, exited) then go most recently active
+ * first; live ones keep their input order so the list does not reshuffle.
+ */
 export function compareBoardRows(a: BoardRowFacts, b: BoardRowFacts): number {
   const byState = ROW_STATE_ORDER.indexOf(a.state) - ROW_STATE_ORDER.indexOf(b.state)
   if (byState !== 0) return byState
+  if (!RECENCY_ORDERED_STATES.has(a.state)) return 0
   return (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0)
 }
 

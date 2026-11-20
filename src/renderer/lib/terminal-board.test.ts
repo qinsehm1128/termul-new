@@ -248,6 +248,14 @@ describe('compareBoardRows', () => {
       'ended'
     ])
   })
+
+  it('keeps live rows in input order so busy terminals do not trade places every tick', () => {
+    const rows = [
+      { id: 'a', state: 'working' as const, lastActiveAt: 1 },
+      { id: 'b', state: 'working' as const, lastActiveAt: 9 }
+    ]
+    expect([...rows].sort(compareBoardRows).map((row) => row.id)).toEqual(['a', 'b'])
+  })
 })
 
 describe('latestActivity', () => {
