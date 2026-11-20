@@ -5338,7 +5338,7 @@ dependencies = [
 
 [[package]]
 name = "se-manager"
-version = "0.15.64"
+version = "0.15.65"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
