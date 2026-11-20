@@ -77,6 +77,6 @@ jobs:
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
           name: windows-ghostty-native-audit-input
-          path: src-tauri/target/debug/build/se-ghostty-vt-*/out/native/lib/ghostty-vt-static.lib
+          path: src-tauri/target/debug/build/se-ghostty-vt*/**/out/native/lib/ghostty-vt-static.lib
           if-no-files-found: error
           retention-days: 3

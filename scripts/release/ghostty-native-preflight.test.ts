@@ -113,7 +113,7 @@ describe('Ghostty manual preflight revision binding', () => {
     )!
     expect(upload.if).toBe('always()')
     expect(upload.with).toMatchObject({
-      path: 'src-tauri/target/debug/build/se-ghostty-vt-*/out/native/lib/ghostty-vt-static.lib',
+      path: 'src-tauri/target/debug/build/se-ghostty-vt*/**/out/native/lib/ghostty-vt-static.lib',
       'if-no-files-found': 'error',
       'retention-days': 3
     })
