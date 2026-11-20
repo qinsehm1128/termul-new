@@ -224,7 +224,7 @@ jobs:
         # separate job below and is unaffected.
         include:
           - platform: windows-x64
-            runner: windows-latest
+            runner: windows-2022
             rust_target: x86_64-pc-windows-msvc
             args: --target x86_64-pc-windows-msvc
           - platform: macos-aarch64
