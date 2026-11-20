@@ -30,11 +30,18 @@ zig build -Demit-lib-vt -Demit-xcframework=false -Doptimize=ReleaseFast \
 ```
 
 Supported target mappings: macOS, GNU/musl Linux, MSVC Windows (only the host
-platform actually tested should be considered verified). First-build Zig
-package downloads can require network access; failures include complete Zig
+platform actually tested should be considered verified). Every Zig package the
+VT build fetches is vendored in `src-tauri/vendor/ghostty-vt/zig-packages/`
+(file name = Zig content hash, SHA256 pinned in `build.rs`). Before running Zig,
+build.rs verifies them and seeds `<ZIG_GLOBAL_CACHE_DIR>/p/`, so an unreachable
+upstream host (e.g. codeberg) cannot break the build. `ZIG_GLOBAL_CACHE_DIR`
+defaults to `<OUT_DIR>/zig-global-cache`. Failures still include complete Zig
 stderr and must be resolved, never worked around with a stub engine.
-`ZIG_LOCAL_CACHE_DIR` and `ZIG_GLOBAL_CACHE_DIR` can reuse downloaded packages and
-build artifacts. All native controls are ignored when `native` is disabled.
+All native controls are ignored when `native` is disabled.
+
+When the pinned Ghostty source changes, refresh the vendored packages: build
+once with an empty `ZIG_GLOBAL_CACHE_DIR`, copy its `p/*.tar.gz` here, and
+update `VENDORED_PACKAGES` in `build.rs`.
 
 An explicit locally trusted prebuild can avoid invoking Zig:
 `SE_GHOSTTY_VT_PREBUILT_DIR=/absolute/prefix`. It must contain
