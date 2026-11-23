@@ -1003,6 +1003,27 @@ pub(crate) async fn terminal_resume_resource(
     pty_manager: &Arc<PtyManager>,
     workspace: &Arc<crate::conversation::SessionWorkspaceService>,
 ) -> Result<(TerminalResumeGrant, TerminalReplay), TerminalResumeDenial> {
+    terminal_resume_resource_with_quick(request, pty_manager, workspace, None).await
+}
+
+/// Resume a passive terminal reference while also accepting the local quick
+/// terminal owner as an authorization source.
+///
+/// A quick terminal is deliberately not a SessionWorkspace resource, so the
+/// manifest check below can never pass for it. Its PTY nevertheless carries the
+/// quick terminal's own id as its conversation scope (see
+/// `QuickTerminalService::spawn_shell`), which is exactly what
+/// `resume_for_conversation` verifies. `quick` is present only on the
+/// in-process desktop host: the service proves the persisted record owns this
+/// live PTY before the claim is rotated. Remote callers pass `None`, so the
+/// web surface cannot reach this branch — it still requires a real
+/// SessionWorkspace reference.
+pub(crate) async fn terminal_resume_resource_with_quick(
+    request: &TerminalResumeRequest,
+    pty_manager: &Arc<PtyManager>,
+    workspace: &Arc<crate::conversation::SessionWorkspaceService>,
+    quick: Option<&crate::quick_terminal::QuickTerminalService>,
+) -> Result<(TerminalResumeGrant, TerminalReplay), TerminalResumeDenial> {
     let Some(conversation_id) = request.conversation_id else {
         return resume_project_terminal_resource(request, pty_manager);
     };
@@ -1026,13 +1047,25 @@ pub(crate) async fn terminal_resume_resource(
         )
         | Err(_) => false,
     };
-    if !has_passive_ref {
+    let quick_owner = !has_passive_ref
+        && quick.is_some_and(|service| {
+            service.owns_runtime_terminal(conversation_id, &request.terminal_id)
+        });
+    if !has_passive_ref && !quick_owner {
         log::warn!(
             "[terminal-resume] denied conversation_id={} terminal_id={} code=UNAUTHORIZED",
             conversation_id,
             request.terminal_id
         );
         return Err(TerminalResumeDenial::Unauthorized);
+    }
+    if quick_owner {
+        // Safe code only: the claim itself is never logged.
+        log::info!(
+            "[terminal-resume] quick_owner conversation_id={} terminal_id={} stable_code=QUICK_TERMINAL_OWNER_OK",
+            conversation_id,
+            request.terminal_id
+        );
     }
 
     // Classify BEFORE `resume_for_conversation`, which collapses "PTY is gone",
@@ -1139,7 +1172,15 @@ pub async fn terminal_resume(
         return Err("Session workspace service is unavailable".to_string());
     };
     let pty_manager = require_in_process_pty(terminal.inner())?;
-    let (grant, replay) = match terminal_resume_resource(&request, &pty_manager, workspace).await {
+    let quick_terminals = terminal.quick_terminals();
+    let (grant, replay) = match terminal_resume_resource_with_quick(
+        &request,
+        &pty_manager,
+        workspace,
+        quick_terminals.as_deref(),
+    )
+    .await
+    {
         Ok(value) => value,
         // Distinct on purpose: the renderer retires a record it can never
         // revive, and keeps the retryable placeholder for everything else.
@@ -9425,6 +9466,127 @@ mod tests {
             terminal_resume_resource(&unknown, &pty, &workspace).await,
             Err(TerminalResumeDenial::Unauthorized)
         ));
+    }
+
+    #[tokio::test]
+    async fn terminal_resume_authorizes_the_quick_terminal_owner() {
+        use crate::conversation::{
+            ConversationRepository, ConversationWriter, SessionWorkspaceService,
+        };
+        use crate::quick_terminal::{
+            CreateQuickTerminal, QuickTerminalService, QuickTerminalStore,
+        };
+        use se_quick_terminal::{OpenQuickTerminal, QuickTerminalTarget};
+
+        let state = tempfile::tempdir().unwrap();
+        let workspace_base = tempfile::tempdir().unwrap();
+        let state = state.path().canonicalize().unwrap();
+        let workspace_base = workspace_base.path().canonicalize().unwrap();
+        let pty = crate::web::test_pty_manager();
+        let store = QuickTerminalStore::open(state.join("quick-terminals")).unwrap();
+        let quick = QuickTerminalService::new(store, workspace_base.clone(), Arc::clone(&pty));
+
+        let record = quick
+            .create(CreateQuickTerminal {
+                target: QuickTerminalTarget::Workspace,
+                title: None,
+            })
+            .unwrap();
+        let opened = quick
+            .open(OpenQuickTerminal {
+                id: record.id,
+                cols: 80,
+                rows: 24,
+                terminal_id: None,
+            })
+            .await
+            .unwrap();
+        let spawned_claim = opened.claim.expect("a fresh spawn issues a claim");
+        assert!(pty
+            .verify_claim(&opened.terminal_id, &spawned_claim)
+            .is_ok());
+
+        // The record is the owner and the live PTY still carries its scope.
+        assert!(quick.owns_runtime_terminal(record.id, &opened.terminal_id));
+        let sibling = quick
+            .create(CreateQuickTerminal {
+                target: QuickTerminalTarget::Workspace,
+                title: None,
+            })
+            .unwrap();
+        assert!(!quick.owns_runtime_terminal(sibling.id, &opened.terminal_id));
+        assert!(!quick.owns_runtime_terminal(record.id, "terminal-not-owned"));
+
+        let (repository, _) = ConversationRepository::open(state.join("conversations/v2")).unwrap();
+        let writer = ConversationWriter::for_test(Arc::clone(&repository));
+        let workspace = Arc::new(SessionWorkspaceService::new(writer));
+
+        // No SessionWorkspace exists for a quick terminal; the owner predicate
+        // is what authorizes the resume.
+        let request = TerminalResumeRequest {
+            conversation_id: Some(record.id),
+            terminal_id: opened.terminal_id.clone(),
+            last_seq: 0,
+        };
+        let (grant, _) =
+            terminal_resume_resource_with_quick(&request, &pty, &workspace, Some(&quick))
+                .await
+                .unwrap();
+        assert_eq!(grant.terminal.id, opened.terminal_id);
+        assert!(pty.verify_claim(&opened.terminal_id, &grant.claim).is_ok());
+        assert_eq!(
+            pty.verify_claim(&opened.terminal_id, &spawned_claim),
+            Err(ClaimError)
+        );
+        // Resume never rebuilds the PTY.
+        assert!(pty.get(&opened.terminal_id).is_some());
+
+        // A different quick terminal's id cannot claim this PTY.
+        let wrong_owner = TerminalResumeRequest {
+            conversation_id: Some(sibling.id),
+            terminal_id: opened.terminal_id.clone(),
+            last_seq: 0,
+        };
+        assert!(matches!(
+            terminal_resume_resource_with_quick(&wrong_owner, &pty, &workspace, Some(&quick)).await,
+            Err(TerminalResumeDenial::Unauthorized)
+        ));
+
+        // Without the local quick service (the web/remote path) the same
+        // request has no SessionWorkspace reference and is denied.
+        assert!(matches!(
+            terminal_resume_resource(&request, &pty, &workspace).await,
+            Err(TerminalResumeDenial::Unauthorized)
+        ));
+
+        // Ordinary scope-less project terminals still resume through the
+        // project path with no regression.
+        let project = pty
+            .spawn(
+                SpawnOptions {
+                    conversation_id: Some(crate::conversation::ConversationId::new_v4()),
+                    project_id: Some("project-1".to_string()),
+                    kind: Some("project".to_string()),
+                    cwd: Some(workspace_base.to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        let project_request = TerminalResumeRequest {
+            conversation_id: None,
+            terminal_id: project.info.id.clone(),
+            last_seq: 0,
+        };
+        let (project_grant, _) =
+            terminal_resume_resource_with_quick(&project_request, &pty, &workspace, Some(&quick))
+                .await
+                .unwrap();
+        assert_eq!(project_grant.terminal.id, project.info.id);
+        assert!(pty
+            .verify_claim(&project.info.id, &project_grant.claim)
+            .is_ok());
     }
 
     #[tokio::test]

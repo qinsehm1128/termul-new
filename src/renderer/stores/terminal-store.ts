@@ -196,15 +196,19 @@ export interface TerminalState {
   ) => Terminal
   adoptRemoteProjectTerminal: (event: TerminalSpawnedEvent) => string | null
   /**
-   * Register the PTY a quick terminal is showing. Terminal Core started it, so
-   * the renderer holds no output channel: the record carries no claim and the
-   * mounted terminal attaches by watching, like a PTY that survived a restart.
+   * Register the PTY a quick terminal is showing. A freshly spawned shell
+   * arrives with the host-issued claim and the caller has already attached its
+   * live stream with it, so the record keeps the credential for claim-gated
+   * actions (input-mode resync). A reused PTY has no claim and attaches by
+   * watching, like a PTY that survived a restart.
    */
   adoptQuickTerminal: (input: {
     quickTerminalId: string
     ptyId: string
     name: string
     cwd: string
+    /** Spawn-issued lease, only when this call also attached its stream. */
+    claim?: string
   }) => Terminal
   /** Drop every record a quick terminal owns; the host already ended its PTY. */
   forgetQuickTerminal: (quickTerminalId: string) => void
@@ -409,7 +413,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     return adopted.id
   },
 
-  adoptQuickTerminal: ({ quickTerminalId, ptyId, name, cwd }) => {
+  adoptQuickTerminal: ({ quickTerminalId, ptyId, name, cwd, claim }) => {
     const existing = get().findTerminalByPtyId(ptyId)
     if (existing) return existing
     const adopted: Terminal = {
@@ -422,7 +426,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       output: [],
       healthStatus: 'running',
       viewState: 'visible',
-      isHidden: false
+      isHidden: false,
+      ...(claim ? { claim } : {})
     }
     set((state) => {
       const nextIndex = new Map(state.ptyIdIndex)
@@ -828,8 +833,13 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
       let result: IpcResult<TerminalResumeGrant>
       try {
+        // A quick terminal has no SessionWorkspace reference, but its own id is
+        // the PTY's host-side conversation scope. Passing it routes the resume
+        // through `resume_for_conversation`; the host then verifies that scope
+        // and the quick terminal record's ownership before rotating the claim.
+        const conversationScope = terminal.conversationId ?? terminal.quickTerminalId
         result = await terminalApi.resume({
-          ...(terminal.conversationId ? { conversationId: terminal.conversationId } : {}),
+          ...(conversationScope ? { conversationId: conversationScope } : {}),
           terminalId: ptyId,
           // Live-only. This PTY is already painting through the claim-less
           // watch forwarder; replaying from `resumeCursor` would duplicate
@@ -856,7 +866,13 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       }
       if (!result.success) {
         // Denial leaves the record untouched: a refused read must not flip a
-        // healthy, output-receiving terminal to `disconnected`.
+        // healthy, output-receiving terminal to `disconnected`. Log the stable
+        // code only — never the credential, terminal id, or project data.
+        void logFrontendError({
+          level: 'warn',
+          source: 'terminal-store.acquire-claim',
+          message: `code=${result.code ?? 'CLAIM_DENIED'}`
+        })
         return { status: 'denied' }
       }
       if (result.data.terminal.id !== ptyId || !result.data.claim) {

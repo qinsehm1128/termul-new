@@ -205,6 +205,33 @@ describe('resyncRendererInputModes after a claim-less rehydrate', () => {
     expect(readTerminalInputModes).toHaveBeenCalledWith(PTY_ID, 'project-claim')
   })
 
+  it('recovers a quick terminal claim through its own ownership scope', async () => {
+    // After a renderer reload the quick terminal has no claim and no ordinary
+    // Conversation. Its id is the PTY's host-side scope, so the takeover must
+    // send that instead of falling into the scope-less project path.
+    seedRehydratedTerminal({
+      conversationId: undefined,
+      quickTerminalId: 'quick-terminal-1'
+    })
+    registerFakeRenderer(PTY_ID)
+    vi.mocked(terminalApi.resume).mockResolvedValue(resumeGrant('quick-claim'))
+    vi.mocked(readTerminalInputModes).mockResolvedValue({ success: true, data: MODES })
+
+    const result = await resyncRendererInputModes(PTY_ID, { recoverClaim: true })
+
+    expect(result.status).toBe('applied')
+    expect(terminalApi.resume).toHaveBeenCalledWith({
+      conversationId: 'quick-terminal-1',
+      terminalId: PTY_ID,
+      lastSeq: Number.MAX_SAFE_INTEGER
+    })
+    expect(readTerminalInputModes).toHaveBeenCalledWith(PTY_ID, 'quick-claim')
+    expect(useTerminalStore.getState().findTerminalByPtyId(PTY_ID)).toMatchObject({
+      claim: 'quick-claim',
+      quickTerminalId: 'quick-terminal-1'
+    })
+  })
+
   it('reports host-denied when the host refuses a scope-less takeover', async () => {
     seedRehydratedTerminal({ conversationId: undefined })
     registerFakeRenderer(PTY_ID)

@@ -484,6 +484,45 @@ describe('terminal-store', () => {
       expect(terminalApi.spawn).not.toHaveBeenCalled()
     })
 
+    it('claims a quick terminal through its own conversation scope', async () => {
+      // A quick terminal has no ordinary Conversation, but its id is the PTY's
+      // host-side ownership scope. Passing it keeps the resume on
+      // `resume_for_conversation` instead of the scope-less project path, which
+      // refuses every workspace-tracked PTY.
+      seed({ conversationId: undefined, quickTerminalId: 'quick-terminal-1' })
+      vi.mocked(terminalApi.resume).mockResolvedValue({
+        success: true,
+        data: {
+          claim: 'quick-claim',
+          terminal: {
+            id: 'pty-watched',
+            shell: 'zsh',
+            cwd: '/work',
+            pid: 11,
+            cols: 80,
+            rows: 24,
+            latestSeq: 91,
+            gap: false
+          }
+        }
+      })
+
+      const result = await useTerminalStore.getState().acquireTerminalClaim('pty-watched')
+
+      expect(result).toEqual({ status: 'acquired', claim: 'quick-claim' })
+      expect(terminalApi.resume).toHaveBeenCalledWith({
+        conversationId: 'quick-terminal-1',
+        terminalId: 'pty-watched',
+        lastSeq: Number.MAX_SAFE_INTEGER
+      })
+      expect(useTerminalStore.getState().terminals[0]).toMatchObject({
+        claim: 'quick-claim',
+        healthStatus: 'running',
+        resumeCursor: 91
+      })
+      expect(terminalApi.spawn).not.toHaveBeenCalled()
+    })
+
     it('reports unavailable for a record that has no PTY yet', async () => {
       seed({ conversationId: undefined, ptyId: undefined })
 

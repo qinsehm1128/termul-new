@@ -11,7 +11,9 @@ const api = vi.hoisted(() => ({
   close: vi.fn(),
   onChanged: vi.fn((_handler: () => void) => () => undefined)
 }))
+const terminalApiMocks = vi.hoisted(() => ({ attach: vi.fn() }))
 vi.mock('./quick-terminal-api', () => ({ quickTerminalApi: api }))
+vi.mock('@/lib/terminal-api', () => ({ terminalApi: { attach: terminalApiMocks.attach } }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn(() => Promise.resolve()) }))
 vi.mock('@/lib/persistence-api', () => ({
   persistenceApi: {
@@ -22,6 +24,7 @@ vi.mock('@/lib/persistence-api', () => ({
   }
 }))
 
+import { logFrontendError } from '@/lib/log-api'
 import { useTerminalStore } from '@/stores/terminal-store'
 import {
   quickTerminalName,
@@ -55,28 +58,56 @@ function opened(terminalId: string, spawned: boolean) {
 
 beforeEach(() => {
   vi.resetAllMocks()
+  terminalApiMocks.attach.mockResolvedValue({ success: true, data: {} })
   resetQuickTerminalStore()
   useTerminalStore.setState({ terminals: [], activeTerminalId: '', ptyIdIndex: new Map() })
 })
 
 describe('quick terminal store', () => {
-  it('registers the shell to be watched, with no project and no claim', async () => {
-    // A claim makes the terminal believe the renderer already owns the output
-    // stream, so it never attaches. Terminal Core spawned this shell.
+  it('attaches a spawned shell with its claim and keeps the credential in memory', async () => {
     api.open.mockResolvedValue(opened('pty-1', true))
 
     await useQuickTerminalStore.getState().open(id, 80, 24)
 
+    // The host spawned the shell but had no renderer channel: attach installs
+    // the live stream with the spawn-issued claim before the record is adopted.
+    expect(terminalApiMocks.attach).toHaveBeenCalledWith('pty-1', 'claim-pty-1', 0)
     const [terminal] = useTerminalStore.getState().terminals
     expect(terminal).toMatchObject({
       id: 'pty-1',
       ptyId: 'pty-1',
       quickTerminalId: id,
-      name: 'build'
+      name: 'build',
+      claim: 'claim-pty-1'
     })
-    expect(terminal.claim).toBeUndefined()
     expect(terminal.projectId).toBeUndefined()
     expect(terminal.conversationId).toBeUndefined()
+  })
+
+  it('falls back to the claim-less watch path when attach is refused', async () => {
+    api.open.mockResolvedValue(opened('pty-1', true))
+    terminalApiMocks.attach.mockResolvedValue({
+      success: false,
+      error: 'Unauthorized',
+      code: 'UNAUTHORIZED'
+    })
+
+    await useQuickTerminalStore.getState().open(id, 80, 24)
+
+    const [terminal] = useTerminalStore.getState().terminals
+    expect(terminal.claim).toBeUndefined()
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'operation=attach code=UNAUTHORIZED' })
+    )
+  })
+
+  it('does not attach or claim a reused shell', async () => {
+    api.open.mockResolvedValue(opened('pty-1', false))
+
+    await useQuickTerminalStore.getState().open(id, 80, 24)
+
+    expect(terminalApiMocks.attach).not.toHaveBeenCalled()
+    expect(useTerminalStore.getState().terminals[0].claim).toBeUndefined()
   })
 
   it('replaces the record of an exited shell and keeps a reused one', async () => {
@@ -157,7 +188,7 @@ describe('quick terminal store', () => {
     expect(quickTerminalName({ ...record, title: undefined })).toBe('p1')
     expect(quickTerminalName(record)).toBe('build')
   })
-  it('registers new shells without claims, preserves siblings, closes one versus all', async () => {
+  it('registers new shells, attaches spawned claims, preserves siblings, closes one versus all', async () => {
     const host = {
       ...record,
       schemaVersion: 2 as const,
@@ -178,9 +209,10 @@ describe('quick terminal store', () => {
       'pty-1',
       'pty-2'
     ])
-    expect(
-      useTerminalStore.getState().terminals.every((item) => !item.claim && !item.projectId)
-    ).toBe(true)
+    expect(terminalApiMocks.attach).toHaveBeenCalledWith('pty-2', 'OUTPUT-CLAIM', 0)
+    expect(useTerminalStore.getState().findTerminalByPtyId('pty-1')?.claim).toBeUndefined()
+    expect(useTerminalStore.getState().findTerminalByPtyId('pty-2')?.claim).toBe('OUTPUT-CLAIM')
+    expect(useTerminalStore.getState().terminals.every((item) => !item.projectId)).toBe(true)
     expect(api.open).toHaveBeenCalledWith(id, 90, 30, 'pty-1')
     api.closeTerminal.mockResolvedValue({
       success: true,

@@ -445,6 +445,23 @@ impl QuickTerminalService {
         Ok(())
     }
 
+    /// Whether the persisted record owns `terminal_id` and no live runtime
+    /// instance attributes it to a different conversation scope or a project.
+    /// A missing runtime instance still counts as owned: resume classifies the
+    /// dead end as `Gone` instead of collapsing it into `Unauthorized`.
+    /// Read-only: this is an authorization predicate for claim recovery, never
+    /// a spawn, mutation, or claim rotation.
+    pub fn owns_runtime_terminal(&self, id: QuickTerminalId, terminal_id: &str) -> bool {
+        if terminal_id.is_empty() {
+            return false;
+        }
+        let persisted_owner = self
+            .store
+            .get(id)
+            .is_some_and(|record| record.terminal_ids.iter().any(|owned| owned == terminal_id));
+        persisted_owner && self.require_runtime_owner(id, terminal_id).is_ok()
+    }
+
     fn live_record(&self, mut record: QuickTerminalRecord) -> QuickTerminalRecord {
         record.terminal_ids.retain(|terminal_id| {
             self.require_runtime_owner(record.id, terminal_id).is_ok()
@@ -665,6 +682,59 @@ mod tests {
             Some(opened.terminal_id.clone())
         );
         let _ = fixture.pty.terminate(&opened.terminal_id).await;
+    }
+
+    #[tokio::test]
+    async fn runtime_ownership_follows_the_record_and_the_pty_scope() {
+        let fixture = fixture();
+        let record = fixture
+            .service
+            .create(CreateQuickTerminal {
+                target: QuickTerminalTarget::Workspace,
+                title: None,
+            })
+            .unwrap();
+        let opened = fixture.service.open(open(record.id)).await.unwrap();
+        assert!(fixture
+            .service
+            .owns_runtime_terminal(record.id, &opened.terminal_id));
+
+        let sibling = fixture
+            .service
+            .create(CreateQuickTerminal {
+                target: QuickTerminalTarget::Workspace,
+                title: None,
+            })
+            .unwrap();
+        assert!(!fixture
+            .service
+            .owns_runtime_terminal(sibling.id, &opened.terminal_id));
+        assert!(!fixture
+            .service
+            .owns_runtime_terminal(record.id, "terminal-not-owned"));
+
+        // A project-attributed PTY is never a quick terminal, even when it
+        // borrows the entry's conversation scope.
+        let foreign = fixture
+            .pty
+            .spawn(
+                se_pty::SpawnOptions {
+                    conversation_id: Some(sibling.id),
+                    project_id: Some("project-1".to_string()),
+                    kind: Some("project".to_string()),
+                    cwd: Some(record.cwd.clone()),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(!fixture
+            .service
+            .owns_runtime_terminal(sibling.id, &foreign.info.id));
+
+        let _ = fixture.pty.terminate(&opened.terminal_id).await;
+        let _ = fixture.pty.terminate(&foreign.info.id).await;
     }
 
     #[test]
