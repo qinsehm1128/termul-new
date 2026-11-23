@@ -83,6 +83,10 @@ mod updater_api;
 pub mod web;
 pub use web::file_preview;
 pub mod webview_storage_handoff;
+/// Local memory timeline for the GUI and the WebKit helpers it owns. macOS
+/// only: it relies on Darwin `libproc` (`proc_pid_rusage`, `proc_pidinfo`).
+#[cfg(target_os = "macos")]
+mod webview_memory;
 mod worktree;
 
 // The credential paths the brand migration has to be able to exercise for real.
@@ -3045,6 +3049,7 @@ pub fn run() {
             "[webview] web content process terminated label={}; reloading",
             webview.label()
         );
+        crate::webview_memory::record_web_content_termination(webview.label());
         if let Err(error) = webview.reload() {
             log::error!(
                 "[webview] reload after termination failed label={}: {error}",
@@ -3130,6 +3135,12 @@ pub fn run() {
             if !crate::brand::is_canary_build() {
                 crate::webview_storage_handoff::run_at_startup(&handle);
             }
+
+            // Local memory timeline (macOS): samples the GUI and its WebKit
+            // helpers into the normal rotated log, so a later renderer
+            // termination can be read against the readings that preceded it.
+            #[cfg(target_os = "macos")]
+            crate::webview_memory::start();
 
             // Conversation admission is the first app-managed storage/resource boundary.
             let app_data_dir = handle
@@ -4357,6 +4368,10 @@ pub fn run() {
         // processes, skip the durable-persistence stages that need real async
         // time. When the graceful path did run, `CLEANUP_DONE` short-circuits it.
         if matches!(event, RunEvent::Exit) {
+            // Last reading before the process goes away. Cheap (one sample) and
+            // non-blocking, so it fits inside the bounded exit reap.
+            #[cfg(target_os = "macos")]
+            crate::webview_memory::record_exit();
             CLEANUP_IN_PROGRESS.store(true, std::sync::atomic::Ordering::SeqCst);
             if let Some(service) = app_handle.try_state::<crate::core::PluginServiceHandle>() {
                 tauri::async_runtime::block_on(service.disconnect());
