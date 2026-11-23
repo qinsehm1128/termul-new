@@ -18,6 +18,7 @@
  */
 
 import { logFrontendError } from './log-api'
+import { installRendererMemoryMarkers } from './renderer-memory-markers'
 
 let installed = false
 
@@ -42,6 +43,7 @@ export function installRendererLifecycleMarkers(): void {
     source: 'renderer-lifecycle',
     message: `renderer boot nonce=${nonce} url=${typeof location === 'undefined' ? 'n/a' : location.pathname}`
   })
+  installRendererMemoryMarkers(nonce)
 
   // Imported lazily so this module stays importable from `main.tsx` before the
   // app tree — and its store graph — is pulled in.

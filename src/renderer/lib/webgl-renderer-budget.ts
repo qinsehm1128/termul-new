@@ -32,6 +32,11 @@ interface WebglSlot {
 /** MRU-ordered — index 0 is the most recently used. */
 const slots: WebglSlot[] = []
 
+/** Count tracked slots, not GPU contexts confirmed by WebKit. */
+export function countWebglSlots(): number {
+  return slots.length
+}
+
 function indexOfSlot(id: string): number {
   return slots.findIndex((slot) => slot.id === id)
 }

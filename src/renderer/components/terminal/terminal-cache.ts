@@ -29,6 +29,12 @@ const MAX_CACHED_TERMINALS = 20
 /** Map of PTY ID → cached xterm session, ordered from oldest to newest. */
 const cache = new Map<string, CachedTerminalSession>()
 
+/** Visit existing instances without creating an array or copying scrollback. */
+export function forEachCachedTerminal(visit: (terminal: Terminal) => void): number {
+  for (const session of cache.values()) visit(session.terminal)
+  return cache.size
+}
+
 function disposeSession(session: CachedTerminalSession): void {
   try {
     session.terminal.dispose()
