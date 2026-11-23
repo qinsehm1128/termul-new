@@ -196,19 +196,14 @@ export interface TerminalState {
   ) => Terminal
   adoptRemoteProjectTerminal: (event: TerminalSpawnedEvent) => string | null
   /**
-   * Register the PTY a quick terminal is showing. A freshly spawned shell
-   * arrives with the host-issued claim and the caller has already attached its
-   * live stream with it, so the record keeps the credential for claim-gated
-   * actions (input-mode resync). A reused PTY has no claim and attaches by
-   * watching, like a PTY that survived a restart.
+   * Register the PTY a quick terminal is showing. Mounting uses watch for both
+   * new and reused shells. An explicit takeover can obtain a claim separately.
    */
   adoptQuickTerminal: (input: {
     quickTerminalId: string
     ptyId: string
     name: string
     cwd: string
-    /** Spawn-issued lease, only when this call also attached its stream. */
-    claim?: string
   }) => Terminal
   /** Drop every record a quick terminal owns; the host already ended its PTY. */
   forgetQuickTerminal: (quickTerminalId: string) => void
@@ -413,7 +408,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     return adopted.id
   },
 
-  adoptQuickTerminal: ({ quickTerminalId, ptyId, name, cwd, claim }) => {
+  adoptQuickTerminal: ({ quickTerminalId, ptyId, name, cwd }) => {
     const existing = get().findTerminalByPtyId(ptyId)
     if (existing) return existing
     const adopted: Terminal = {
@@ -426,8 +421,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       output: [],
       healthStatus: 'running',
       viewState: 'visible',
-      isHidden: false,
-      ...(claim ? { claim } : {})
+      isHidden: false
     }
     set((state) => {
       const nextIndex = new Map(state.ptyIdIndex)
@@ -860,7 +854,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       if (
         !current ||
         current.id !== terminal.id ||
-        current.conversationId !== terminal.conversationId
+        current.conversationId !== terminal.conversationId ||
+        current.quickTerminalId !== terminal.quickTerminalId
       ) {
         return { status: 'denied' }
       }

@@ -9,7 +9,6 @@ import { create } from 'zustand'
 import { pathBasename } from '@/components/lists'
 import { runtimeT } from '@/i18n/runtime'
 import { logFrontendError } from '@/lib/log-api'
-import { terminalApi } from '@/lib/terminal-api'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { quickTerminalApi } from './quick-terminal-api'
 import { useQuickWorkspaceStore } from './quick-terminal-workspace-store'
@@ -49,37 +48,6 @@ function logFailure(operation: string, result: IpcResult<unknown>): void {
     source: 'quick-terminal-store',
     message: `operation=${operation} code=${result.code || 'UNKNOWN'}`
   })
-}
-
-/**
- * A host-side spawn issues a claim but no renderer output channel. Attach the
- * stream with that claim before adopting the record, so the mounted terminal
- * paints live output and claim-gated actions (input-mode resync) need no
- * rotation. If attach fails, fall back to the claim-less watch path and log
- * only the stable code.
- */
-async function attachSpawnedShell(
-  terminalId: string,
-  claim: string | undefined,
-  spawned: boolean
-): Promise<string | undefined> {
-  if (!spawned || !claim) return undefined
-  try {
-    const attached = await terminalApi.attach(terminalId, claim, 0)
-    if (attached.success) return claim
-    void logFrontendError({
-      level: 'warn',
-      source: 'quick-terminal-store',
-      message: `operation=attach code=${attached.code || 'UNKNOWN'}`
-    })
-  } catch {
-    void logFrontendError({
-      level: 'warn',
-      source: 'quick-terminal-store',
-      message: 'operation=attach code=NETWORK_ERROR'
-    })
-  }
-  return undefined
 }
 
 function upsert(
@@ -178,14 +146,12 @@ export const useQuickTerminalStore = create<QuickTerminalState>((set, get) => ({
       logFailure('open', result)
       const opened = result.success ? result.data : undefined
       if (!opened) return result
-      const claim = await attachSpawnedShell(opened.terminalId, opened.claim, opened.spawned)
       pruneUnrecordedTerminals(id, opened.record)
       useTerminalStore.getState().adoptQuickTerminal({
         quickTerminalId: id,
         ptyId: opened.terminalId,
         name: quickTerminalName(opened.record),
-        cwd: opened.record.cwd,
-        ...(claim ? { claim } : {})
+        cwd: opened.record.cwd
       })
       set({ records: upsert(get().records, opened.record) })
       return result
@@ -198,18 +164,12 @@ export const useQuickTerminalStore = create<QuickTerminalState>((set, get) => ({
       recordsRevision += 1
       logFailure('create-terminal', result)
       if (result.success) {
-        const claim = await attachSpawnedShell(
-          result.data.terminalId,
-          result.data.claim,
-          result.data.spawned
-        )
         pruneUnrecordedTerminals(id, result.data.record)
         useTerminalStore.getState().adoptQuickTerminal({
           quickTerminalId: id,
           ptyId: result.data.terminalId,
           name: quickTerminalName(result.data.record),
-          cwd: result.data.record.cwd,
-          ...(claim ? { claim } : {})
+          cwd: result.data.record.cwd
         })
         set({ records: upsert(get().records, result.data.record) })
       }

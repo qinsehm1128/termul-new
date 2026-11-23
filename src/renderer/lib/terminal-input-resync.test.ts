@@ -21,6 +21,7 @@ vi.mock('@/lib/terminal-api', async (importOriginal) => {
 })
 
 const CONVERSATION_ID = '018f7a1c-1b4d-7c8a-9f01-0123456789ab'
+const QUICK_TERMINAL_ID = '8cb30d82-33bf-4156-9865-3d1d9f346fde'
 const PTY_ID = 'pty-rehydrated'
 const MODES = {
   mouseTracking: 1002,
@@ -205,15 +206,17 @@ describe('resyncRendererInputModes after a claim-less rehydrate', () => {
     expect(readTerminalInputModes).toHaveBeenCalledWith(PTY_ID, 'project-claim')
   })
 
-  it('recovers a quick terminal claim through its own ownership scope', async () => {
-    // After a renderer reload the quick terminal has no claim and no ordinary
-    // Conversation. Its id is the PTY's host-side scope, so the takeover must
-    // send that instead of falling into the scope-less project path.
-    seedRehydratedTerminal({
-      conversationId: undefined,
-      quickTerminalId: 'quick-terminal-1'
+  it('recovers a watched quick terminal claim through its own ownership scope', async () => {
+    // New and restored quick shells are registered the same way, then watched.
+    useTerminalStore.setState({ terminals: [], ptyIdIndex: new Map() })
+    useTerminalStore.getState().adoptQuickTerminal({
+      quickTerminalId: QUICK_TERMINAL_ID,
+      ptyId: PTY_ID,
+      name: 'Quick terminal',
+      cwd: '/terminal-cwd'
     })
     registerFakeRenderer(PTY_ID)
+    expect(useTerminalStore.getState().findTerminalByPtyId(PTY_ID)?.claim).toBeUndefined()
     vi.mocked(terminalApi.resume).mockResolvedValue(resumeGrant('quick-claim'))
     vi.mocked(readTerminalInputModes).mockResolvedValue({ success: true, data: MODES })
 
@@ -221,15 +224,31 @@ describe('resyncRendererInputModes after a claim-less rehydrate', () => {
 
     expect(result.status).toBe('applied')
     expect(terminalApi.resume).toHaveBeenCalledWith({
-      conversationId: 'quick-terminal-1',
+      conversationId: QUICK_TERMINAL_ID,
       terminalId: PTY_ID,
       lastSeq: Number.MAX_SAFE_INTEGER
     })
     expect(readTerminalInputModes).toHaveBeenCalledWith(PTY_ID, 'quick-claim')
     expect(useTerminalStore.getState().findTerminalByPtyId(PTY_ID)).toMatchObject({
       claim: 'quick-claim',
-      quickTerminalId: 'quick-terminal-1'
+      quickTerminalId: QUICK_TERMINAL_ID
     })
+    expect(terminalApi.attach).not.toHaveBeenCalled()
+  })
+
+  it('discards a recovered claim if the quick terminal owner changed while awaiting the host', async () => {
+    seedRehydratedTerminal({ conversationId: undefined, quickTerminalId: QUICK_TERMINAL_ID })
+    registerFakeRenderer(PTY_ID)
+    vi.mocked(terminalApi.resume).mockImplementation(async () => {
+      seedRehydratedTerminal({ conversationId: undefined, quickTerminalId: 'replacement-owner' })
+      return resumeGrant()
+    })
+
+    const result = await resyncRendererInputModes(PTY_ID, { recoverClaim: true })
+
+    expect(result).toEqual({ status: 'unavailable', reason: 'host-denied' })
+    expect(readTerminalInputModes).not.toHaveBeenCalled()
+    expect(useTerminalStore.getState().findTerminalByPtyId(PTY_ID)?.claim).toBeUndefined()
   })
 
   it('reports host-denied when the host refuses a scope-less takeover', async () => {
