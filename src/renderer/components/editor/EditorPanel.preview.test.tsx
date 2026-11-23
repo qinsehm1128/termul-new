@@ -1,11 +1,16 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { type EditorFileState, useEditorStore } from '@/stores/editor-store'
 import { EditorPanel } from './EditorPanel'
 
 const mocks = vi.hoisted(() => ({
   desktop: true,
+  isMac: true,
   failSource: false,
+  reveal: vi.fn(),
+  clipboard: vi.fn(),
+  toastSuccess: vi.fn(),
+  toastError: vi.fn(),
   loadImage: vi.fn(async (path: string) => ({
     success: true as const,
     data: { url: `blob:${path}`, dispose: vi.fn() }
@@ -16,6 +21,37 @@ vi.mock('@/lib/file-preview-api', () => ({ loadImagePreview: mocks.loadImage }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: mocks.logError }))
 vi.mock('@/lib/tauri-runtime', () => ({
   isTauriContext: () => mocks.desktop
+}))
+vi.mock('@/lib/platform', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/platform')>()
+  return {
+    ...actual,
+    get isMac() {
+      return mocks.isMac
+    }
+  }
+})
+vi.mock('@/lib/tauri-opener-api', () => ({
+  openerApi: {
+    revealInFileManager: mocks.reveal,
+    openWithExternalApp: vi.fn(),
+    openUrlWithSystemBrowser: vi.fn()
+  }
+}))
+vi.mock('@/lib/clipboard-api', () => ({
+  clipboardApi: {
+    writeText: mocks.clipboard,
+    readText: vi.fn(),
+    hasImage: vi.fn()
+  }
+}))
+vi.mock('sonner', () => ({
+  toast: {
+    success: mocks.toastSuccess,
+    error: mocks.toastError,
+    warning: vi.fn(),
+    info: vi.fn()
+  }
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -55,6 +91,15 @@ function seed(filePath: string, overrides: Partial<EditorFileState>): void {
 }
 
 describe('EditorPanel previews', () => {
+  beforeEach(() => {
+    mocks.desktop = true
+    mocks.isMac = true
+    mocks.reveal.mockReset().mockResolvedValue({ success: true })
+    mocks.clipboard.mockReset().mockResolvedValue({ success: true })
+    mocks.toastSuccess.mockReset()
+    mocks.toastError.mockReset()
+  })
+
   afterEach(() => {
     cleanup()
     mocks.desktop = true
@@ -203,5 +248,121 @@ describe('EditorPanel previews', () => {
     fireEvent.click(screen.getByTitle('Switch to source mode'))
     expect(screen.getByTestId('code-editor')).toBeInTheDocument()
     expect(screen.getByTitle('Switch to WYSIWYG mode')).toBeInTheDocument()
+  })
+
+  const surfaces: Array<[string, string, Partial<EditorFileState>]> = [
+    ['plain text', '/p/notes.txt', { content: 'hello', language: 'plaintext' }],
+    ['markdown', '/p/README.md', { content: '# hi', language: 'markdown', viewMode: 'markdown' }],
+    ['html', '/p/report.html', { content: '<h1>Report</h1>', language: 'html' }],
+    ['svg', '/p/icon.svg', { content: '<svg/>', language: 'xml' }],
+    ['raster media', '/p/photo.png', {}],
+    ['audio media', '/p/sound.mp3', {}]
+  ]
+
+  it.each(
+    surfaces
+  )('offers the desktop file-location entry on %s panels and reveals the exact path', async (_label, path, overrides) => {
+    seed(path, overrides)
+    render(<EditorPanel filePath={path} isVisible />)
+
+    const button = screen.getByRole('button', { name: 'Show in Finder' })
+    expect(screen.queryByRole('button', { name: 'Copy Path' })).not.toBeInTheDocument()
+
+    fireEvent.click(button)
+
+    await waitFor(() => expect(mocks.reveal).toHaveBeenCalledWith(path))
+    expect(mocks.reveal).toHaveBeenCalledTimes(1)
+    expect(mocks.clipboard).not.toHaveBeenCalled()
+  })
+
+  it('uses the non-macOS desktop label and still reveals the exact path', async () => {
+    mocks.isMac = false
+    seed('/p/notes.txt', { content: 'hello', language: 'plaintext' })
+    render(<EditorPanel filePath="/p/notes.txt" isVisible />)
+
+    expect(screen.queryByRole('button', { name: 'Show in Finder' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Show in File Manager' }))
+
+    await waitFor(() => expect(mocks.reveal).toHaveBeenCalledWith('/p/notes.txt'))
+  })
+
+  it('only copies the path in the browser edition', async () => {
+    mocks.desktop = false
+    seed('/p/notes.txt', { content: 'hello', language: 'plaintext' })
+    render(<EditorPanel filePath="/p/notes.txt" isVisible />)
+
+    expect(screen.queryByRole('button', { name: 'Show in Finder' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Show in File Manager' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy Path' }))
+
+    await waitFor(() => expect(mocks.clipboard).toHaveBeenCalledWith('/p/notes.txt'))
+    expect(mocks.reveal).not.toHaveBeenCalled()
+    await waitFor(() => expect(mocks.toastSuccess).toHaveBeenCalledWith('Path copied'))
+  })
+
+  it('surfaces a reveal failure with a fixed toast and a safe code log', async () => {
+    mocks.reveal.mockResolvedValueOnce({
+      success: false,
+      error: 'ENOENT: /Users/qs/private/secret-notes.md'
+    })
+    seed('/p/notes.txt', { content: 'hello', language: 'plaintext' })
+    render(<EditorPanel filePath="/p/notes.txt" isVisible />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show in Finder' }))
+
+    await waitFor(() =>
+      expect(mocks.toastError).toHaveBeenCalledWith(
+        'Could not show the original file in the file manager'
+      )
+    )
+    expect(mocks.logError).toHaveBeenCalledWith({
+      level: 'warn',
+      source: 'editor.file-location',
+      message: expect.stringContaining('operation=reveal code=FILE_LOCATION_FAILED')
+    })
+    expect(JSON.stringify(mocks.logError.mock.calls)).not.toContain(
+      '/Users/qs/private/secret-notes.md'
+    )
+    expect(JSON.stringify(mocks.toastError.mock.calls)).not.toContain(
+      '/Users/qs/private/secret-notes.md'
+    )
+  })
+
+  it('turns a thrown reveal error into the same safe failure without leaking details', async () => {
+    mocks.reveal.mockRejectedValueOnce(new Error('native failure at /Users/qs/private/secret.md'))
+    seed('/p/notes.txt', { content: 'hello', language: 'plaintext' })
+    render(<EditorPanel filePath="/p/notes.txt" isVisible />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show in Finder' }))
+
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledTimes(1))
+    expect(mocks.logError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'editor.file-location',
+        message: expect.stringContaining('code=FILE_LOCATION_FAILED')
+      })
+    )
+    expect(JSON.stringify(mocks.logError.mock.calls)).not.toContain('/Users/qs/private/secret.md')
+  })
+
+  it('surfaces a browser copy failure without exposing the clipboard error', async () => {
+    mocks.desktop = false
+    mocks.clipboard.mockResolvedValueOnce({ success: false, error: 'denied /Users/qs/private' })
+    seed('/p/notes.txt', { content: 'hello', language: 'plaintext' })
+    render(<EditorPanel filePath="/p/notes.txt" isVisible />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy Path' }))
+
+    await waitFor(() =>
+      expect(mocks.toastError).toHaveBeenCalledWith('Could not copy the file path')
+    )
+    expect(mocks.logError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'editor.file-location',
+        message: expect.stringContaining('operation=copy_path code=FILE_LOCATION_FAILED')
+      })
+    )
+    expect(JSON.stringify(mocks.logError.mock.calls)).not.toContain('/Users/qs/private')
   })
 })

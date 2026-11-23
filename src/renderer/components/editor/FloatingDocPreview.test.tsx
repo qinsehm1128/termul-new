@@ -5,8 +5,50 @@ import { resetFloatingDocStoreForTests, useFloatingDocStore } from '@/stores/flo
 import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
 import { FloatingDocPreview } from './FloatingDocPreview'
 
+const mocks = vi.hoisted(() => ({
+  desktop: false,
+  isMac: true,
+  reveal: vi.fn(),
+  clipboard: vi.fn(),
+  toastSuccess: vi.fn(),
+  toastError: vi.fn(),
+  logError: vi.fn().mockResolvedValue(undefined)
+}))
+
 vi.mock('@/lib/tauri-runtime', () => ({
-  isTauriContext: () => false
+  isTauriContext: () => mocks.desktop
+}))
+vi.mock('@/lib/platform', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/platform')>()
+  return {
+    ...actual,
+    get isMac() {
+      return mocks.isMac
+    }
+  }
+})
+vi.mock('@/lib/tauri-opener-api', () => ({
+  openerApi: {
+    revealInFileManager: mocks.reveal,
+    openWithExternalApp: vi.fn(),
+    openUrlWithSystemBrowser: vi.fn()
+  }
+}))
+vi.mock('@/lib/clipboard-api', () => ({
+  clipboardApi: {
+    writeText: mocks.clipboard,
+    readText: vi.fn(),
+    hasImage: vi.fn()
+  }
+}))
+vi.mock('@/lib/log-api', () => ({ logFrontendError: mocks.logError }))
+vi.mock('sonner', () => ({
+  toast: {
+    success: mocks.toastSuccess,
+    error: mocks.toastError,
+    warning: vi.fn(),
+    info: vi.fn()
+  }
 }))
 
 vi.mock('./CodeEditor', () => ({
@@ -75,6 +117,13 @@ beforeEach(() => {
   resetFloatingDocStoreForTests()
   useEditorStore.setState({ openFiles: new Map(), activeFilePath: null })
   useEditorStore.setState({ saveFile: vi.fn(async () => true) })
+  mocks.desktop = false
+  mocks.isMac = true
+  mocks.reveal.mockReset().mockResolvedValue({ success: true })
+  mocks.clipboard.mockReset().mockResolvedValue({ success: true })
+  mocks.toastSuccess.mockReset()
+  mocks.toastError.mockReset()
+  mocks.logError.mockClear()
 })
 
 afterEach(() => {
@@ -220,5 +269,69 @@ describe('FloatingDocPreview', () => {
 
     expect(useFloatingDocStore.getState().mode).toBe('collapsed')
     expect(screen.getByTestId('floating-doc-ball')).toBeInTheDocument()
+  })
+
+  it('copies the active document path in the browser edition', async () => {
+    openInPreview('/repo/notes.md', { language: 'markdown' })
+
+    render(<FloatingDocPreview />)
+    expect(screen.queryByRole('button', { name: 'Show in Finder' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy Path' }))
+
+    await waitFor(() => expect(mocks.clipboard).toHaveBeenCalledWith('/repo/notes.md'))
+    expect(mocks.reveal).not.toHaveBeenCalled()
+    await waitFor(() => expect(mocks.toastSuccess).toHaveBeenCalledWith('Path copied'))
+  })
+
+  it('reveals the active document and follows tab switches without losing dirty edits', async () => {
+    mocks.desktop = true
+    openInPreview('/repo/a.md', { content: '# draft a', isDirty: true, language: 'markdown' })
+    openInPreview('/repo/b.md', { content: '# b', language: 'markdown' })
+    useFloatingDocStore.setState({ activePath: '/repo/b.md' })
+
+    render(<FloatingDocPreview />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show in Finder' }))
+    await waitFor(() => expect(mocks.reveal).toHaveBeenLastCalledWith('/repo/b.md'))
+    expect(screen.getByTestId('markdown-editor')).toHaveTextContent('# b')
+
+    fireEvent.click(screen.getAllByRole('tab')[0])
+
+    await waitFor(() => expect(useFloatingDocStore.getState().activePath).toBe('/repo/a.md'))
+    expect(screen.getByTestId('markdown-editor')).toHaveTextContent('# draft a')
+    expect(screen.getByLabelText('Unsaved')).toBeInTheDocument()
+    expect(useEditorStore.getState().openFiles.get('/repo/a.md')).toMatchObject({
+      content: '# draft a',
+      isDirty: true
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show in Finder' }))
+    await waitFor(() => expect(mocks.reveal).toHaveBeenLastCalledWith('/repo/a.md'))
+    expect(mocks.reveal).toHaveBeenCalledTimes(2)
+  })
+
+  it('reports a reveal failure from the floating window with a safe toast and code log', async () => {
+    mocks.desktop = true
+    mocks.reveal.mockResolvedValueOnce({
+      success: false,
+      error: 'ENOENT: /Users/qs/private/secret.md'
+    })
+    openInPreview('/repo/notes.md', { language: 'markdown' })
+
+    render(<FloatingDocPreview />)
+    fireEvent.click(screen.getByRole('button', { name: 'Show in Finder' }))
+
+    await waitFor(() =>
+      expect(mocks.toastError).toHaveBeenCalledWith(
+        'Could not show the original file in the file manager'
+      )
+    )
+    expect(mocks.logError).toHaveBeenCalledWith({
+      level: 'warn',
+      source: 'editor.file-location',
+      message: expect.stringContaining('operation=reveal code=FILE_LOCATION_FAILED')
+    })
+    expect(JSON.stringify(mocks.logError.mock.calls)).not.toContain('/Users/qs/private/secret.md')
   })
 })

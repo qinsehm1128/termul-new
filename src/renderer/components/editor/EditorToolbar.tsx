@@ -4,13 +4,14 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { EditorViewMode } from '@/stores/editor-store'
 import { useTocIsVisible, useTocSettingsStore } from '@/stores/toc-settings-store'
+import { FileLocationButton } from './FileLocationButton'
 
 interface EditorToolbarProps {
   viewMode: EditorViewMode
-  onToggleViewMode: () => void
+  onToggleViewMode?: () => void
   filePath: string
   /** Markdown gets the contents outline; other previewable files only the view toggle. */
-  isMarkdown: boolean
+  isMarkdown?: boolean
 }
 
 export function EditorToolbar({
@@ -26,9 +27,10 @@ export function EditorToolbar({
   const toggleTocVisibility = useTocSettingsStore((state) => state.toggleVisibility)
 
   return (
-    <div className="flex h-8 shrink-0 items-center justify-between border-b border-border/70 bg-sidebar px-2.5 shadow-[inset_0_1px_0_hsl(var(--foreground)/0.025)]">
+    <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b border-border/70 bg-sidebar px-2.5 shadow-[inset_0_1px_0_hsl(var(--foreground)/0.025)]">
       <span className="truncate text-xs text-muted-foreground">{fileName}</span>
-      <div className="flex items-center gap-1">
+      <div className="flex shrink-0 items-center gap-1">
+        <FileLocationButton filePath={filePath} />
         {isMarkdown && (
           <Button
             variant="ghost"
@@ -47,31 +49,33 @@ export function EditorToolbar({
           </Button>
         )}
 
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onToggleViewMode}
-          className="h-6 gap-1 px-2 text-xs text-muted-foreground transition-colors duration-150 hover:bg-secondary hover:text-foreground"
-          title={
-            viewMode !== 'code'
-              ? settingsT('editor.switchToSource')
-              : isMarkdown
-                ? settingsT('editor.switchToWysiwyg')
-                : settingsT('editor.switchToPreview')
-          }
-        >
-          {viewMode !== 'code' ? (
-            <>
-              <Code2 size={14} />
-              <span>{settingsT('editor.source')}</span>
-            </>
-          ) : (
-            <>
-              <Eye size={14} />
-              <span>{settingsT('appearance.preview')}</span>
-            </>
-          )}
-        </Button>
+        {onToggleViewMode && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onToggleViewMode}
+            className="h-6 gap-1 px-2 text-xs text-muted-foreground transition-colors duration-150 hover:bg-secondary hover:text-foreground"
+            title={
+              viewMode !== 'code'
+                ? settingsT('editor.switchToSource')
+                : isMarkdown
+                  ? settingsT('editor.switchToWysiwyg')
+                  : settingsT('editor.switchToPreview')
+            }
+          >
+            {viewMode !== 'code' ? (
+              <>
+                <Code2 size={14} />
+                <span>{settingsT('editor.source')}</span>
+              </>
+            ) : (
+              <>
+                <Eye size={14} />
+                <span>{settingsT('appearance.preview')}</span>
+              </>
+            )}
+          </Button>
+        )}
       </div>
     </div>
   )

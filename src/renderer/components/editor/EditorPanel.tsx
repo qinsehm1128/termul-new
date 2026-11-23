@@ -83,13 +83,22 @@ export function EditorPanel({ filePath, isVisible }: EditorPanelProps): React.JS
 
   if (isDiskPreview(previewKind) && previewKind) {
     return (
-      <ErrorBoundary
-        key={`${filePath}:${fileState.lastModified}`}
-        context="editorPane"
-        fallback={(_error, retry) => <PreviewFailure filePath={filePath} onRetry={retry} />}
-      >
-        <DiskFilePreview kind={previewKind} filePath={filePath} version={fileState.lastModified} />
-      </ErrorBoundary>
+      <div className="flex h-full w-full flex-col">
+        <EditorToolbar filePath={filePath} viewMode={fileState.viewMode} />
+        <div className="min-h-0 flex-1">
+          <ErrorBoundary
+            key={`${filePath}:${fileState.lastModified}`}
+            context="editorPane"
+            fallback={(_error, retry) => <PreviewFailure filePath={filePath} onRetry={retry} />}
+          >
+            <DiskFilePreview
+              kind={previewKind}
+              filePath={filePath}
+              version={fileState.lastModified}
+            />
+          </ErrorBoundary>
+        </div>
+      </div>
     )
   }
 
@@ -99,14 +108,14 @@ export function EditorPanel({ filePath, isVisible }: EditorPanelProps): React.JS
 
   return (
     <div className="w-full h-full flex flex-col">
-      {(isMarkdownFile || isSvgFile || isHtmlFile) && (
-        <EditorToolbar
-          viewMode={fileState.viewMode}
-          onToggleViewMode={handleToggleViewMode}
-          filePath={filePath}
-          isMarkdown={isMarkdownFile}
-        />
-      )}
+      <EditorToolbar
+        viewMode={fileState.viewMode}
+        onToggleViewMode={
+          isMarkdownFile || isSvgFile || isHtmlFile ? handleToggleViewMode : undefined
+        }
+        filePath={filePath}
+        isMarkdown={isMarkdownFile}
+      />
       <div className="flex-1 relative overflow-hidden">
         {isSvgFile && fileState.viewMode === 'preview' ? (
           <FilePreview kind="svg" src={svgDataUrl(fileState.content)} />

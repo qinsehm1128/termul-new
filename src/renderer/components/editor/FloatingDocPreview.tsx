@@ -25,6 +25,7 @@ import {
   useFloatingDocStore
 } from '@/stores/floating-doc-store'
 import { CodeEditor } from './CodeEditor'
+import { FileLocationButton } from './FileLocationButton'
 import { FilePreview } from './FilePreview'
 import { HtmlPreview } from './HtmlPreview'
 import { MarkdownEditor } from './MarkdownEditor'
@@ -430,6 +431,7 @@ export function FloatingDocPreview(): React.JSX.Element | null {
         </div>
 
         <div className="flex shrink-0 items-center gap-0.5">
+          {activePath && <FileLocationButton filePath={activePath} />}
           {activePath && hasRenderableView(activePath) ? (
             <Button
               variant="ghost"
