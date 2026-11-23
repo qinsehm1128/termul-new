@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { TerminalSwitcherBar } from '@/components/workspace/TerminalSwitcherBar'
 import { tabToneClass } from '@/components/workspace/tab-tone'
 
 const api = vi.hoisted(() => ({
@@ -91,9 +92,10 @@ function Location(): React.JSX.Element {
   )
 }
 
-function renderAt(path: string) {
+function renderAt(path: string, withSwitcher = false) {
   return render(
     <MemoryRouter initialEntries={[path]}>
+      {withSwitcher && <TerminalSwitcherBar />}
       <Routes>
         <Route path="/quick-terminals" element={<QuickTerminalsPage />} />
         <Route path="/quick-terminals/:quickTerminalId" element={<QuickTerminalsPage />} />
@@ -144,6 +146,74 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 describe('QuickTerminalsPage', () => {
+  it('switches between running entries without measuring or opening their shells again', async () => {
+    const otherId = '22222222-2222-4222-8222-222222222222'
+    const first = { ...record, title: 'First entry', terminalId: 'pty-1' }
+    const second = { ...record, id: otherId, title: 'Second entry', terminalId: 'pty-2' }
+    api.list.mockResolvedValue({ success: true, data: [first, second] })
+    api.open.mockImplementation(async (entryId) => {
+      const entry = entryId === id ? first : second
+      return {
+        success: true,
+        data: { record: entry, terminalId: entry.terminalId, spawned: false }
+      }
+    })
+    for (const entry of [first, second]) {
+      useTerminalStore.getState().adoptQuickTerminal({
+        quickTerminalId: entry.id,
+        ptyId: entry.terminalId,
+        name: entry.title,
+        cwd: entry.cwd
+      })
+    }
+    renderAt(`/quick-terminals/${id}`, true)
+    const expectVisiblePty = async (ptyId: string): Promise<void> => {
+      await waitFor(() =>
+        expect(screen.getByTestId('connected-terminal')).toHaveAttribute('data-pty', ptyId)
+      )
+    }
+    await expectVisiblePty('pty-1')
+    fireEvent.click(screen.getByRole('tab', { name: 'Second entry' }))
+    await expectVisiblePty('pty-2')
+    fireEvent.click(screen.getByRole('tab', { name: 'First entry' }))
+    await expectVisiblePty('pty-1')
+
+    expect(terminalProps.current.some((props) => props.onInitialGrid)).toBe(false)
+    expect(api.open).not.toHaveBeenCalled()
+    expect(api.createTerminal).not.toHaveBeenCalled()
+    expect(api.closeTerminal).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { owner: id, healthStatus: 'exited' },
+    { owner: 'other-entry', healthStatus: 'running' }
+  ] as const)('validates a $healthStatus PTY owned by $owner with the host', async ({
+    owner,
+    healthStatus
+  }) => {
+    const host = { ...record, terminalId: 'pty-1' }
+    api.list.mockResolvedValue({ success: true, data: [host] })
+    api.open.mockResolvedValue({
+      success: false,
+      code: 'QUICK_TERMINAL_INVALID_TARGET',
+      error: 'Terminal is no longer available'
+    })
+    useTerminalStore.getState().adoptQuickTerminal({
+      quickTerminalId: owner,
+      ptyId: 'pty-1',
+      name: 'Shell',
+      cwd: host.cwd
+    })
+    useTerminalStore.getState().setTerminalHealthStatus('pty-1', healthStatus)
+
+    renderAt(`/quick-terminals/${id}`)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Terminal is no longer available')
+    expect(api.open).toHaveBeenCalledExactlyOnceWith(id, FITTED.cols, FITTED.rows, 'pty-1')
+    expect(terminalProps.current.some((props) => props.terminalId === 'pty-1')).toBe(false)
+    expect(api.createTerminal).not.toHaveBeenCalled()
+  })
+
   it('shows the selected quick terminal and reopens it after the shell exits', async () => {
     api.open.mockResolvedValueOnce({
       success: true,

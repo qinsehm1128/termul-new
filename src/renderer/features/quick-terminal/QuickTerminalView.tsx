@@ -1,10 +1,13 @@
 import type { IpcResult } from '@shared/types/ipc.types'
 import type { QuickTerminalOpened, QuickTerminalRecord } from '@shared/types/quick-terminal.types'
+import { quickTerminalIds } from '@shared/types/quick-terminal.types'
 import { LoaderCircle, Power, RotateCcw } from 'lucide-react'
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { logFrontendError } from '@/lib/log-api'
+import { useTerminalStore } from '@/stores/terminal-store'
 import { failureMessage, useQuickTerminalStore } from './quick-terminal-store'
 
 const ConnectedTerminal = lazy(() =>
@@ -24,7 +27,7 @@ type Phase =
   // reflowed, which leaves a duplicate prompt behind.
   | { kind: 'measuring' }
   | { kind: 'opening' }
-  | { kind: 'ready'; ptyId: string }
+  | { kind: 'ready'; ptyId: string; reused?: true }
   | { kind: 'exited'; ptyId: string }
   // The user closed the shell; the quick terminal stays until reopened.
   | { kind: 'closed' }
@@ -50,11 +53,27 @@ export function QuickTerminalView({
   const open = useQuickTerminalStore((state) => state.open)
   const createTerminal = useQuickTerminalStore((state) => state.createTerminal)
   const close = useQuickTerminalStore((state) => state.closeTerminal)
-  const [phase, setPhase] = useState<Phase>({ kind: 'measuring' })
+  const requestKey = `${record.id}:${tabId}`
+  const [phase, setPhase] = useState<Phase>(() => {
+    if (terminalId && !createNew && !pendingAttaches.has(requestKey)) {
+      const live = useTerminalStore.getState().findTerminalByPtyId(terminalId)
+      if (
+        live?.ptyId === terminalId &&
+        live.quickTerminalId === record.id &&
+        live.healthStatus === 'running' &&
+        quickTerminalIds(record).includes(terminalId)
+      ) {
+        // ConnectedTerminal still watches/resumes through the host. Only skip
+        // the spawn-sizing view and the redundant quick-terminal open request.
+        return { kind: 'ready', ptyId: terminalId, reused: true }
+      }
+    }
+    return { kind: 'measuring' }
+  })
   const [closing, setClosing] = useState(false)
   const current = useRef(0)
   const inFlight = useRef(false)
-  const openedPty = useRef<string | null>(null)
+  const openedPty = useRef<string | null>(phase.kind === 'ready' ? phase.ptyId : null)
   const createOnReopen = useRef(false)
   const openedCallback = useRef(onOpened)
   openedCallback.current = onOpened
@@ -65,7 +84,6 @@ export function QuickTerminalView({
       inFlight.current = true
       const attempt = ++current.current
       setPhase({ kind: 'opening' })
-      const requestKey = `${record.id}:${tabId}`
       let pending = pendingAttaches.get(requestKey)
       if (!pending) {
         pending =
@@ -91,7 +109,7 @@ export function QuickTerminalView({
         })
       }
     },
-    [open, createTerminal, createNew, terminalId, record.id, tabId, t]
+    [open, createTerminal, createNew, terminalId, record.id, requestKey, t]
   )
 
   useEffect(
@@ -171,6 +189,19 @@ export function QuickTerminalView({
             isVisible={isVisible}
             autoFocus={isVisible}
             onExit={() => setPhase({ kind: 'exited', ptyId: phase.ptyId })}
+            onAttachFailed={
+              phase.kind === 'ready' && phase.reused
+                ? () => {
+                    void logFrontendError({
+                      level: 'warn',
+                      source: 'quick-terminal.attach',
+                      message: 'path=warm result=fallback'
+                    })
+                    openedPty.current = null
+                    setPhase({ kind: 'measuring' })
+                  }
+                : undefined
+            }
           />
         </Suspense>
         {phase.kind === 'exited' ? (

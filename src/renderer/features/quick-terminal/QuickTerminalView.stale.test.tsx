@@ -19,6 +19,7 @@ vi.mock('@/components/terminal/ConnectedTerminal', () => ({
     isVisible?: boolean
     onInitialGrid?: (cols: number, rows: number) => void
     onExit?: (code: number) => void
+    onAttachFailed?: () => void
   }) => (
     <div data-testid="terminal" data-pty={props.terminalId} data-visible={props.isVisible}>
       {!props.terminalId && (
@@ -29,6 +30,11 @@ vi.mock('@/components/terminal/ConnectedTerminal', () => ({
       {props.terminalId && (
         <button type="button" onClick={() => props.onExit?.(0)}>
           Exit {props.terminalId}
+        </button>
+      )}
+      {props.onAttachFailed && (
+        <button type="button" onClick={props.onAttachFailed}>
+          Reject attachment of {props.terminalId}
         </button>
       )}
     </div>
@@ -87,6 +93,12 @@ function measure(): void {
   expect(button?.textContent).toBe('Measure')
   fireEvent.click(button as HTMLButtonElement)
 }
+
+async function rejectWarmAttachment(): Promise<void> {
+  fireEvent.click(await screen.findByRole('button', { name: 'Reject attachment of dead' }))
+  expect(api.open).not.toHaveBeenCalled()
+  measure()
+}
 function expectReplacement(): void {
   expect(useQuickTerminalStore.getState().records[0]).toEqual(replacement)
   expect(useQuickWorkspaceStore.getState().layouts[id]).toEqual({
@@ -140,9 +152,7 @@ describe('QuickTerminalView stale and exited targets', () => {
         data: { record: replacement, terminalId: 'replacement', spawned: true }
       })
     const mounted = render(<QuickTerminalWorkspace record={record} />)
-    await screen.findAllByTestId('terminal')
-    expect(api.open).not.toHaveBeenCalled()
-    measure()
+    await rejectWarmAttachment()
     expect(await screen.findByRole('alert')).toHaveTextContent('Target has exited')
     expect(api.open).toHaveBeenCalledExactlyOnceWith(id, 137, 43, 'dead')
     expect(api.createTerminal).not.toHaveBeenCalled()
@@ -161,32 +171,20 @@ describe('QuickTerminalView stale and exited targets', () => {
     expect(api.open).toHaveBeenCalledTimes(1)
     expectReplacement()
 
-    // A remount restores the replacement ID rather than creating another shell.
+    // A remount attaches the running replacement directly.
     mounted.unmount()
-    api.open.mockResolvedValue({
-      success: true,
-      data: { record: replacement, terminalId: 'replacement', spawned: false }
-    })
     render(<QuickTerminalWorkspace record={replacement} />)
-    await screen.findAllByTestId('terminal')
-    measure()
     await screen.findByRole('button', { name: 'Exit replacement' })
-    expect(api.open).toHaveBeenLastCalledWith(id, 137, 43, 'replacement')
+    expect(api.open).toHaveBeenCalledExactlyOnceWith(id, 137, 43, 'dead')
     expect(api.createTerminal).toHaveBeenCalledTimes(2)
   })
 
   it('reopens an exited terminal with createTerminal, preserving the sibling and tab identity', async () => {
-    api.open.mockResolvedValue({
-      success: true,
-      data: { record, terminalId: 'dead', spawned: false }
-    })
     api.createTerminal.mockResolvedValue({
       success: true,
       data: { record: replacement, terminalId: 'replacement', spawned: true }
     })
     render(<QuickTerminalWorkspace record={record} />)
-    await screen.findAllByTestId('terminal')
-    measure()
     fireEvent.click(await screen.findByRole('button', { name: 'Exit dead' }))
     expect(api.createTerminal).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Reopen' }))
@@ -194,7 +192,7 @@ describe('QuickTerminalView stale and exited targets', () => {
     measure()
     await screen.findByRole('button', { name: 'Exit replacement' })
     expect(api.createTerminal).toHaveBeenCalledExactlyOnceWith(id, 137, 43)
-    expect(api.open).toHaveBeenCalledExactlyOnceWith(id, 137, 43, 'dead')
+    expect(api.open).not.toHaveBeenCalled()
     expectReplacement()
   })
 
@@ -206,8 +204,7 @@ describe('QuickTerminalView stale and exited targets', () => {
         data: { record, terminalId: 'dead', spawned: false }
       })
     render(<QuickTerminalWorkspace record={record} />)
-    await screen.findAllByTestId('terminal')
-    measure()
+    await rejectWarmAttachment()
     await screen.findByRole('alert')
     fireEvent.click(screen.getByRole('button', { name: 'Reopen' }))
     measure()
@@ -229,8 +226,7 @@ describe('QuickTerminalView stale and exited targets', () => {
       })
     )
     const mounted = render(<QuickTerminalWorkspace record={record} />)
-    await screen.findAllByTestId('terminal')
-    measure()
+    await rejectWarmAttachment()
     await screen.findByRole('alert')
     fireEvent.click(screen.getByRole('button', { name: 'Reopen' }))
     measure()

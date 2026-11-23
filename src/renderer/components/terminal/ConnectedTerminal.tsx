@@ -493,6 +493,8 @@ export interface ConnectedTerminalProps {
   onInitialGrid?: (cols: number, rows: number) => void
   onBoundToStoreTerminal?: (ptyId: string) => void
   onExit?: (exitCode: number, signal?: number) => void
+  /** The host rejected or could not complete the existing PTY attachment. */
+  onAttachFailed?: () => void
   onError?: (error: string) => void
   /**
    * Called with a line the user submitted, after it has passed the capture
@@ -683,6 +685,7 @@ function ConnectedTerminalComponent({
   autoSpawn = true,
   onInitialGrid,
   onExit,
+  onAttachFailed,
   onError,
   onCommand,
   onBoundToStoreTerminal,
@@ -794,6 +797,8 @@ function ConnectedTerminalComponent({
   const initializedTerminalIdRef = useRef<string | undefined>(undefined)
   const onExitRef = useRef(onExit)
   onExitRef.current = onExit
+  const onAttachFailedRef = useRef(onAttachFailed)
+  onAttachFailedRef.current = onAttachFailed
   const onErrorRef = useRef(onError)
   onErrorRef.current = onError
   const onSpawnedRef = useRef(onSpawned)
@@ -2209,8 +2214,9 @@ function ConnectedTerminalComponent({
           // Without this the gate stays held for a terminal that never
           // attached, and the transcript stops capturing for a detached PTY.
           releaseRendererGate(externalTerminalId)
-          if (!stale && !disposed && onErrorRef.current) {
-            onErrorRef.current(tRef.current('resume.disconnectedTitle'))
+          if (!disposed) {
+            onAttachFailedRef.current?.()
+            if (!stale) onErrorRef.current?.(tRef.current('resume.disconnectedTitle'))
           }
           return
         }

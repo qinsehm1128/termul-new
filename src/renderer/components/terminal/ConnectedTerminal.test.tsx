@@ -851,7 +851,8 @@ describe('ConnectedTerminal', () => {
       data: { latestSeq: 87, gap: false }
     })
 
-    render(<ConnectedTerminal terminalId="external-123" />)
+    const onAttachFailed = vi.fn()
+    render(<ConnectedTerminal terminalId="external-123" onAttachFailed={onAttachFailed} />)
 
     await vi.waitFor(() => {
       expect(vi.mocked(terminalApi).watch).toHaveBeenCalledWith('external-123', 12)
@@ -864,6 +865,30 @@ describe('ConnectedTerminal', () => {
         87
       )
     })
+    expect(onAttachFailed).not.toHaveBeenCalled()
+  })
+
+  it('notifies a warm attachment caller when the host refuses the existing PTY', async () => {
+    mockTerminalStoreState.findTerminalByPtyId.mockImplementation((ptyId: string) => ({
+      id: ptyId,
+      ptyId,
+      quickTerminalId: 'quick-entry',
+      healthStatus: 'running'
+    }))
+    const denied = { success: false, data: undefined, code: 'UNAUTHORIZED', error: 'denied' }
+    vi.mocked(terminalApi).watch.mockResolvedValue(denied)
+    mockTerminalStoreState.resumeTerminalResource.mockResolvedValueOnce(denied)
+    const onAttachFailed = vi.fn()
+
+    render(
+      <ConnectedTerminal terminalId="quick-pty" autoSpawn={false} onAttachFailed={onAttachFailed} />
+    )
+
+    await vi.waitFor(() => expect(onAttachFailed).toHaveBeenCalledOnce())
+    expect(terminalApi.watch).toHaveBeenCalledWith('quick-pty', 0)
+    expect(mockTerminalStoreState.resumeTerminalResource).toHaveBeenCalledWith('quick-pty')
+    expect(addRendererRef).not.toHaveBeenCalled()
+    expect(terminalApi.spawn).not.toHaveBeenCalled()
   })
 
   describe('host replay vs renderer transcript', () => {
