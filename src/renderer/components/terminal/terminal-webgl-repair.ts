@@ -129,6 +129,13 @@ export interface WebglScrollRepair {
    * true when the chunk can invalidate the WebGL cell model.
    */
   onWrite: (requiresModelRebuild?: boolean) => void
+  /**
+   * A container/layout change that did not change the terminal grid. xterm's
+   * `resize()` early-returns for that case, so its renderer kept the
+   * pre-layout model. Trailing-coalesced, exactly like scroll: a sidebar drag
+   * must not rebuild the model on every tick.
+   */
+  requestLayoutRepair: () => void
   repairNow: (requiresModelRebuild?: boolean) => void
   dispose: () => void
 }
@@ -310,6 +317,11 @@ export function createWebglScrollRepair(args: {
     },
     onWrite(requiresModelRebuild = true): void {
       scheduleIdleRepair(requiresModelRebuild)
+    },
+    requestLayoutRepair(): void {
+      // Same trailing scheduler as scroll: the layout burst must settle before
+      // the full-viewport rebuild, or a sidebar drag pays for one per tick.
+      scheduleTrailingRepair()
     },
     repairNow,
     dispose(): void {

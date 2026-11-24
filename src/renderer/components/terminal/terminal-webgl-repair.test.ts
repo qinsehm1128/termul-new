@@ -98,6 +98,71 @@ describe('createWebglScrollRepair', () => {
     repair.dispose()
   })
 
+  // A sidebar drag resizes the container without necessarily changing the
+  // terminal grid. xterm's resize() early-returns for that case, so the
+  // renderer keeps the pre-layout model; the repair has to rebuild it, but
+  // only once the layout burst settles.
+  it('coalesces a same-grid layout burst into one trailing rebuild', async () => {
+    vi.useFakeTimers()
+    const refresh = vi.fn()
+    const rebuildSurface = vi.fn()
+    const repair = createWebglScrollRepair({
+      getTerminal: () => ({ refresh, rows: 24 }),
+      rebuildSurface
+    })
+
+    repair.requestLayoutRepair()
+    repair.requestLayoutRepair()
+    repair.requestLayoutRepair()
+
+    expect(rebuildSurface).not.toHaveBeenCalled()
+    expect(refresh).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(WEBGL_SCROLL_REPAIR_IDLE_MS)
+
+    expect(rebuildSurface).toHaveBeenCalledTimes(1)
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(refresh).toHaveBeenCalledWith(0, 23)
+    repair.dispose()
+  })
+
+  it('does not rebuild mid-drag while layout changes keep arriving', async () => {
+    vi.useFakeTimers()
+    const refresh = vi.fn()
+    const rebuildSurface = vi.fn()
+    const repair = createWebglScrollRepair({
+      getTerminal: () => ({ refresh, rows: 24 }),
+      rebuildSurface
+    })
+
+    for (let elapsed = 0; elapsed < WEBGL_SCROLL_REPAIR_MAX_WAIT_MS * 3; elapsed += 40) {
+      repair.requestLayoutRepair()
+      await vi.advanceTimersByTimeAsync(40)
+    }
+
+    expect(rebuildSurface).not.toHaveBeenCalled()
+    expect(refresh).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(WEBGL_SCROLL_REPAIR_IDLE_MS)
+    expect(rebuildSurface).toHaveBeenCalledTimes(1)
+    expect(refresh).toHaveBeenCalledTimes(1)
+    repair.dispose()
+  })
+
+  it('cancels a pending layout repair on dispose', async () => {
+    vi.useFakeTimers()
+    const refresh = vi.fn()
+    const repair = createWebglScrollRepair({
+      getTerminal: () => ({ refresh, rows: 24 })
+    })
+
+    repair.requestLayoutRepair()
+    repair.dispose()
+
+    await vi.advanceTimersByTimeAsync(WEBGL_SCROLL_REPAIR_IDLE_MS * 2)
+    expect(refresh).not.toHaveBeenCalled()
+  })
+
   it('refreshes append-only writes without rebuilding the WebGL model', () => {
     vi.useFakeTimers()
     const refresh = vi.fn()

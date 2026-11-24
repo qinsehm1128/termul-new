@@ -42,7 +42,7 @@ import { useCompanionTerminalTextScale } from '@/hooks/use-companion-terminal-te
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useTerminalClipboard } from '@/hooks/use-terminal-clipboard'
 import { useTerminalColorTheme } from '@/hooks/use-terminal-color-theme'
-import { useTerminalResizeV2 } from '@/hooks/use-terminal-resize-v2'
+import { type TerminalLayoutChange, useTerminalResizeV2 } from '@/hooks/use-terminal-resize-v2'
 import { isTerminalPendingPtyAssignment } from '@/hooks/use-terminal-restore'
 import { systemApi, terminalApi } from '@/lib/api'
 import { openTerminalUrl } from '@/lib/browser/terminal-url-navigation'
@@ -908,6 +908,23 @@ function ConnectedTerminalComponent({
 
   const { forceFit: forceResizeFit } = useTerminalResizeV2({
     onPtyResize: handlePtyResize,
+    onLayoutChange: (change: TerminalLayoutChange): void => {
+      // Hidden tabs are restored by the isVisible effect when shown; a repaint
+      // request here would only be recorded as xterm's paused refresh.
+      if (!isVisibleRef.current) {
+        needsSurfaceRestoreRef.current = true
+        return
+      }
+      // A grid change already made xterm resize and rebuild its renderer
+      // model, and the resize hook issued the lightweight refresh. Rebuilding
+      // again here is the per-tick churn this path exists to avoid.
+      if (change.gridChanged) return
+      // Same-grid layout change: xterm's resize() early-returns, so the
+      // renderer kept the pre-layout model. Coalesce a full surface rebuild
+      // behind the layout burst rather than running one per ResizeObserver
+      // tick.
+      webglScrollRepairRef.current?.requestLayoutRepair()
+    },
     terminalRef,
     fitAddonRef,
     containerRef,

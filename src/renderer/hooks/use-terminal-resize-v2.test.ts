@@ -690,4 +690,319 @@ describe('useTerminalResizeV2', () => {
       })
     }).not.toThrow()
   })
+
+  describe('surface repaint after a confirmed layout change', () => {
+    const containerRect = (width = 800, height = 600): DOMRect =>
+      ({
+        width,
+        height,
+        top: 0,
+        left: 0,
+        bottom: height,
+        right: width,
+        x: 0,
+        y: 0,
+        toJSON: () => ({})
+      }) as DOMRect
+
+    function createResizingFitAddon(
+      terminal: Terminal,
+      next: { cols: number; rows: number }
+    ): FitAddon {
+      return {
+        fit: vi.fn(() => {
+          Object.assign(terminal, next)
+        }),
+        dispose: vi.fn()
+      } as unknown as FitAddon
+    }
+
+    it('refreshes and reports a confirmed grid change without rebuilding the model', () => {
+      const container = document.createElement('div')
+      const terminal = createMockTerminal(80, 24)
+      const nextDims = { cols: 80, rows: 24 }
+      const fitAddon = {
+        fit: vi.fn(() => {
+          Object.assign(terminal, nextDims)
+        }),
+        dispose: vi.fn()
+      } as unknown as FitAddon
+      const onPtyResize = vi.fn()
+      const onLayoutChange = vi.fn()
+
+      vi.spyOn(container, 'getBoundingClientRect')
+        .mockReturnValueOnce(containerRect(800, 600))
+        .mockReturnValue(containerRect(900, 650))
+
+      renderHook(() =>
+        useTerminalResizeV2({
+          onPtyResize,
+          onLayoutChange,
+          terminalRef: { current: terminal },
+          fitAddonRef: { current: fitAddon },
+          containerRef: { current: container }
+        })
+      )
+
+      // The first fit only establishes the geometry; it is not a layout
+      // change to restore.
+      act(() => {
+        observerCallback!()
+      })
+      act(() => {
+        vi.advanceTimersByTime(8)
+      })
+      expect(onLayoutChange).not.toHaveBeenCalled()
+      onPtyResize.mockClear()
+
+      nextDims.cols = 100
+      nextDims.rows = 30
+
+      act(() => {
+        observerCallback!()
+      })
+      act(() => {
+        vi.advanceTimersByTime(8)
+      })
+
+      expect(fitAddon.fit).toHaveBeenCalledTimes(2)
+      expect(terminal.refresh).toHaveBeenLastCalledWith(0, 29)
+      expect(onLayoutChange).toHaveBeenCalledWith({
+        cols: 100,
+        rows: 30,
+        gridChanged: true,
+        forced: false
+      })
+      expect(onPtyResize).toHaveBeenCalledWith(100, 30)
+    })
+
+    it('refreshes and reports a same-grid layout change', () => {
+      const container = document.createElement('div')
+      const terminal = createMockTerminal(80, 24)
+      const fitAddon = createMockFitAddon()
+      const onPtyResize = vi.fn()
+      const onLayoutChange = vi.fn()
+
+      vi.spyOn(container, 'getBoundingClientRect')
+        .mockReturnValueOnce(containerRect(800, 600))
+        .mockReturnValue(containerRect(900, 650))
+
+      renderHook(() =>
+        useTerminalResizeV2({
+          onPtyResize,
+          onLayoutChange,
+          terminalRef: { current: terminal },
+          fitAddonRef: { current: fitAddon },
+          containerRef: { current: container }
+        })
+      )
+
+      // Prime the hook's PTY grid tracking with the first fitted size.
+      act(() => {
+        observerCallback!()
+      })
+      act(() => {
+        vi.advanceTimersByTime(8)
+      })
+      onPtyResize.mockClear()
+
+      // The container grew but the terminal grid did not: xterm's resize()
+      // early-returns, so only a repaint is owed.
+      act(() => {
+        observerCallback!()
+      })
+      act(() => {
+        vi.advanceTimersByTime(8)
+      })
+
+      expect(fitAddon.fit).toHaveBeenCalledTimes(2)
+      expect(terminal.refresh).toHaveBeenLastCalledWith(0, 23)
+      expect(onLayoutChange).toHaveBeenLastCalledWith({
+        cols: 80,
+        rows: 24,
+        gridChanged: false,
+        forced: false
+      })
+      // Same grid as the previous push, so the host resize is suppressed.
+      expect(onPtyResize).not.toHaveBeenCalled()
+    })
+
+    it('refreshes and reports a forced layout change', () => {
+      const container = document.createElement('div')
+      const terminal = createMockTerminal(80, 24)
+      const fitAddon = createMockFitAddon()
+      const onLayoutChange = vi.fn()
+
+      vi.spyOn(container, 'getBoundingClientRect').mockReturnValue(containerRect())
+
+      const { result } = renderHook(() =>
+        useTerminalResizeV2({
+          onPtyResize: vi.fn(),
+          onLayoutChange,
+          terminalRef: { current: terminal },
+          fitAddonRef: { current: fitAddon },
+          containerRef: { current: container }
+        })
+      )
+
+      // First force fit establishes the geometry.
+      act(() => {
+        result.current.forceFit()
+      })
+      expect(onLayoutChange).not.toHaveBeenCalled()
+
+      fitAddon.fit = createResizingFitAddon(terminal, { cols: 90, rows: 28 }).fit
+
+      act(() => {
+        result.current.forceFit()
+      })
+
+      expect(terminal.refresh).toHaveBeenLastCalledWith(0, 27)
+      expect(onLayoutChange).toHaveBeenCalledWith({
+        cols: 90,
+        rows: 28,
+        gridChanged: true,
+        forced: true
+      })
+    })
+
+    it('does not refresh or report while the terminal is hidden', () => {
+      const container = document.createElement('div')
+      const terminal = createMockTerminal(80, 24)
+      const fitAddon = createMockFitAddon()
+      const onLayoutChange = vi.fn()
+
+      vi.spyOn(container, 'getBoundingClientRect').mockReturnValue(containerRect())
+
+      renderHook(() =>
+        useTerminalResizeV2({
+          onPtyResize: vi.fn(),
+          onLayoutChange,
+          terminalRef: { current: terminal },
+          fitAddonRef: { current: fitAddon },
+          containerRef: { current: container },
+          isVisible: false
+        })
+      )
+
+      act(() => {
+        observerCallback!()
+      })
+      act(() => {
+        vi.advanceTimersByTime(8)
+      })
+
+      expect(fitAddon.fit).not.toHaveBeenCalled()
+      expect(terminal.refresh).not.toHaveBeenCalled()
+      expect(onLayoutChange).not.toHaveBeenCalled()
+    })
+
+    it('does not refresh or report on forceFit while hidden', () => {
+      const container = document.createElement('div')
+      const terminal = createMockTerminal(80, 24)
+      const fitAddon = createMockFitAddon()
+      const onLayoutChange = vi.fn()
+
+      vi.spyOn(container, 'getBoundingClientRect').mockReturnValue(containerRect())
+
+      const { result } = renderHook(() =>
+        useTerminalResizeV2({
+          onPtyResize: vi.fn(),
+          onLayoutChange,
+          terminalRef: { current: terminal },
+          fitAddonRef: { current: fitAddon },
+          containerRef: { current: container },
+          isVisible: false
+        })
+      )
+
+      act(() => {
+        result.current.forceFit()
+      })
+
+      // Fit still runs to keep the grid current for the next show, but the
+      // hidden surface must not be repainted.
+      expect(fitAddon.fit).toHaveBeenCalledTimes(1)
+      expect(terminal.refresh).not.toHaveBeenCalled()
+      expect(onLayoutChange).not.toHaveBeenCalled()
+    })
+
+    it('repaints when an observer tick lands back on the last fitted size', () => {
+      const container = document.createElement('div')
+      const terminal = createMockTerminal(80, 24)
+      const fitAddon = createMockFitAddon()
+      const onLayoutChange = vi.fn()
+
+      vi.spyOn(container, 'getBoundingClientRect').mockReturnValue(containerRect())
+
+      renderHook(() =>
+        useTerminalResizeV2({
+          onPtyResize: vi.fn(),
+          onLayoutChange,
+          terminalRef: { current: terminal },
+          fitAddonRef: { current: fitAddon },
+          containerRef: { current: container }
+        })
+      )
+
+      // First tick fits and updates the tracked geometry.
+      act(() => {
+        observerCallback!()
+      })
+      act(() => {
+        vi.advanceTimersByTime(8)
+      })
+
+      // A layout round-trip reports the original size again, so the second
+      // fit is a no-op — but the surface still moved and must be repainted.
+      act(() => {
+        observerCallback!()
+      })
+      act(() => {
+        vi.advanceTimersByTime(8)
+      })
+
+      expect(fitAddon.fit).toHaveBeenCalledTimes(1)
+      expect(terminal.refresh).toHaveBeenCalledTimes(2)
+      // The first tick only established the geometry; the round-trip is the
+      // actual layout change.
+      expect(onLayoutChange).toHaveBeenCalledTimes(1)
+      expect(onLayoutChange).toHaveBeenLastCalledWith({
+        cols: 80,
+        rows: 24,
+        gridChanged: false,
+        forced: false
+      })
+    })
+
+    it('does not repaint a collapsed container', () => {
+      const container = document.createElement('div')
+      const terminal = createMockTerminal(80, 24)
+      const fitAddon = createMockFitAddon()
+      const onLayoutChange = vi.fn()
+
+      vi.spyOn(container, 'getBoundingClientRect').mockReturnValue(containerRect(20, 20))
+
+      renderHook(() =>
+        useTerminalResizeV2({
+          onPtyResize: vi.fn(),
+          onLayoutChange,
+          terminalRef: { current: terminal },
+          fitAddonRef: { current: fitAddon },
+          containerRef: { current: container }
+        })
+      )
+
+      act(() => {
+        observerCallback!()
+      })
+      act(() => {
+        vi.advanceTimersByTime(8)
+      })
+
+      expect(fitAddon.fit).not.toHaveBeenCalled()
+      expect(terminal.refresh).not.toHaveBeenCalled()
+      expect(onLayoutChange).not.toHaveBeenCalled()
+    })
+  })
 })
