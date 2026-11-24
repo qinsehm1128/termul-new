@@ -1,9 +1,12 @@
 import type { Terminal } from '@xterm/xterm'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { logFrontendError } from '@/lib/log-api'
 import { readTerminalInputModes, supportsTerminalInputModes, terminalApi } from '@/lib/terminal-api'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { registerTerminal, unregisterTerminal } from '@/utils/terminal-registry'
 import { resyncRendererInputModes } from './terminal-input-resync'
+
+vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 
 vi.mock('@/lib/terminal-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/terminal-api')>()
@@ -92,6 +95,7 @@ describe('resyncRendererInputModes after a claim-less rehydrate', () => {
     vi.mocked(terminalApi.attach).mockReset()
     vi.mocked(terminalApi.watch).mockReset()
     vi.mocked(readTerminalInputModes).mockReset()
+    vi.mocked(logFrontendError).mockReset()
     vi.mocked(supportsTerminalInputModes).mockReturnValue(true)
   })
 
@@ -275,5 +279,133 @@ describe('resyncRendererInputModes after a claim-less rehydrate', () => {
 
     expect(result).toEqual({ status: 'unavailable', reason: 'unsupported' })
     expect(terminalApi.resume).not.toHaveBeenCalled()
+  })
+
+  describe('automatic post-remount claim recovery', () => {
+    const AUTO_EVIDENCE = {
+      rendererRefAttached: true,
+      visible: true,
+      mobileWebShell: false,
+      companionPhoneSurface: false,
+      parkedByPhone: false
+    }
+
+    it('recovers the claim for an attached, visible desktop remount', async () => {
+      // This is the production regression: a remount reattached by watch has
+      // no claim, and the automatic post-replay resync used to stop at
+      // `no-claim` — forcing a manual "resync input takeover" click.
+      seedRehydratedTerminal()
+      registerFakeRenderer(PTY_ID)
+      vi.mocked(terminalApi.resume).mockResolvedValue(resumeGrant())
+      vi.mocked(readTerminalInputModes).mockResolvedValue({ success: true, data: MODES })
+
+      const result = await resyncRendererInputModes(PTY_ID, {
+        autoRecoverClaim: AUTO_EVIDENCE
+      })
+
+      expect(result.status).toBe('applied')
+      expect(terminalApi.resume).toHaveBeenCalledTimes(1)
+      expect(readTerminalInputModes).toHaveBeenCalledWith(PTY_ID, 'recovered-claim')
+      expect(useTerminalStore.getState().findTerminalByPtyId(PTY_ID)?.claim).toBe('recovered-claim')
+    })
+
+    const unsafeEvidence: Array<[string, Partial<typeof AUTO_EVIDENCE>]> = [
+      ['the tab is not visible', { visible: false }],
+      ['this mount holds no host renderer ref', { rendererRefAttached: false }],
+      ['a companion phone surface owns the terminal', { companionPhoneSurface: true }],
+      ['the host parked the terminal for a phone', { parkedByPhone: true }],
+      ['the surface is the mobile web shell', { mobileWebShell: true }]
+    ]
+
+    for (const [label, override] of unsafeEvidence) {
+      it(`never rotates a claim when ${label}`, async () => {
+        seedRehydratedTerminal()
+        registerFakeRenderer(PTY_ID)
+
+        const result = await resyncRendererInputModes(PTY_ID, {
+          autoRecoverClaim: { ...AUTO_EVIDENCE, ...override }
+        })
+
+        expect(result).toEqual({ status: 'unavailable', reason: 'no-claim' })
+        expect(terminalApi.resume).not.toHaveBeenCalled()
+        expect(readTerminalInputModes).not.toHaveBeenCalled()
+      })
+    }
+
+    it('uses an existing claim without rotating it', async () => {
+      seedRehydratedTerminal({ claim: 'existing-claim' })
+      registerFakeRenderer(PTY_ID)
+      vi.mocked(readTerminalInputModes).mockResolvedValue({ success: true, data: MODES })
+
+      const result = await resyncRendererInputModes(PTY_ID, {
+        autoRecoverClaim: AUTO_EVIDENCE
+      })
+
+      expect(result.status).toBe('applied')
+      expect(terminalApi.resume).not.toHaveBeenCalled()
+      expect(readTerminalInputModes).toHaveBeenCalledWith(PTY_ID, 'existing-claim')
+    })
+
+    it('does not recover a record that is no longer running', async () => {
+      seedRehydratedTerminal({ healthStatus: 'exited' })
+      registerFakeRenderer(PTY_ID)
+
+      const result = await resyncRendererInputModes(PTY_ID, {
+        autoRecoverClaim: AUTO_EVIDENCE
+      })
+
+      expect(result).toEqual({ status: 'unavailable', reason: 'no-claim' })
+      expect(terminalApi.resume).not.toHaveBeenCalled()
+      expect(vi.mocked(logFrontendError)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          level: 'warn',
+          source: 'terminal-input-resync.auto',
+          message: 'code=AUTO_INPUT_CLAIM_RECOVERY_SKIPPED_NOT_RUNNING'
+        })
+      )
+    })
+
+    it('logs a stable host-denial code without leaking terminal details', async () => {
+      seedRehydratedTerminal()
+      registerFakeRenderer(PTY_ID)
+      vi.mocked(terminalApi.resume).mockResolvedValue({
+        success: false,
+        error: 'Unauthorized',
+        code: 'UNAUTHORIZED'
+      })
+
+      const result = await resyncRendererInputModes(PTY_ID, {
+        autoRecoverClaim: AUTO_EVIDENCE
+      })
+
+      expect(result).toEqual({ status: 'unavailable', reason: 'host-denied' })
+      // A refused action must not rewrite the record behind the user's back.
+      expect(useTerminalStore.getState().findTerminalByPtyId(PTY_ID)?.claim).toBeUndefined()
+      const loggedMessages = vi
+        .mocked(logFrontendError)
+        .mock.calls.map(([payload]) => payload.message)
+      expect(loggedMessages).toContain('code=AUTO_INPUT_CLAIM_RECOVERY_DENIED_HOST_DENIED')
+      for (const message of loggedMessages) {
+        expect(message).not.toContain(PTY_ID)
+        expect(message).not.toContain('/terminal-cwd')
+        expect(message).not.toContain('recovered-claim')
+      }
+    })
+
+    it('cannot rotate on a browser/remote transport even with full evidence', async () => {
+      // Multi-window browser clients and remote devices use the web transport,
+      // which has no claim-gated input-mode reader. Evidence alone must never
+      // let them rotate a desktop claim.
+      seedRehydratedTerminal()
+      registerFakeRenderer(PTY_ID)
+      vi.mocked(supportsTerminalInputModes).mockReturnValue(false)
+
+      const result = await resyncRendererInputModes(PTY_ID, {
+        autoRecoverClaim: AUTO_EVIDENCE
+      })
+
+      expect(result).toEqual({ status: 'unavailable', reason: 'unsupported' })
+      expect(terminalApi.resume).not.toHaveBeenCalled()
+    })
   })
 })

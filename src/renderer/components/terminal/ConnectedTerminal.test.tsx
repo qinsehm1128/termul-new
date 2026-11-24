@@ -4,6 +4,7 @@ import type { ComponentProps, ReactElement } from 'react'
 import { toast } from 'sonner'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getCurrentConversation } from '@/features/agent-session/stores/conversation-store'
+import { CompanionTerminalGeometryContext } from '@/hooks/use-companion-terminal-geometry'
 import { openTerminalUrl } from '@/lib/browser/terminal-url-navigation'
 import { logFrontendError } from '@/lib/log-api'
 import * as appSettingsStore from '@/stores/app-settings-store'
@@ -447,6 +448,14 @@ const dispatchPrimaryData = (terminalId: string, data: Uint8Array): void => {
   }
 }
 
+const { mockResyncRendererInputModes } = vi.hoisted(() => ({
+  mockResyncRendererInputModes: vi.fn()
+}))
+
+vi.mock('@/lib/terminal-input-resync', () => ({
+  resyncRendererInputModes: mockResyncRendererInputModes
+}))
+
 describe('ConnectedTerminal', () => {
   let rendererPreferenceSpy: ReturnType<typeof vi.spyOn>
   let getBoundingClientRectSpy: ReturnType<typeof vi.spyOn>
@@ -575,6 +584,11 @@ describe('ConnectedTerminal', () => {
       success: false,
       error: 'not watched',
       code: 'TERMINAL_NOT_FOUND'
+    })
+    mockResyncRendererInputModes.mockReset()
+    mockResyncRendererInputModes.mockResolvedValue({
+      status: 'unavailable',
+      reason: 'unsupported'
     })
 
     vi.mocked(terminalApi).spawn.mockResolvedValue({
@@ -866,6 +880,112 @@ describe('ConnectedTerminal', () => {
       )
     })
     expect(onAttachFailed).not.toHaveBeenCalled()
+  })
+
+  describe('automatic input takeover recovery', () => {
+    // A watch-reattached record is live but has no claim. The post-replay
+    // resync must offer the safety evidence that lets the resync module
+    // recover one, without ever claiming on behalf of a hidden/phone view.
+    const watchedTerminal = (): void => {
+      mockTerminalStoreState.findTerminalByPtyId.mockImplementation((ptyId: string) => ({
+        id: ptyId,
+        ptyId,
+        conversationId: '018f7a1c-1b4d-7c8a-9f01-0123456789ab',
+        claim: undefined,
+        healthStatus: 'running',
+        cwd: '/terminal-cwd',
+        resumeCursor: 12
+      }))
+      vi.mocked(terminalApi).watch.mockResolvedValue({
+        success: true,
+        data: { latestSeq: 87, gap: false }
+      })
+    }
+
+    const autoEvidence = {
+      rendererRefAttached: true,
+      visible: true,
+      mobileWebShell: false,
+      companionPhoneSurface: false,
+      parkedByPhone: false
+    }
+
+    it('offers the attached, visible desktop view as recovery evidence', async () => {
+      watchedTerminal()
+      render(<ConnectedTerminal terminalId="external-123" />)
+
+      await vi.waitFor(() => {
+        expect(mockResyncRendererInputModes).toHaveBeenCalledWith('external-123', {
+          autoRecoverClaim: autoEvidence
+        })
+      })
+    })
+
+    it('withholds recovery evidence for a hidden tab', async () => {
+      watchedTerminal()
+      render(<ConnectedTerminal terminalId="external-123" isVisible={false} />)
+
+      await vi.waitFor(() => {
+        expect(mockResyncRendererInputModes).toHaveBeenCalledWith('external-123', {
+          autoRecoverClaim: expect.objectContaining({ visible: false })
+        })
+      })
+    })
+
+    it('withholds recovery evidence while a companion phone owns the terminal', async () => {
+      watchedTerminal()
+      render(
+        <CompanionTerminalGeometryContext.Provider
+          value={{
+            surfaceActive: true,
+            preferredMode: 'phone',
+            keyboardOpen: false,
+            setPreferredMode: vi.fn()
+          }}
+        >
+          <ConnectedTerminal terminalId="external-123" />
+        </CompanionTerminalGeometryContext.Provider>
+      )
+
+      await vi.waitFor(() => {
+        expect(mockResyncRendererInputModes).toHaveBeenCalledWith('external-123', {
+          autoRecoverClaim: expect.objectContaining({ companionPhoneSurface: true })
+        })
+      })
+    })
+
+    it('records an applied automatic resync with the automatic marker', async () => {
+      watchedTerminal()
+      mockResyncRendererInputModes.mockResolvedValue({
+        status: 'applied',
+        rendererBefore: 'none',
+        rendererAfter: 'drag',
+        host: {
+          mouseTracking: 1002,
+          mouseEncoding: 1006,
+          bracketedPaste: true,
+          applicationCursor: false,
+          focusEvents: true,
+          applicationKeypad: false,
+          alternateScreen: false
+        }
+      })
+
+      render(<ConnectedTerminal terminalId="external-123" />)
+
+      await vi.waitFor(() => {
+        expect(mockRecordTerminalContinuityEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            name: 'input-modes-resynced',
+            details: expect.objectContaining({
+              automatic: true,
+              rendererBefore: 'none',
+              rendererAfter: 'drag'
+            })
+          })
+        )
+      })
+    })
   })
 
   it('notifies a warm attachment caller when the host refuses the existing PTY', async () => {

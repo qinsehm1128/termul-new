@@ -2404,12 +2404,32 @@ function ConnectedTerminalComponent({
         // existed (UI closed/reopened while the PTY kept running). Re-take its
         // input routing from the host's tracked modes; local xterm only, the
         // PTY receives nothing.
-        void resyncRendererInputModes(externalTerminalId).then((result) => {
+        //
+        // A remount commonly reattaches through claim-free `watch` (renderer
+        // reload / GUI restart), so the store record has no claim and the read
+        // used to stop at `no-claim`, leaving the user to press the manual
+        // "resync input takeover" button. Automatic recovery is allowed only
+        // with the evidence below: this mount holds the host renderer ref, its
+        // tab is active, and no companion phone surface owns the terminal. The
+        // resync module re-checks the runtime and live record before rotating
+        // anything; explicit user takeover keeps its own wider path.
+        void resyncRendererInputModes(externalTerminalId, {
+          autoRecoverClaim: {
+            rendererRefAttached: rendererRefAttachedRef.current,
+            visible: isVisibleRef.current,
+            mobileWebShell: isMobileWebShell,
+            companionPhoneSurface:
+              companionGeometryRef.current?.surfaceActive === true &&
+              companionGeometryRef.current.preferredMode === 'phone',
+            parkedByPhone: parkedByPhoneRef.current
+          }
+        }).then((result) => {
           if (result.status === 'applied' && result.rendererBefore !== result.rendererAfter) {
             recordReplayEvent(
               'input-modes-resynced',
               {
                 source: 'external-terminal',
+                automatic: true,
                 rendererBefore: result.rendererBefore,
                 rendererAfter: result.rendererAfter
               },
