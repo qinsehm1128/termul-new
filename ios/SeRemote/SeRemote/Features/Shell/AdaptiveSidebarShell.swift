@@ -30,6 +30,17 @@ enum SidebarDestination: String, CaseIterable, Identifiable, Sendable {
         case .settings: .gear
         }
     }
+
+    /// SF Symbol used by native `TabView` so iOS 27.1+ renders crisp glyphs
+    /// in iPhone Duo's trailing vertical bar and iPad's adaptive tab bar.
+    var systemImage: String {
+        switch self {
+        case .conversations: "bubble.left.and.bubble.right"
+        case .terminals: "terminal"
+        case .tools: "square.grid.2x2"
+        case .settings: "gearshape"
+        }
+    }
 }
 
 /// iPad directory: 250 pt expanded, 76 pt rail collapsed. The width is the

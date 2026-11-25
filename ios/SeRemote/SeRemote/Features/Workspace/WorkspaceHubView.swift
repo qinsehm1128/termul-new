@@ -51,6 +51,7 @@ enum WorkspaceSection: String, CaseIterable, Identifiable {
 struct WorkspaceHubView: View {
     @Environment(\.sePalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var host: String
     var latency: String
@@ -75,18 +76,22 @@ struct WorkspaceHubView: View {
     var onOpenDrawer: () -> Void = {}
     var onToggleTheme: () -> Void = {}
     var onOpenSettings: () -> Void = {}
+    var usesSystemChrome: Bool = false
 
     @State private var section: WorkspaceSection = .tools
+    @State private var containerWidth: CGFloat = 0
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                header
-                    .padding(.horizontal, NocturneToolMetrics.gutter)
-                    .padding(.top, 8)
+                if !usesSystemChrome {
+                    header
+                        .padding(.horizontal, NocturneToolMetrics.gutter)
+                        .padding(.top, 8)
+                }
                 title
                     .padding(.horizontal, NocturneToolMetrics.gutter)
-                    .padding(.top, 10)
+                    .padding(.top, usesSystemChrome ? 6 : 10)
                 sectionSwitch
                 switch section {
                 case .tools:
@@ -95,9 +100,16 @@ struct WorkspaceHubView: View {
                 case .projects:
                     projectSection
                 }
-                settingsSection
+                if !usesSystemChrome {
+                    settingsSection
+                }
             }
             .padding(.bottom, 30)
+        }
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.width
+        } action: { newWidth in
+            containerWidth = newWidth
         }
         .scrollIndicators(.hidden)
         .background(palette.canvas.ignoresSafeArea())
@@ -213,11 +225,15 @@ struct WorkspaceHubView: View {
     // MARK: Tools
 
     private var toolSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let columnCount = ShellPresentation.evenGridColumnCount(
+            width: Double(containerWidth),
+            isRegular: horizontalSizeClass == .regular
+        )
+        return VStack(alignment: .leading, spacing: 0) {
             NocturneGroupLabel(title: String(localized: "Tools"), detail: twoDigit(tools.count))
             LazyVGrid(
                 columns: Array(repeating: GridItem(.flexible(), spacing: NocturneToolMetrics.cardGap),
-                               count: 2),
+                               count: columnCount),
                 spacing: NocturneToolMetrics.cardGap
             ) {
                 ForEach(tools) { tool in

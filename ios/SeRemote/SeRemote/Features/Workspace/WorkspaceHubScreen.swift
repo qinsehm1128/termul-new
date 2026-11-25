@@ -12,9 +12,12 @@ struct WorkspaceHubScreen: View {
     /// The shell wires this to T1's project grouping. When it is absent (the
     /// old call sites, previews) the hub falls back to selecting the project.
     var onOpenProject: ((String) -> Void)?
+    var usesSystemChrome: Bool = false
+    var showsCompactDrawerButton: Bool = false
 
     @Environment(ConnectionStore.self) private var connections
     @Environment(\.sePalette) private var palette
+    @Environment(\.seThemeMode) private var mode
     @Environment(\.remoteDeviceLink) private var deviceLink
     @State private var path: [ToolDestination] = []
     @State private var pluginsCover = false
@@ -83,7 +86,8 @@ struct WorkspaceHubScreen: View {
                 onOpenCommand: onOpenCommand,
                 onOpenDrawer: onOpenDrawer,
                 onToggleTheme: onToggleTheme,
-                onOpenSettings: onOpenSettings
+                onOpenSettings: onOpenSettings,
+                usesSystemChrome: usesSystemChrome
             )
             .disabled(selectingProject)
             .overlay { if selectingProject { ProgressView().accessibilityLabel("Opening project") } }
@@ -92,6 +96,7 @@ struct WorkspaceHubScreen: View {
                 // WorkspaceToolDestinationView forces the system bar visible,
                 // which would draw a second bar above the Nocturne header.
                 toolDestination(destination)
+                    .toolbar(.hidden, for: .navigationBar)
             }
             .fullScreenCover(isPresented: $pluginsCover) {
                 PluginBrowserScreen(
@@ -101,7 +106,44 @@ struct WorkspaceHubScreen: View {
                 )
                 .background(palette.canvas.ignoresSafeArea())
             }
-            .toolbar(.hidden, for: .navigationBar)
+            .toolbar(usesSystemChrome ? .visible : .hidden, for: .navigationBar)
+            .toolbar {
+                if usesSystemChrome {
+                    if showsCompactDrawerButton {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button(action: onOpenDrawer) {
+                                Image(systemName: "sidebar.left")
+                            }
+                            .accessibilityLabel(String(localized: "All destinations"))
+                        }
+                        .duoVisibilityPriority(.standard)
+                    }
+
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button(action: onSelectHost) {
+                            Label(hostName, systemImage: "server.rack")
+                        }
+                        .accessibilityLabel(String(localized: "Select host"))
+                    }
+                    .duoVisibilityPriority(.standard)
+
+                    ToolbarItem(placement: DuoToolbarPlacement.pinnedTrailing) {
+                        Button(action: onOpenCommand) {
+                            Image(systemName: "command")
+                        }
+                        .accessibilityLabel(String(localized: "Command palette"))
+                    }
+                    .duoVisibilityPriority(.high)
+
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button(action: onToggleTheme) {
+                            Image(systemName: mode == .night ? "moon" : "sun.max")
+                        }
+                        .accessibilityLabel(String(localized: "Toggle theme"))
+                    }
+                    .duoVisibilityPriority(.low)
+                }
+            }
             .task(id: scope.cwd) {
                 // These stores retain their own results and cancel stale requests.
                 await session.projects.refresh()

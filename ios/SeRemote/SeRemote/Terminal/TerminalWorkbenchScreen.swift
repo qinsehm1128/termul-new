@@ -22,6 +22,10 @@ struct TerminalWorkbenchScreen: View {
     var onShowAgentInspector: () -> Void = {}
     /// Opens the cross-project terminal switcher owned by the shell.
     var onOpenSwitcher: (() -> Void)? = nil
+    /// Regular-width collapsible file/agent inspector toggle button.
+    var showsInspectorToggle = false
+    var isInspectorOpen = false
+    var onToggleInspector: (() -> Void)? = nil
 
     @Environment(\.remoteDeviceLink) private var deviceLink
     @Environment(\.sePalette) private var palette
@@ -67,7 +71,10 @@ struct TerminalWorkbenchScreen: View {
                 }
             },
             onSpawnTerminal: { Task { await spawnTerminal() } },
-            onOpenSwitcher: onOpenSwitcher
+            onOpenSwitcher: onOpenSwitcher,
+            showsInspectorToggle: showsInspectorToggle,
+            isInspectorOpen: isInspectorOpen,
+            onToggleInspector: onToggleInspector
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(palette.terminalCanvas)

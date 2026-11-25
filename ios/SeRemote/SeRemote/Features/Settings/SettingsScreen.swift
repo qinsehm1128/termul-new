@@ -7,6 +7,7 @@ struct SettingsScreen: View {
     @Bindable var settings: AppSettings
     var store: ConnectionStore? = nil
     var onBack: () -> Void = {}
+    var usesSystemChrome = false
 
     @Environment(\.sePalette) private var palette
     @Environment(\.seThemeMode) private var mode
@@ -19,11 +20,20 @@ struct SettingsScreen: View {
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
-                SeNavBar(
-                    title: String(localized: "Settings"),
-                    subtitle: hostSubtitle,
-                    onBack: onBack
-                )
+                if !usesSystemChrome {
+                    SeNavBar(
+                        title: String(localized: "Settings"),
+                        subtitle: hostSubtitle,
+                        onBack: onBack
+                    )
+                } else if !hostSubtitle.isEmpty {
+                    Text(hostSubtitle)
+                        .font(SeNocturneType.font(10.5, mono: true))
+                        .foregroundStyle(palette.inkTertiary)
+                        .padding(.horizontal, 18)
+                        .padding(.top, 6)
+                        .padding(.bottom, 4)
+                }
 
                 SeGroupLabel(title: String(localized: "Hosts"), count: nil)
                 SeGroupCard {
@@ -149,6 +159,8 @@ struct SettingsScreen: View {
         .background(palette.canvas.ignoresSafeArea())
         .foregroundStyle(palette.ink)
         .tint(palette.accent)
+        .navigationTitle(usesSystemChrome ? String(localized: "Settings") : "")
+        .navigationBarTitleDisplayMode(.inline)
         .onAppear { terminalTextScale = TerminalTextScale.current }
         .onChange(of: terminalTextScale) { _, scale in TerminalTextScale.current = scale }
         .onChange(of: settings.notificationsEnabled) { _, enabled in

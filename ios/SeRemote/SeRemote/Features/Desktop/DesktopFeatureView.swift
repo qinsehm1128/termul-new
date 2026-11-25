@@ -7,7 +7,10 @@ struct DesktopFeatureView: View {
     @Environment(\.sePalette) private var palette
     @Environment(\.seThemeMode) private var theme
     @Environment(\.scenePhase) private var scenePhase
-    @State private var interactionMode: DesktopInteractionMode = UIDevice.current.userInterfaceIdiom == .pad ? .direct : .trackpad
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @State private var interactionMode: DesktopInteractionMode = .trackpad
+    @State private var hasCustomInteractionMode = false
+    @State private var didApplyDefaultInteractionMode = false
     @State private var keyboardVisible = false
     @State private var helpVisible = false
     @State private var screenshotBusy = false
@@ -82,9 +85,21 @@ struct DesktopFeatureView: View {
             await socket.open()
         }
         .onAppear {
+            if !didApplyDefaultInteractionMode {
+                interactionMode = ShellPresentation.defaultDesktopInteractionMode(
+                    isRegular: horizontalSizeClass == .regular
+                )
+                didApplyDefaultInteractionMode = true
+            }
             previousIdleTimerDisabled = UIApplication.shared.isIdleTimerDisabled
             isVisible = true
             updateIdleTimer()
+        }
+        .onChange(of: horizontalSizeClass) { _, newClass in
+            guard !hasCustomInteractionMode else { return }
+            interactionMode = ShellPresentation.defaultDesktopInteractionMode(
+                isRegular: newClass == .regular
+            )
         }
         .onDisappear {
             isVisible = false
@@ -181,8 +196,15 @@ struct DesktopFeatureView: View {
     }
 
     private var modePicker: some View {
-        Menu {
-            Picker("Interaction mode", selection: $interactionMode) {
+        let selection = Binding<DesktopInteractionMode>(
+            get: { interactionMode },
+            set: { newValue in
+                hasCustomInteractionMode = true
+                interactionMode = newValue
+            }
+        )
+        return Menu {
+            Picker("Interaction mode", selection: selection) {
                 ForEach(DesktopInteractionMode.allCases) { mode in Text(mode.title).tag(mode) }
             }
         } label: {

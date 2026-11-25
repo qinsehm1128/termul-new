@@ -127,4 +127,80 @@ struct TerminalWorkbenchMountTests {
 
         #expect(probe.installs == 1)
     }
+
+    private struct InspectorHarness: View {
+        let session: WorkspaceSession
+        let model: TerminalWorkbenchModel
+        @Binding var inspectorOpen: Bool
+
+        var body: some View {
+            TerminalWorkbenchScreen(
+                session: session,
+                model: model,
+                isActive: true,
+                onBack: {},
+                onExternalAction: { _ in },
+                showsInspectorToggle: true,
+                isInspectorOpen: inspectorOpen,
+                onToggleInspector: { inspectorOpen.toggle() }
+            )
+            .inspector(isPresented: $inspectorOpen) {
+                Text("Files")
+                    .inspectorColumnWidth(
+                        min: ShellPresentation.inspectorMinWidth,
+                        ideal: ShellPresentation.inspectorIdealWidth,
+                        max: ShellPresentation.inspectorMaxWidth
+                    )
+            }
+        }
+    }
+
+    @Test("Collapsing and expanding the trailing inspector keeps exactly one canvas mount")
+    func inspectorToggleKeepsSingleCanvasMount() async throws {
+        let session = WorkspaceSession(
+            accessURL: URL(string: "http://127.0.0.1:1")!,
+            bearer: "test"
+        )
+        let probe = CanvasProbe()
+        let model = makeModel(session, probe)
+        await model.open(
+            TerminalOpenRequest(attach: .workspace(terminalID: "t1"), title: "zsh", cwd: "/repo")
+        )
+
+        var isOpen = true
+        let binding = Binding(get: { isOpen }, set: { isOpen = $0 })
+        let window = try makeWindow()
+        window.frame = CGRect(x: 0, y: 0, width: 1194, height: 834)
+        let controller = UIHostingController(
+            rootView: InspectorHarness(session: session, model: model, inspectorOpen: binding)
+        )
+        window.rootViewController = controller
+        window.isHidden = false
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(probe.installs == 1)
+
+        // Collapse on iPad landscape -> must not remount canvas.
+        isOpen = false
+        controller.rootView = InspectorHarness(session: session, model: model, inspectorOpen: binding)
+        try await Task.sleep(for: .milliseconds(120))
+        #expect(probe.installs == 1)
+
+        // Re-open on iPhone Duo inner width -> must not remount canvas.
+        window.frame = CGRect(x: 0, y: 0, width: 669, height: 951)
+        isOpen = true
+        controller.rootView = InspectorHarness(session: session, model: model, inspectorOpen: binding)
+        try await Task.sleep(for: .milliseconds(120))
+        #expect(probe.installs == 1)
+
+        // Collapse again -> still exactly one mount.
+        isOpen = false
+        controller.rootView = InspectorHarness(session: session, model: model, inspectorOpen: binding)
+        try await Task.sleep(for: .milliseconds(120))
+        #expect(probe.installs == 1)
+    }
 }

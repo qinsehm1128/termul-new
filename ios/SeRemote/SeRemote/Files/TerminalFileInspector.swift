@@ -39,11 +39,13 @@ struct TerminalFileInspector: View {
     }
 }
 
-/// Right-hand iPad inspector: a Files / Agent segment switch over the terminal
-/// file browser and the caller-supplied agent surface.
+/// Right-hand iPad / iPhone Duo inspector: a Files / Agent segment switch over
+/// the terminal file browser and the caller-supplied agent surface, with an
+/// explicit collapse action so the terminal canvas can always reclaim full width.
 @MainActor
 struct TerminalInspector: View {
     @Environment(\.sePalette) private var palette
+    @Environment(\.seThemeMode) private var mode
 
     let session: WorkspaceSession
     let rootPath: String
@@ -51,6 +53,7 @@ struct TerminalInspector: View {
     let agentAvailable: Bool
     @Binding var segment: TerminalInspectorSegment
     let onOpenFile: (String) -> Void
+    let onClose: (() -> Void)?
     let agentContent: AnyView
 
     init(
@@ -60,6 +63,7 @@ struct TerminalInspector: View {
         agentAvailable: Bool,
         segment: Binding<TerminalInspectorSegment>,
         onOpenFile: @escaping (String) -> Void,
+        onClose: (() -> Void)? = nil,
         agentContent: AnyView
     ) {
         self.session = session
@@ -68,6 +72,7 @@ struct TerminalInspector: View {
         self.agentAvailable = agentAvailable
         self._segment = segment
         self.onOpenFile = onOpenFile
+        self.onClose = onClose
         self.agentContent = agentContent
     }
 
@@ -95,8 +100,8 @@ struct TerminalInspector: View {
     }
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(String(localized: "Files"))
+        HStack(alignment: .center, spacing: 8) {
+            Text(segment.title)
                 .font(SeNocturneType.font(15, weight: .semibold))
                 .foregroundStyle(palette.ink)
             Spacer(minLength: 8)
@@ -104,9 +109,39 @@ struct TerminalInspector: View {
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundStyle(palette.inkTertiary)
                 .lineLimit(1)
+            if let onClose {
+                Button(action: onClose) {
+                    Image(systemName: "sidebar.trailing")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(palette.inkSecondary)
+                        .frame(width: 30, height: 30)
+                        .background(mode.insetFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .strokeBorder(mode.insetStroke, lineWidth: 1)
+                        }
+                        .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(SePressable())
+                .accessibilityLabel(String(localized: "Collapse inspector"))
+                .accessibilityIdentifier("terminal-inspector-close")
+            }
         }
-        .padding(.horizontal, 18)
-        .padding(.top, 14)
+        .padding(.leading, 18)
+        .padding(.trailing, onClose == nil ? 18 : 10)
+        .padding(.top, 10)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 24)
+                .onEnded { value in
+                    if let onClose,
+                       value.translation.width > 56,
+                       abs(value.translation.height) < 48 {
+                        onClose()
+                    }
+                }
+        )
     }
 
     private var segmentRow: some View {

@@ -29,6 +29,11 @@ struct TerminalsHubScreen: View {
     /// Forwards a notice dismissal to the shell so cross-tab notices (deep
     /// links, ⌘K misses) clear at their source, not only locally.
     var onDismissNotice: (() -> Void)? = nil
+    /// When mounted inside the native `TabView` + `NavigationStack` shell, host
+    /// switching and utility actions live in the system `.toolbar` (which becomes
+    /// the vertical trailing bar on iPhone Duo), so the embedded `SeHostSwitch`
+    /// row is omitted to avoid duplicate chrome.
+    var usesSystemChrome = false
 
     @State private var newTerminal: NewTerminalRoute?
     @State private var renaming: QuickTerminalRecordWire?
@@ -136,17 +141,19 @@ struct TerminalsHubScreen: View {
 
     private func header(_ index: TerminalHubIndex) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            SeHostSwitch(
-                title: hostName,
-                meta: hostMeta,
-                onHost: onSelectHost,
-                onTheme: onToggleTheme,
-                themeIcon: themeIcon,
-                onRail: onOpenDrawer,
-                onCommand: onOpenCommand
-            )
-            .padding(.horizontal, -18)
-            .padding(.top, 8)
+            if !usesSystemChrome {
+                SeHostSwitch(
+                    title: hostName,
+                    meta: hostMeta,
+                    onHost: onSelectHost,
+                    onTheme: onToggleTheme,
+                    themeIcon: themeIcon,
+                    onRail: onOpenDrawer,
+                    onCommand: onOpenCommand
+                )
+                .padding(.horizontal, -18)
+                .padding(.top, 8)
+            }
 
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text(verbatim: hubText("Terminals"))
@@ -168,6 +175,7 @@ struct TerminalsHubScreen: View {
                     .accessibilityLabel(Text(hubText("\(index.totalRunning) running")))
                 }
             }
+            .padding(.top, usesSystemChrome ? 4 : 0)
         }
     }
 

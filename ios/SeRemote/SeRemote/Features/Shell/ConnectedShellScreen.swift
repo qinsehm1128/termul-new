@@ -31,6 +31,7 @@ struct ConnectedShellScreen: View {
     @State private var showsChatCover = false
     @State private var preview: FilePreviewRequest?
     @State private var inspectorSegment: TerminalInspectorSegment = .files
+    @State private var inspectorOpenOverride: Bool?
     @State private var railCollapsed: Bool?
     @State private var openingSession = false
     @State private var selectionTask: Task<Void, Never>?
@@ -143,29 +144,65 @@ struct ConnectedShellScreen: View {
     var body: some View {
         GeometryReader { geometry in
             let sidebar = ShellPresentation.usesSidebar(isRegular: sizeClass == .regular, width: geometry.size.width)
+            let inlineInspector = ShellPresentation.usesInlineInspector(isRegular: sizeClass == .regular, width: geometry.size.width)
             let portrait = geometry.size.width <= geometry.size.height
             let collapsed = railCollapsed ?? ShellPresentation.defaultRailCollapsed(
                 width: geometry.size.width, height: geometry.size.height)
             let railWidth = collapsed ? ShellPresentation.railCollapsedWidth : ShellPresentation.railExpandedWidth
-            let showsInspector = sidebar && workbenchVisible
+            let defaultInspectorOpen = ShellPresentation.defaultInspectorOpen(
+                width: geometry.size.width,
+                height: geometry.size.height,
+                isRegular: sizeClass == .regular
+            )
+            let idealInspectorWidth = ShellPresentation.inspectorColumnWidth(
+                availableWidth: geometry.size.width,
+                railWidth: sidebar ? railWidth : 0
+            )
+            let inspectorOpen = inlineInspector && workbenchVisible && (inspectorOpenOverride ?? defaultInspectorOpen)
+            let inspectorBinding = Binding<Bool>(
+                get: { inspectorOpen },
+                set: { newValue in
+                    inspectorOpenOverride = newValue
+                    HostLog.ui.info("Inspector toggled open=\(newValue, privacy: .public)")
+                }
+            )
 
-            HStack(spacing: 0) {
+            ZStack(alignment: .leading) {
+                nativeHubTabs(sidebar: sidebar)
+                    .opacity(workbenchVisible ? 0 : 1)
+                    .allowsHitTesting(!workbenchVisible)
+                    .accessibilityHidden(workbenchVisible)
+
+                // Deliberately outside TabView and every layout conditional so
+                // switching tabs or toggling the inspector never reconstructs
+                // the mounted TerminalScreen (I1) or ends a host PTY (I5).
+                // The inspector modifier sits only on the workbench column so
+                // opening it never compresses the leading AdaptiveSidebarShell.
                 ZStack(alignment: .leading) {
-                    page(sidebar: sidebar)
-                        .padding(.leading, sidebar ? railWidth : 0)
-                        .safeAreaInset(edge: .bottom, spacing: 0) {
-                            if !sidebar && !workbenchVisible { bottomBar }
+                    workbench(
+                        inlineInspector: inlineInspector,
+                        isInspectorOpen: inspectorOpen,
+                        onToggleInspector: {
+                            toggleInspector(
+                                currentlyOpen: inspectorOpen,
+                                requested: .files,
+                                inlineInspector: inlineInspector
+                            )
                         }
-                        .opacity(workbenchVisible ? 0 : 1)
-                        .allowsHitTesting(!workbenchVisible)
-                        .accessibilityHidden(workbenchVisible)
-
-                    // Deliberately outside every navigation/layout conditional.
-                    workbench(sidebar: sidebar)
-                        .padding(.leading, sidebar ? railWidth : 0)
-                        .opacity(workbenchVisible ? 1 : 0)
-                        .allowsHitTesting(workbenchVisible)
-                        .accessibilityHidden(!workbenchVisible)
+                    )
+                    .duoBackgroundExtension()
+                    .inspector(isPresented: inspectorBinding) {
+                        inspector(root: fileRoot) {
+                            inspectorOpenOverride = false
+                            HostLog.ui.info("Inspector collapsed from header")
+                        }
+                        .inspectorColumnWidth(
+                            min: ShellPresentation.inspectorMinWidth,
+                            ideal: idealInspectorWidth,
+                            max: ShellPresentation.inspectorMaxWidth
+                        )
+                    }
+                    .padding(.leading, sidebar ? railWidth : 0)
 
                     if sidebar {
                         AdaptiveSidebarShell(
@@ -184,43 +221,76 @@ struct ConnectedShellScreen: View {
                             onOpenTerminal: { row in openListed(terminalID: row.id) }
                         )
                     }
+                }
+                .opacity(workbenchVisible ? 1 : 0)
+                .allowsHitTesting(workbenchVisible)
+                .accessibilityHidden(!workbenchVisible)
 
-                    if showsDrawer {
-                        phoneDrawer
-                    }
-
-                    if showsCommand {
-                        ConnectedCommandPalette(
-                            session: session,
-                            onOpenSession: {
-                                showsCommand = false
-                                reopenWorkbench()
-                            },
-                            onOpenConversation: { conversationID in
-                                showsCommand = false
-                                openConversation(id: conversationID)
-                            },
-                            onOpenProject: { projectID in
-                                showsCommand = false
-                                openProject(projectID)
-                            },
-                            onClose: { showsCommand = false }
-                        )
-                        .transition(.opacity)
-                        .zIndex(20)
-                    }
+                if showsDrawer {
+                    phoneDrawer
                 }
 
-                if showsInspector {
-                    inspector(root: fileRoot)
-                        .frame(width: 320)
-                        .transition(.move(edge: .trailing))
+                if showsCommand {
+                    ConnectedCommandPalette(
+                        session: session,
+                        onOpenSession: {
+                            showsCommand = false
+                            reopenWorkbench()
+                        },
+                        onOpenConversation: { conversationID in
+                            showsCommand = false
+                            openConversation(id: conversationID)
+                        },
+                        onOpenProject: { projectID in
+                            showsCommand = false
+                            openProject(projectID)
+                        },
+                        onClose: { showsCommand = false }
+                    )
+                    .transition(.opacity)
+                    .zIndex(20)
                 }
             }
-            .onChange(of: portrait) { _, _ in railCollapsed = nil }
+            .onChange(of: portrait) { _, _ in
+                railCollapsed = nil
+                inspectorOpenOverride = ShellPresentation.inspectorOverrideAfterOrientationChange(
+                    currentOverride: inspectorOpenOverride,
+                    newDefaultOpen: defaultInspectorOpen
+                )
+            }
+            .onChange(of: inlineInspector) { _, inline in
+                if !inline {
+                    inspectorOpenOverride = nil
+                }
+            }
+            .onReceive(ShortcutCenter.shortcuts) { shortcut in
+                switch shortcut {
+                case .toggleFiles:
+                    guard workbenchVisible else { return }
+                    toggleInspector(
+                        currentlyOpen: inspectorOpen,
+                        requested: .files,
+                        inlineInspector: inlineInspector
+                    )
+                case .focusChat:
+                    if workbenchVisible && inlineInspector && terminalModel.agentReady {
+                        inspectorSegment = .agent
+                        inspectorOpenOverride = true
+                    } else {
+                        navigation.select(.conversations)
+                    }
+                case .focusTerminal:
+                    if navigation.destination != .terminals {
+                        navigation.select(.terminals)
+                    } else if !workbenchVisible, navigation.openRequest != nil {
+                        reopenWorkbench()
+                    }
+                default:
+                    break
+                }
+            }
         }
         .background(palette.canvas.ignoresSafeArea())
-        .toolbar(.hidden, for: .navigationBar)
         .onAppear(perform: bootstrap)
         .onDisappear {
             selectionTask?.cancel()
@@ -341,67 +411,163 @@ struct ConnectedShellScreen: View {
         .animation(reduceMotion ? nil : SeNocturneMotion.quick, value: landingNotice)
     }
 
-    // MARK: - Pages
+    // MARK: - Pages (Native TabView for iPhone Duo vertical bar & iPad sidebar)
 
-    @ViewBuilder
-    private func page(sidebar: Bool) -> some View {
-        switch navigation.destination {
-        case .terminals:
-            TerminalsHubScreen(
-                session: session,
-                store: hub,
-                hostName: hostName,
-                hostMeta: session.phase == .connected
-                    ? String(localized: "Connected")
-                    : String(localized: "Connecting"),
-                themeIcon: themeIcon,
-                lastTerminalID: navigation.openRequest?.terminalID,
-                allowsCreate: link.allows("terminal.create"),
-                isRefreshing: refreshingHub,
-                notice: landingNotice,
-                query: $hubQuery,
-                onRefresh: { await refreshHub() },
-                onSelectHost: { showsHosts = true },
-                onToggleTheme: { settings.appearance = mode.toggled.appearance },
-                onOpenDrawer: {
-                    if sidebar { railCollapsed = false } else { showsDrawer = true }
-                },
-                onOpenCommand: { showsCommand = true },
-                onOpen: { request in Task { await open(request) } },
-                onDismissNotice: { landingNotice = nil }
-            )
-        case .conversations:
-            ConversationsScreen(
-                session: session,
-                hostName: hostName,
-                hostMeta: session.phase == .connected ? String(localized: "Connected") : String(localized: "Connecting"),
-                conversations: conversationEntries,
-                needs: needs,
-                summary: needSummary,
-                themeIcon: themeIcon,
-                onSelectHost: { showsHosts = true },
-                onOpenConversation: openConversation,
-                onOpenWorkbench: { showsChatCover = true },
-                onOpenNeeds: { showsNeeds = true },
-                onOpenCommand: { showsCommand = true },
-                onToggleTheme: { settings.appearance = mode.toggled.appearance },
-                onOpenRail: { showsDrawer = true }
-            )
-        case .tools:
-            WorkspaceHubScreen(
-                session: session,
-                onOpenSession: reopenWorkbench,
-                onOpenCommand: { showsCommand = true },
-                onToggleTheme: { settings.appearance = mode.toggled.appearance },
-                onOpenDrawer: { showsDrawer = true },
-                onSelectHost: { showsHosts = true },
-                onOpenSettings: { navigation.select(.settings) }
-            )
-        case .settings:
-            SettingsScreen(settings: settings, store: store, onBack: {
-                navigation.select(ConnectedShellScreen.settingsBackTarget(from: previousDestination))
-            })
+    private var destinationBinding: Binding<SidebarDestination> {
+        Binding(
+            get: { navigation.destination },
+            set: { navigation.select($0) }
+        )
+    }
+
+    private func nativeHubTabs(sidebar: Bool) -> some View {
+        TabView(selection: destinationBinding) {
+            Tab(
+                SidebarDestination.terminals.title,
+                systemImage: SidebarDestination.terminals.systemImage,
+                value: SidebarDestination.terminals
+            ) {
+                NavigationStack {
+                    TerminalsHubScreen(
+                        session: session,
+                        store: hub,
+                        hostName: hostName,
+                        hostMeta: session.phase == .connected
+                            ? String(localized: "Connected")
+                            : String(localized: "Connecting"),
+                        themeIcon: themeIcon,
+                        lastTerminalID: navigation.openRequest?.terminalID,
+                        allowsCreate: link.allows("terminal.create"),
+                        isRefreshing: refreshingHub,
+                        notice: landingNotice,
+                        query: $hubQuery,
+                        onRefresh: { await refreshHub() },
+                        onSelectHost: { showsHosts = true },
+                        onToggleTheme: { settings.appearance = mode.toggled.appearance },
+                        onOpenDrawer: {
+                            if sidebar { railCollapsed = false } else { showsDrawer = true }
+                        },
+                        onOpenCommand: { showsCommand = true },
+                        onOpen: { request in Task { await open(request) } },
+                        onDismissNotice: { landingNotice = nil },
+                        usesSystemChrome: true
+                    )
+                    .toolbar { hubToolbar(showsCompactDrawer: !sidebar) }
+                }
+            }
+
+            Tab(
+                SidebarDestination.conversations.title,
+                systemImage: SidebarDestination.conversations.systemImage,
+                value: SidebarDestination.conversations
+            ) {
+                NavigationStack {
+                    ConversationsScreen(
+                        session: session,
+                        hostName: hostName,
+                        hostMeta: session.phase == .connected ? String(localized: "Connected") : String(localized: "Connecting"),
+                        conversations: conversationEntries,
+                        needs: needs,
+                        summary: needSummary,
+                        themeIcon: themeIcon,
+                        onSelectHost: { showsHosts = true },
+                        onOpenConversation: openConversation,
+                        onOpenWorkbench: { showsChatCover = true },
+                        onOpenNeeds: { showsNeeds = true },
+                        onOpenCommand: { showsCommand = true },
+                        onToggleTheme: { settings.appearance = mode.toggled.appearance },
+                        onOpenRail: { showsDrawer = true },
+                        usesSystemChrome: true
+                    )
+                    .toolbar { hubToolbar(showsCompactDrawer: !sidebar) }
+                }
+            }
+            .badge(needSummary.total)
+
+            Tab(
+                SidebarDestination.tools.title,
+                systemImage: SidebarDestination.tools.systemImage,
+                value: SidebarDestination.tools
+            ) {
+                WorkspaceHubScreen(
+                    session: session,
+                    onOpenSession: reopenWorkbench,
+                    onOpenCommand: { showsCommand = true },
+                    onToggleTheme: { settings.appearance = mode.toggled.appearance },
+                    onOpenDrawer: { showsDrawer = true },
+                    onSelectHost: { showsHosts = true },
+                    onOpenSettings: { navigation.select(.settings) },
+                    usesSystemChrome: true,
+                    showsCompactDrawerButton: !sidebar
+                )
+            }
+
+            Tab(
+                SidebarDestination.settings.title,
+                systemImage: SidebarDestination.settings.systemImage,
+                value: SidebarDestination.settings
+            ) {
+                NavigationStack {
+                    SettingsScreen(
+                        settings: settings,
+                        store: store,
+                        onBack: {
+                            navigation.select(ConnectedShellScreen.settingsBackTarget(from: previousDestination))
+                        },
+                        usesSystemChrome: true
+                    )
+                    .toolbar { hubToolbar(showsCompactDrawer: !sidebar) }
+                }
+            }
         }
+        .tabViewStyle(.sidebarAdaptable)
+        .duoPreferredTabBarPlacement()
+        .tint(palette.ink)
+    }
+
+    @ToolbarContentBuilder
+    private func hubToolbar(showsCompactDrawer: Bool) -> some ToolbarContent {
+        if showsCompactDrawer {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    showsDrawer = true
+                } label: {
+                    Image(systemName: "sidebar.left")
+                }
+                .accessibilityLabel(String(localized: "All destinations"))
+            }
+            .duoVisibilityPriority(.standard)
+        }
+
+        ToolbarItem(placement: .topBarLeading) {
+            Button {
+                showsHosts = true
+            } label: {
+                Label(hostName, systemImage: "server.rack")
+            }
+            .accessibilityLabel(String(localized: "Select host"))
+        }
+        .duoVisibilityPriority(.standard)
+
+        ToolbarItem(placement: DuoToolbarPlacement.pinnedTrailing) {
+            Button {
+                showsCommand = true
+            } label: {
+                Image(systemName: "command")
+            }
+            .accessibilityLabel(String(localized: "Command palette"))
+        }
+        .duoVisibilityPriority(.high)
+
+        ToolbarItem(placement: .topBarTrailing) {
+            Button {
+                settings.appearance = mode.toggled.appearance
+            } label: {
+                Image(systemName: mode == .night ? "moon" : "sun.max")
+            }
+            .accessibilityLabel(String(localized: "Toggle theme"))
+        }
+        .duoVisibilityPriority(.low)
     }
 
     // MARK: - Workbench
@@ -467,29 +633,43 @@ struct ConnectedShellScreen: View {
         .presentationDragIndicator(.visible)
     }
 
-    private func workbench(sidebar: Bool) -> some View {
+    private func workbench(
+        inlineInspector: Bool,
+        isInspectorOpen: Bool,
+        onToggleInspector: @escaping () -> Void
+    ) -> some View {
         TerminalWorkbenchScreen(
             session: session,
             model: terminalModel,
             isActive: workbenchVisible,
             onBack: closeWorkbench,
             onExternalAction: { action in
-                handleExternalAction(action, sidebar: sidebar)
+                handleExternalAction(
+                    action,
+                    inlineInspector: inlineInspector,
+                    inspectorOpen: isInspectorOpen
+                )
             },
             onOpenPreview: { path in
                 presentPreview(path)
             },
-            hasAgentInspector: sidebar,
-            onShowAgentInspector: { inspectorSegment = .agent },
+            hasAgentInspector: inlineInspector,
+            onShowAgentInspector: {
+                inspectorSegment = .agent
+                inspectorOpenOverride = true
+            },
             onOpenSwitcher: {
                 switcherQuery = .init()
                 showsSwitcher = true
                 Task { await refreshHub() }
-            }
+            },
+            showsInspectorToggle: inlineInspector,
+            isInspectorOpen: isInspectorOpen,
+            onToggleInspector: onToggleInspector
         )
     }
 
-    private func inspector(root: String?) -> some View {
+    private func inspector(root: String?, onClose: @escaping () -> Void) -> some View {
         Group {
             if let root, !root.isEmpty {
                 TerminalInspector(
@@ -499,11 +679,31 @@ struct ConnectedShellScreen: View {
                     agentAvailable: terminalModel.agentReady,
                     segment: $inspectorSegment,
                     onOpenFile: { presentPreview($0) },
+                    onClose: onClose,
                     agentContent: AnyView(agentInspector)
                 )
             } else {
                 VStack(alignment: .leading, spacing: 10) {
-                    SeEyebrow(text: "Inspector")
+                    HStack(alignment: .center, spacing: 8) {
+                        SeEyebrow(text: "Inspector")
+                        Spacer(minLength: 0)
+                        Button(action: onClose) {
+                            Image(systemName: "sidebar.trailing")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(palette.inkSecondary)
+                                .frame(width: 30, height: 30)
+                                .background(mode.insetFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .strokeBorder(mode.insetStroke, lineWidth: 1)
+                                }
+                                .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(SePressable())
+                        .accessibilityLabel(String(localized: "Collapse inspector"))
+                        .accessibilityIdentifier("terminal-inspector-close")
+                    }
                     NocturneEmptyState(
                         systemImage: "terminal",
                         title: String(localized: "No live terminal"),
@@ -516,9 +716,6 @@ struct ConnectedShellScreen: View {
             }
         }
         .background(palette.canvas)
-        .overlay(alignment: .leading) {
-            Rectangle().fill(mode.hairline).frame(width: 1)
-        }
     }
 
     @ViewBuilder
@@ -540,15 +737,6 @@ struct ConnectedShellScreen: View {
     }
 
     // MARK: - Phone chrome
-
-    private var bottomBar: some View {
-        SeBottomBar(
-            selection: navigation.destination,
-            onTerminals: { navigation.select(.terminals) },
-            onConversations: { navigation.select(.conversations) },
-            onTools: { navigation.select(.tools) }
-        )
-    }
 
     private var phoneDrawer: some View {
         ZStack(alignment: .leading) {
@@ -868,18 +1056,41 @@ struct ConnectedShellScreen: View {
         }
     }
 
-    private func handleExternalAction(_ action: TerminalPanelAction, sidebar: Bool) {
+    private func handleExternalAction(
+        _ action: TerminalPanelAction,
+        inlineInspector: Bool,
+        inspectorOpen: Bool
+    ) {
         switch action {
         case .files:
-            if sidebar {
-                inspectorSegment = .files
-            } else {
-                showsFiles = true
-            }
+            toggleInspector(
+                currentlyOpen: inspectorOpen,
+                requested: .files,
+                inlineInspector: inlineInspector
+            )
         case .attach:
             showsAttachment = true
         case .desktop, .agent, .more:
             break
+        }
+    }
+
+    private func toggleInspector(
+        currentlyOpen: Bool,
+        requested: TerminalInspectorSegment,
+        inlineInspector: Bool
+    ) {
+        if inlineInspector {
+            let next = ShellPresentation.nextInspectorState(
+                isOpen: currentlyOpen,
+                current: inspectorSegment,
+                requested: requested
+            )
+            inspectorSegment = next.segment
+            inspectorOpenOverride = next.isOpen
+            HostLog.ui.info("Inspector state open=\(next.isOpen, privacy: .public) segment=\(next.segment.rawValue, privacy: .public)")
+        } else if requested == .files {
+            showsFiles.toggle()
         }
     }
 

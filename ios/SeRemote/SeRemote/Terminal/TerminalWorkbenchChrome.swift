@@ -21,6 +21,10 @@ struct TerminalWorkbenchChrome<Canvas: View>: View {
     var onSpawnTerminal: () -> Void
     /// Tapping the title opens the cross-project switcher.
     var onOpenSwitcher: (() -> Void)? = nil
+    /// Regular-width collapsible file/agent inspector toggle button.
+    var showsInspectorToggle = false
+    var isInspectorOpen = false
+    var onToggleInspector: (() -> Void)? = nil
 
     @Environment(\.sePalette) private var palette
     @Environment(\.seThemeMode) private var mode
@@ -82,7 +86,39 @@ struct TerminalWorkbenchChrome<Canvas: View>: View {
             if model.agentReady {
                 agentChip
             }
+            if showsInspectorToggle, let onToggleInspector {
+                inspectorToggleButton(action: onToggleInspector)
+            }
         }
+    }
+
+    private func inspectorToggleButton(action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: "sidebar.trailing")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(isInspectorOpen ? palette.canvas : palette.ink)
+                .frame(width: 36, height: 32)
+                .background(
+                    isInspectorOpen ? AnyShapeStyle(palette.ink) : AnyShapeStyle(.ultraThinMaterial),
+                    in: Capsule(style: .continuous)
+                )
+                .background(
+                    isInspectorOpen ? Color.clear : palette.card.opacity(0.55),
+                    in: Capsule(style: .continuous)
+                )
+                .overlay {
+                    Capsule(style: .continuous)
+                        .strokeBorder(isInspectorOpen ? palette.ink : mode.insetStroke, lineWidth: 1)
+                }
+                .contentShape(Capsule(style: .continuous))
+                .frame(minWidth: SeSpace.hitTarget, minHeight: SeSpace.hitTarget)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isInspectorOpen
+            ? Text("Hide files panel")
+            : Text("Show files panel"))
+        .accessibilityAddTraits(isInspectorOpen ? .isSelected : [])
+        .accessibilityIdentifier("terminal-inspector-toggle")
     }
 
     private var titlePill: some View {

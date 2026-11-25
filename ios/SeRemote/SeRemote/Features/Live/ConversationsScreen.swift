@@ -20,6 +20,7 @@ struct ConversationsScreen: View {
     let onOpenCommand: () -> Void
     let onToggleTheme: () -> Void
     let onOpenRail: () -> Void
+    var usesSystemChrome = false
 
     @Environment(\.sePalette) private var palette
     @Environment(\.seThemeMode) private var mode
@@ -34,20 +35,22 @@ struct ConversationsScreen: View {
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
-                SeHostSwitch(
-                    title: hostName,
-                    meta: hostMeta,
-                    onHost: onSelectHost,
-                    onTheme: onToggleTheme,
-                    themeIcon: themeIcon,
-                    onRail: onOpenRail,
-                    onCommand: onOpenCommand
-                )
-                .padding(.top, 8)
+                if !usesSystemChrome {
+                    SeHostSwitch(
+                        title: hostName,
+                        meta: hostMeta,
+                        onHost: onSelectHost,
+                        onTheme: onToggleTheme,
+                        themeIcon: themeIcon,
+                        onRail: onOpenRail,
+                        onCommand: onOpenCommand
+                    )
+                    .padding(.top, 8)
+                }
 
                 header
                     .padding(.horizontal, 18)
-                    .padding(.top, 16)
+                    .padding(.top, usesSystemChrome ? 6 : 16)
 
                 SeNeedStrip(permissions: summary.permissions, failures: summary.failures, onTap: onOpenNeeds)
 
