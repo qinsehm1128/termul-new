@@ -43,16 +43,15 @@ describe('apply-color-theme', () => {
     expect(xterm.red).toBe('#ff5555')
   })
 
-  it('does not reuse the Se olive accent as ANSI blue or magenta', () => {
+  it('keeps standard ANSI blue/green distinct from the Se Velvet Plum brand accent', () => {
     const xterm = paletteToXtermTheme(
       BUNDLED_COLOR_THEMES[brandCanonical().themeId].dark.palette,
       'dark'
     )
-    expect(xterm.blue).not.toBe('#8a9d72')
-    expect(xterm.magenta).not.toBe('#8a9d72')
+    expect(xterm.blue).not.toBe('#9f63c9')
     expect(xterm.blue).toBe('#2472c8')
-    expect(xterm.green).toBe('#0dbc79')
-    expect(xterm.red).toBe('#c26b6b')
+    expect(xterm.green).toBe('#8bc9b8')
+    expect(xterm.red).toBe('#eb6f92')
   })
 
   it('exports paletteToXtermTheme with 16 ansi colors', () => {

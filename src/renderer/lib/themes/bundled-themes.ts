@@ -19,30 +19,30 @@ export interface ColorThemeFamily {
  * anchors the compatibility alias on this binding rather than on a key lookup.
  */
 const BRAND_DARK_THEME: ColorThemeDefinition = {
-  // syntax: VS Code Dark+ (Se default editor)
+  // Se Velvet Plum — moonlit plum-obsidian base with iris/plum velvet accent
   id: brandCanonical().themeId,
   name: 'Se',
   appearance: 'dark',
   familyId: brandCanonical().themeId,
   dark: {
     palette: {
-      neutral: '#131410',
-      ink: '#e6e5e0',
-      primary: '#8a9d72',
-      accent: '#8a9d72',
-      success: '#739d6c',
-      warning: '#c39f69',
-      error: '#c26b6b',
-      info: '#7898ab'
+      neutral: '#181523',
+      ink: '#ece8fa',
+      primary: '#9f63c9',
+      accent: '#c4a7e7',
+      success: '#8bc9b8',
+      warning: '#f6c177',
+      error: '#eb6f92',
+      info: '#9ccfd8'
     },
     overrides: {
-      'syntax-comment': '#6a9955',
+      'syntax-comment': '#7e7599',
       'syntax-keyword': '#c586c0',
-      'syntax-string': '#ce9178',
-      'syntax-type': '#4ec9b0',
-      'syntax-constant': '#b5cea8',
-      'syntax-variable': '#9cdcfe',
-      'syntax-property': '#9cdcfe',
+      'syntax-string': '#f6c177',
+      'syntax-type': '#9ccfd8',
+      'syntax-constant': '#c4a7e7',
+      'syntax-variable': '#9ccfd8',
+      'syntax-property': '#9ccfd8',
       'syntax-function': '#dcdcaa'
     }
   }

@@ -10,52 +10,68 @@
 
 @layer base {
   :root {
-    /* Se graphite — warm, low-contrast IDE chrome. */
-    --background: 72 12% 7%; /* #12130f */
-    --foreground: 48 12% 89%; /* warm paper-white */
+    /* Se Velvet Plum — velvety moonlit plum-obsidian surfaces with iris accent. */
+    --background: 253 25% 11%; /* #181523 */
+    --foreground: 253 64% 95%; /* #ece8fa */
 
-    /* Surfaces stay close together; separators and typography carry hierarchy. */
-    --card: 72 10% 10%;
-    --card-foreground: 48 12% 89%;
+    /* Surfaces stay close together; hairline borders and typography carry hierarchy. */
+    --card: 253 24% 14%; /* #201c2e */
+    --card-foreground: 253 64% 95%;
 
-    --popover: 72 9% 11%;
-    --popover-foreground: 48 12% 89%;
+    --popover: 253 24% 16%; /* #242034 */
+    --popover-foreground: 253 64% 95%;
 
-    /* Muted lichen accent; reserve it for focus and direct actions. */
-    --primary: 86 18% 53%; /* restrained lichen */
-    --primary-foreground: 48 16% 96%;
+    /* Velvet plum primary CTA; iris lavender accent for focus and highlights. */
+    --primary: 275 49% 59%; /* #9f63c9 */
+    --primary-foreground: 266 100% 99%; /* #fcf9ff */
 
-    --secondary: 72 8% 13%;
-    --secondary-foreground: 48 8% 74%;
+    --secondary: 253 24% 18%; /* #29243b */
+    --secondary-foreground: 253 24% 73%; /* #b0a9c9 */
 
-    --muted: 72 7% 15%;
-    --muted-foreground: 48 5% 57%;
+    --muted: 253 20% 20%;
+    --muted-foreground: 253 16% 54%; /* #7f779b */
 
-    --accent: 86 18% 53%;
-    --accent-foreground: 48 16% 96%;
+    --accent: 267 57% 78%; /* #c4a7e7 */
+    --accent-foreground: 253 35% 12%;
 
-    /* Status colors */
-    --destructive: 0 42% 59%;
-    --destructive-foreground: 48 16% 96%;
-    /* Confirmation / completed (distinct from primary blue + connection) */
-    --success: 112 20% 52%;
-    --success-foreground: 48 16% 96%;
-    /* Live connection lamp (info cyan — not the same as success green) */
-    --connection: 202 23% 57%;
-    --warning: 36 43% 59%;
-    --warning-foreground: 72 12% 7%;
+    /* Status colors — harmonized with Velvet Plum (Rosé Pine Moon inspired) */
+    --destructive: 343 76% 68%; /* #eb6f92 */
+    --destructive-foreground: 266 100% 99%;
+    /* Confirmation / completed (soft pine jade) */
+    --success: 164 36% 67%; /* #8bc9b8 */
+    --success-foreground: 253 35% 12%;
+    /* Live connection lamp (calm foam cyan) */
+    --connection: 189 43% 73%; /* #9ccfd8 */
+    --warning: 35 88% 72%; /* #f6c177 */
+    --warning-foreground: 253 25% 11%;
 
-    --border: 66 7% 19%;
-    --input: 66 7% 20%;
-    --ring: 86 20% 58%;
+    --border: 253 20% 23%;
+    --input: 253 20% 24%;
+    --ring: 275 49% 59%;
 
-    --radius: 0.375rem;
+    --radius: 0.4375rem;
 
-    /* Custom easing curves — stronger than browser defaults so animations
-       feel intentional. Reference: easing.dev (Emil Kowalski). */
+    /* Custom easing & spring curves — snappy intentional feel without sluggishness. */
     --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
     --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
     --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+    --ease-panel: cubic-bezier(0.22, 1, 0.36, 1);
+    --spring-snappy: linear(
+      0,
+      0.013 0.8%,
+      0.05 1.7%,
+      0.194 3.8%,
+      0.654 9.5%,
+      0.822 12.2%,
+      0.946 15.1%,
+      1.022 18.2%,
+      1.058 21.6%,
+      1.063 25.4%,
+      1.015 39.8%,
+      0.996 52.3%,
+      1.001 72%,
+      1
+    );
 
     /* Transitions.dev tooltip open/close tokens (Radix maps delay via
        TooltipProvider delayDuration — do not also set CSS transition-delay
@@ -68,41 +84,41 @@
     --tt-out-ease: ease-out;
 
     /* Terminal-specific */
-    --terminal-bg: 72 12% 7%;
-    --terminal-fg: 48 9% 85%;
+    --terminal-bg: 253 25% 11%;
+    --terminal-fg: 253 64% 95%;
 
     /* Surface layers */
-    --surface-dark: 72 10% 10%;
-    --surface-darker: 72 12% 7%;
+    --surface-dark: 253 24% 14%;
+    --surface-darker: 253 25% 11%;
 
-    --status-bar: 72 9% 9%;
-    --status-bar-foreground: 48 8% 69%;
+    --status-bar: 253 26% 12%;
+    --status-bar-foreground: 253 22% 72%;
 
-    /* Shimmer text (transitions.dev) — demo hex defaults */
+    /* Shimmer text (transitions.dev) */
     --shimmer-dur: 2000ms;
-    --shimmer-base: #6e6e6e;
-    --shimmer-highlight: #ededed;
+    --shimmer-base: #787094;
+    --shimmer-highlight: #ece8fa;
     --shimmer-band: 400%;
     --shimmer-ease: linear;
 
     /* Project colors */
-    --project-blue: 214 34% 58%;
-    --project-purple: 270 27% 61%;
-    --project-green: 120 24% 52%;
-    --project-yellow: 43 38% 59%;
-    --project-red: 2 37% 60%;
-    --project-cyan: 188 30% 55%;
-    --project-pink: 334 28% 61%;
-    --project-orange: 27 38% 57%;
+    --project-blue: 214 42% 65%;
+    --project-purple: 267 57% 75%;
+    --project-green: 164 36% 62%;
+    --project-yellow: 35 80% 70%;
+    --project-red: 343 72% 66%;
+    --project-cyan: 189 43% 68%;
+    --project-pink: 334 52% 70%;
+    --project-orange: 24 68% 66%;
 
-    --sidebar-background: 72 11% 8%;
-    --sidebar-foreground: 48 8% 74%;
-    --sidebar-primary: 86 18% 53%;
-    --sidebar-primary-foreground: 48 16% 96%;
-    --sidebar-accent: 72 8% 13%;
-    --sidebar-accent-foreground: 48 12% 89%;
-    --sidebar-border: 66 7% 18%;
-    --sidebar-ring: 86 20% 58%;
+    --sidebar-background: 253 25% 12%;
+    --sidebar-foreground: 253 24% 74%;
+    --sidebar-primary: 275 49% 59%;
+    --sidebar-primary-foreground: 266 100% 99%;
+    --sidebar-accent: 253 24% 18%;
+    --sidebar-accent-foreground: 253 64% 95%;
+    --sidebar-border: 253 20% 22%;
+    --sidebar-ring: 275 49% 59%;
   }
 }
 
@@ -165,18 +181,10 @@
     button:not(:disabled):not([data-press-feedback="off"]),
     [role="button"]:not([aria-disabled="true"]):not([data-press-feedback="off"]),
     summary:not([data-press-feedback="off"]) {
-      /* Note: 'transition' here is shorthand and resets transition-property
-         on the element. Components that rely on tailwind's transition-colors
-         (e.g. hover:bg-primary) may lose their colour transition on buttons
-         that match this selector. We accept that trade-off because press
-         feedback is the dominant interaction and per-component
-         transition-colors usually still wins by specificity / cascade order
-         (this rule is in @layer base, tailwind utilities are @layer
-         utilities and apply later). If a hover snap shows up, scope the
-         override per component or drop the shorthand here in favour of
-         transition-property: transform; transition-duration: 120ms;
-         transition-timing-function: var(--ease-out); */
-      transition: transform 100ms var(--ease-out);
+      /* Base-layer defaults for buttons without an explicit transition-* utility. */
+      transition-property: transform, color, background-color, border-color, opacity;
+      transition-duration: 120ms;
+      transition-timing-function: var(--ease-out);
     }
 
     button:not(:disabled):not([data-press-feedback="off"]):active,

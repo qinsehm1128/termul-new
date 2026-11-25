@@ -6,7 +6,12 @@
  */
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { InAppConfirmHost, requestConfirm, resetInAppConfirm } from './in-app-confirm'
+import {
+  InAppConfirmHost,
+  requestConfirm,
+  requestPrompt,
+  resetInAppConfirm
+} from './in-app-confirm'
 
 async function findDialog(title: string): Promise<HTMLElement> {
   const heading = await screen.findByRole('heading', { name: title })
@@ -139,5 +144,63 @@ describe('InAppConfirmHost', () => {
 
     await expect(first).resolves.toBe(false)
     await expect(second).resolves.toBe(false)
+  })
+
+  it('resolves requestPrompt with trimmed user input on confirm and null on cancel', async () => {
+    render(<InAppConfirmHost />)
+
+    let submitted: Promise<string | null> = Promise.resolve(null)
+    act(() => {
+      submitted = requestPrompt({
+        title: 'Rename file',
+        message: 'Enter a new name:',
+        defaultValue: 'old.txt'
+      })
+    })
+
+    const panel = await findDialog('Rename file')
+    const input = within(panel).getByRole('textbox')
+    expect(input).toHaveValue('old.txt')
+
+    fireEvent.change(input, { target: { value: '  renamed.txt  ' } })
+    fireEvent.click(within(panel).getByRole('button', { name: 'Confirm' }))
+    await expect(submitted).resolves.toBe('renamed.txt')
+
+    let cancelled: Promise<string | null> = Promise.resolve('nope')
+    act(() => {
+      cancelled = requestPrompt({
+        title: 'New folder',
+        message: 'Folder name:'
+      })
+    })
+
+    const cancelPanel = await findDialog('New folder')
+    fireEvent.click(within(cancelPanel).getByRole('button', { name: 'Cancel' }))
+    await expect(cancelled).resolves.toBeNull()
+  })
+
+  it('ignores Enter and Escape while an IME composition is active in requestPrompt', async () => {
+    render(<InAppConfirmHost />)
+
+    let pending: Promise<string | null> = Promise.resolve('unset')
+    act(() => {
+      pending = requestPrompt({
+        title: 'IME Rename',
+        message: 'Name:',
+        defaultValue: '文件'
+      })
+    })
+
+    const panel = await findDialog('IME Rename')
+    const input = within(panel).getByRole('textbox')
+
+    // Simulate IME composition Enter (keyCode 229) and Escape — dialog must stay open.
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 229, isComposing: true })
+    fireEvent.keyDown(input, { key: 'Escape', keyCode: 229, isComposing: true })
+    expect(screen.getByRole('heading', { name: 'IME Rename' })).toBeInTheDocument()
+
+    // Non-composing Enter commits normally.
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 13 })
+    await expect(pending).resolves.toBe('文件')
   })
 })

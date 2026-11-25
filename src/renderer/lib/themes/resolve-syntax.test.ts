@@ -17,9 +17,9 @@ const EXPECTED_SYNTAX: Record<
 > = {
   [brandCanonical().themeId]: {
     keyword: '#c586c0',
-    string: '#ce9178',
+    string: '#f6c177',
     function: '#dcdcaa',
-    variable: '#9cdcfe'
+    variable: '#9ccfd8'
   },
   cursor: {
     keyword: '#82d2ce',
@@ -77,10 +77,10 @@ const EXPECTED_SYNTAX: Record<
     property: '#39c5cf'
   },
   [brandCanonical().themeFamilyLight]: {
-    keyword: '#0000ff',
-    string: '#a31515',
-    function: '#795e26',
-    variable: '#001080'
+    keyword: '#7d54b5',
+    string: '#b87924',
+    function: '#5b428a',
+    variable: '#3b7796'
   },
   'github-light': {
     keyword: '#cf222e',

@@ -40,11 +40,12 @@ export function ConfirmDialog({
   const { t } = useTranslation('common')
   const reducedMotion = useReducedMotion() ?? false
 
-  // Handle Escape key to close dialog
+  // Handle Escape key to close dialog (ignore IME composition dismissal)
   useEffect(() => {
     if (!isOpen) return
 
     const handleEscape = (e: globalThis.KeyboardEvent): void => {
+      if (e.isComposing || e.keyCode === 229) return
       if (e.key === 'Escape') {
         e.preventDefault()
         onCancel()
@@ -57,6 +58,7 @@ export function ConfirmDialog({
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
+      if (e.nativeEvent.isComposing || e.keyCode === 229) return
       if (e.key === 'Enter') {
         e.preventDefault()
         onConfirm()

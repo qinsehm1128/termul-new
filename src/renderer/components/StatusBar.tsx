@@ -15,11 +15,13 @@ import { useTranslation } from 'react-i18next'
 import { ContextBarSettingsPopover } from '@/components/ContextBarSettingsPopover'
 import { GitBranchPicker } from '@/components/GitBranchPicker'
 import { RemoteAccessPopover } from '@/components/RemoteAccessPopover'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { PluginStatusItems } from '@/features/plugins/PluginStatusItems'
 import { formatPath, useHomeDirectory } from '@/hooks/use-cwd'
 import { useTerminalRecovery } from '@/hooks/use-terminal-recovery'
 import { getColorClasses } from '@/lib/colors'
+import { terminalBoardStatus } from '@/lib/terminal-board'
 import { presentPendingUpdate, translateUpdateCopy } from '@/lib/updater-status'
 import { cn } from '@/lib/utils'
 import {
@@ -28,7 +30,7 @@ import {
   useShowGitStatus,
   useShowWorkingDirectory
 } from '@/stores/context-bar-settings-store'
-import { useActiveTerminal } from '@/stores/terminal-store'
+import { useActiveTerminal, useTerminalStore } from '@/stores/terminal-store'
 import { usePendingUpdatePlan, useUpdateDownloaded, useUpdateVersion } from '@/stores/updater-store'
 import type { Project } from '@/types/project'
 
@@ -224,10 +226,126 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
           </Tooltip>
         )}
 
-        <StatusItem icon={<Bell size={14} />} />
+        <StatusNotificationsPopover
+          updateDownloaded={updateDownloaded}
+          updateVersion={updateVersion}
+          pendingUpdateLabel={pendingUpdate?.label ?? null}
+        />
         <ContextBarSettingsPopover />
       </div>
     </div>
+  )
+}
+
+interface StatusNotificationsPopoverProps {
+  updateDownloaded: boolean
+  updateVersion: string | null
+  pendingUpdateLabel: string | null
+}
+
+function StatusNotificationsPopover({
+  updateDownloaded,
+  updateVersion,
+  pendingUpdateLabel
+}: StatusNotificationsPopoverProps): React.JSX.Element {
+  const { t } = useTranslation('shell')
+  const terminals = useTerminalStore((state) => state.terminals ?? [])
+  const selectTerminal = useTerminalStore((state) => state.selectTerminal)
+
+  const attentionTerminals = terminals.filter((terminal) => {
+    const status = terminalBoardStatus(terminal)
+    return status === 'attention' || status === 'disconnected'
+  })
+
+  const totalCount =
+    attentionTerminals.length + (updateDownloaded ? 1 : 0) + (pendingUpdateLabel ? 1 : 0)
+
+  return (
+    <Popover>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              aria-label={t('statusBar.notifications', { defaultValue: 'Notifications' })}
+              className="relative flex h-5 items-center gap-1 rounded-sm px-1.5 text-muted-foreground transition-[color,background-color] duration-150 ease-[var(--ease-out)] hover:bg-foreground/[0.045] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              <Bell size={14} />
+              {totalCount > 0 && (
+                <>
+                  <span
+                    className="size-1.5 rounded-full bg-warning"
+                    aria-hidden="true"
+                    data-testid="status-bar-notification-dot"
+                  />
+                  <span className="font-mono text-3xs tabular-nums text-foreground">
+                    {totalCount}
+                  </span>
+                </>
+              )}
+            </button>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="top">
+          {t('statusBar.notifications', { defaultValue: 'Notifications' })}
+        </TooltipContent>
+      </Tooltip>
+      <PopoverContent align="end" side="top" sideOffset={6} className="w-64 p-2">
+        <div className="mb-1.5 flex items-center justify-between px-1">
+          <span className="font-mono text-3xs font-medium uppercase tracking-wider text-muted-foreground">
+            {t('statusBar.notifications', { defaultValue: 'Notifications' })}
+          </span>
+          {totalCount > 0 && (
+            <span className="font-mono text-3xs tabular-nums text-muted-foreground">
+              {totalCount}
+            </span>
+          )}
+        </div>
+        {totalCount === 0 ? (
+          <p className="px-1 py-2 text-2xs text-muted-foreground">
+            {t('statusBar.noNotifications', { defaultValue: 'No pending alerts' })}
+          </p>
+        ) : (
+          <div className="space-y-1">
+            {attentionTerminals.map((terminal) => {
+              const status = terminalBoardStatus(terminal)
+              return (
+                <button
+                  key={terminal.id}
+                  type="button"
+                  onClick={() => selectTerminal?.(terminal.id)}
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-2xs text-foreground transition-colors hover:bg-secondary"
+                >
+                  <span
+                    className={cn(
+                      'size-1.5 shrink-0 rounded-full',
+                      status === 'disconnected' ? 'bg-destructive' : 'bg-warning'
+                    )}
+                    aria-hidden="true"
+                  />
+                  <span className="truncate font-medium">{terminal.name}</span>
+                  <span className="ml-auto font-mono text-3xs text-muted-foreground">{status}</span>
+                </button>
+              )
+            })}
+            {pendingUpdateLabel && (
+              <div className="flex items-center gap-2 rounded-md bg-secondary/40 px-2 py-1.5 text-2xs text-foreground">
+                <AlertTriangle size={12} className="shrink-0 text-warning" />
+                <span className="truncate">{pendingUpdateLabel}</span>
+              </div>
+            )}
+            {updateDownloaded && (
+              <div className="flex items-center gap-2 rounded-md bg-secondary/40 px-2 py-1.5 text-2xs text-foreground">
+                <Download size={12} className="shrink-0 text-success" />
+                <span className="truncate">
+                  {t('statusBar.updateReady', { version: updateVersion })}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
   )
 }
 

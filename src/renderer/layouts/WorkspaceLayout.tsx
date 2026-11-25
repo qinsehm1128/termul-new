@@ -29,14 +29,14 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog'
+import { SpringCollapsibleWidth, WorkspaceSkeleton } from '@/components/ui/motion-primitives'
 import { PanelFade } from '@/components/ui/panel-fade'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
-import { Skeleton } from '@/components/ui/skeleton'
 import { HiddenTerminalPopover } from '@/components/workspace/HiddenTerminalPopover'
 import { LastSessionNotice } from '@/components/workspace/LastSessionNotice'
-import { PanelResizeHandle } from '@/components/workspace/PanelResizeHandle'
 import { PaneRenderer } from '@/components/workspace/PaneRenderer'
 import { ResizableRail } from '@/components/workspace/ResizableRail'
+import { RightInspectorRail } from '@/components/workspace/RightInspectorRail'
 import { TerminalListPanel } from '@/components/workspace/TerminalListPanel'
 import { TerminalSwitcherBar } from '@/components/workspace/TerminalSwitcherBar'
 import { WorkspaceConflictBanner } from '@/components/workspace/WorkspaceConflictBanner'
@@ -66,7 +66,6 @@ import { useFileWatcher } from '@/hooks/use-file-watcher'
 import { handlePluginShortcut, usePluginKeyboardShortcuts } from '@/hooks/use-keyboard-shortcuts'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { PaneDndProvider } from '@/hooks/use-pane-dnd'
-import { usePersistedPanelSize } from '@/hooks/use-persisted-panel-size'
 import { usePinnedCommandsLoader } from '@/hooks/use-pinned-commands'
 import { flushPendingProjectsSnapshot } from '@/hooks/use-projects-persistence'
 import { useRecentCommandsLoader } from '@/hooks/use-recent-commands'
@@ -93,6 +92,7 @@ import { browserTabHide, browserTabShow } from '@/lib/browser-api'
 import { runCloseFlush } from '@/lib/close-flush'
 import { getColorClasses } from '@/lib/colors'
 import { isSaveFileShortcut, requestSaveEditorFile } from '@/lib/editor-save'
+import { requestConfirm, requestPrompt } from '@/lib/in-app-confirm'
 import { logFrontendError } from '@/lib/log-api'
 import { handlePaneShortcut } from '@/lib/pane-navigation'
 import { isMac, macOsTitlebarStripClass } from '@/lib/platform'
@@ -207,9 +207,9 @@ const SSHFileExplorer = lazy(() =>
   import('@/components/ssh/SSHFileExplorer').then((m) => ({ default: m.SSHFileExplorer }))
 )
 
-/** Lightweight skeleton Suspense fallback for lazy-loaded shell components. */
+/** Lightweight structured skeleton Suspense fallback for lazy-loaded shell components. */
 function ShellSkeleton(): React.JSX.Element {
-  return <Skeleton className="h-full w-full" />
+  return <WorkspaceSkeleton />
 }
 
 function getShortcutTargetContext(target: EventTarget | null): {
@@ -423,14 +423,6 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const isCliSessionPanelVisible = useCliSessionPanelVisible()
   const isTerminalListVisible = useTerminalListPanelVisible()
   const isSidebarVisible = useSidebarVisible()
-  const [cliRailHeight, setCliRailHeight] = usePersistedPanelSize(
-    // Canonical prefix (T-A08). `usePersistedPanelSize` reads and writes the
-    // same key, so this flips the write; `readPersistedPanelSize` still probes
-    // the legacy spelling, which is what carries an existing height over.
-    // Resolved here rather than at module scope — the brand seam is overridable.
-    `${brandCanonical().storageKeyPrefix}cli-session-rail-height`,
-    { initial: 260, min: 140, max: 720 }
-  )
   const isMobileWebShell = useMobileWebShell()
 
   // SSH state
@@ -456,7 +448,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   const handleSSHMkdir = useCallback(async () => {
     if (!sshConn.connectionId) return
-    const name = prompt(runtimeT('ssh', 'files.newFolderPrompt', 'New folder name:'))
+    const name = await requestPrompt({
+      title: runtimeT('ssh', 'files.newFolderTitle', 'New folder'),
+      message: runtimeT('ssh', 'files.newFolderPrompt', 'New folder name:'),
+      placeholder: 'folder-name'
+    })
     if (!name) return
     const newPath = sshConn.currentPath.endsWith('/')
       ? `${sshConn.currentPath}${name}`
@@ -478,7 +474,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   const handleSSHCreateFile = useCallback(async () => {
     if (!sshConn.connectionId) return
-    const name = prompt(runtimeT('ssh', 'files.newFilePrompt', 'New file name:'))
+    const name = await requestPrompt({
+      title: runtimeT('ssh', 'files.newFileTitle', 'New file'),
+      message: runtimeT('ssh', 'files.newFilePrompt', 'New file name:'),
+      placeholder: 'file.txt'
+    })
     if (!name) return
     const newPath = sshConn.currentPath.endsWith('/')
       ? `${sshConn.currentPath}${name}`
@@ -501,15 +501,15 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const handleSSHDelete = useCallback(
     async (entry: SFTPEntry) => {
       if (!sshConn.connectionId) return
-      if (
-        !confirm(
-          runtimeT('ssh', 'files.deletePrompt', 'Delete {{type}} "{{name}}"?', {
-            type: entry.entryType,
-            name: entry.name
-          })
-        )
-      )
-        return
+      const confirmed = await requestConfirm({
+        title: runtimeT('ssh', 'files.deleteTitle', 'Delete'),
+        message: runtimeT('ssh', 'files.deletePrompt', 'Delete {{type}} "{{name}}"?', {
+          type: entry.entryType,
+          name: entry.name
+        }),
+        variant: 'danger'
+      })
+      if (!confirmed) return
       try {
         const r = await sshApi.sftpDelete(sshConn.connectionId, entry.path)
         if (r.success) {
@@ -533,10 +533,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const handleSSHRename = useCallback(
     async (entry: SFTPEntry) => {
       if (!sshConn.connectionId) return
-      const newName = prompt(
-        runtimeT('ssh', 'files.renamePrompt', 'Rename "{{name}}" to:', { name: entry.name }),
-        entry.name
-      )
+      const newName = await requestPrompt({
+        title: runtimeT('ssh', 'files.renameTitle', 'Rename'),
+        message: runtimeT('ssh', 'files.renamePrompt', 'Rename "{{name}}" to:', {
+          name: entry.name
+        }),
+        defaultValue: entry.name
+      })
       if (!newName || newName === entry.name) return
       const pp = entry.path.substring(0, entry.path.lastIndexOf('/'))
       try {
@@ -2430,7 +2433,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
                     />
                   )}
                 </div>
-                {isTerminalListVisible && <TerminalListPanel />}
+                <SpringCollapsibleWidth
+                  open={isTerminalListVisible}
+                  data-testid="terminal-list-panel-spring"
+                >
+                  <TerminalListPanel />
+                </SpringCollapsibleWidth>
               </motion.div>
             </>
           ) : (
@@ -2917,103 +2925,53 @@ export default function WorkspaceLayout(): React.JSX.Element {
                     <LastSessionNotice onRestore={handleOpenProjectTerminal} />
                   </main>
 
-                  {/* File Explorer / CLI sessions / SSH - integrated right rail */}
-                  <PanelFade
-                    open={Boolean(
-                      (isExplorerVisible && explorerRootVisible) ||
-                        isCliSessionPanelVisible ||
-                        activeSSHProfile
-                    )}
-                    data-testid="explorer-rail-fade"
-                    className="h-full min-h-0 border-l border-border/70"
-                  >
-                    <ResizableRail
-                      side="right"
-                      storageKey={`${brandCanonical().storageKeyPrefix}file-explorer-width`}
-                      initial={256}
-                      min={220}
-                      max={560}
-                      className="bg-sidebar"
-                      resizeTitle={t('sidePanels.resizeRightRail')}
-                      resizeLabel={t('sidePanels.resizeRightRailAria')}
-                    >
-                      <div className="flex h-full min-h-0 flex-col">
-                        <PanelFade
-                          open={isCliSessionPanelVisible}
-                          data-testid="cli-session-panel-fade"
-                          className={
-                            (isExplorerVisible && explorerRootVisible) || activeSSHProfile
-                              ? 'relative min-h-0 shrink-0'
-                              : 'min-h-0 flex-1'
-                          }
-                        >
-                          <div
-                            className="h-full min-h-0"
-                            style={
-                              (isExplorerVisible && explorerRootVisible) || activeSSHProfile
-                                ? { height: cliRailHeight }
-                                : undefined
-                            }
-                          >
-                            <Suspense fallback={<ShellSkeleton />}>
-                              <CliSessionPanel />
-                            </Suspense>
-                          </div>
-                          {(isExplorerVisible && explorerRootVisible) || activeSSHProfile ? (
-                            <PanelResizeHandle
-                              axis="y"
-                              value={cliRailHeight}
-                              min={140}
-                              max={720}
-                              onChange={setCliRailHeight}
-                              title={t('sidePanels.resizeCliSplit')}
-                              label={t('sidePanels.resizeCliSplitAria')}
-                              className="bottom-0"
-                            />
-                          ) : null}
-                        </PanelFade>
-                        <PanelFade
-                          open={Boolean(isExplorerVisible && explorerRootVisible)}
-                          data-testid="file-explorer-panel-fade"
-                          className={
-                            activeSSHProfile || isCliSessionPanelVisible
-                              ? 'min-h-0 flex-1'
-                              : 'h-full'
-                          }
-                        >
+                  {/* File Explorer / CLI sessions / SSH - segmented right inspector rail */}
+                  <RightInspectorRail
+                    hasFiles={Boolean(isExplorerVisible && explorerRootVisible)}
+                    hasCli={isCliSessionPanelVisible}
+                    hasSsh={Boolean(activeSSHProfile)}
+                    storageKey={`${brandCanonical().storageKeyPrefix}file-explorer-width`}
+                    resizeTitle={t('sidePanels.resizeRightRail')}
+                    resizeLabel={t('sidePanels.resizeRightRailAria')}
+                    cliContent={
+                      <Suspense fallback={<ShellSkeleton />}>
+                        <CliSessionPanel />
+                      </Suspense>
+                    }
+                    filesContent={
+                      <Suspense fallback={<ShellSkeleton />}>
+                        <FileExplorer side="right" fillContainer />
+                      </Suspense>
+                    }
+                    sshContent={
+                      activeSSHProfile ? (
+                        <div className="flex h-full min-h-0 flex-col overflow-hidden bg-sidebar">
                           <Suspense fallback={<ShellSkeleton />}>
-                            <FileExplorer side="right" fillContainer />
+                            <SSHFileExplorer
+                              connectionId={sshConn.connectionId ?? ''}
+                              isConnected={sshConn.isConnected}
+                              sftpReady={sshConn.sftpReady}
+                              entries={sshConn.entries}
+                              currentPath={sshConn.currentPath}
+                              expandedDirs={sshConn.expandedDirs}
+                              childEntries={sshConn.childEntries}
+                              loadingDirs={sshConn.loadingDirs}
+                              isLoadingRoot={sshConn.isLoadingRoot}
+                              profileName={activeSSHProfile.name}
+                              onConnect={sshConn.handleConnect}
+                              onBrowseFiles={sshConn.handleBrowseFiles}
+                              onToggleDir={sshConn.toggleDirectory}
+                              onLoadDir={sshConn.loadDirectory}
+                              onMkdir={handleSSHMkdir}
+                              onCreateFile={handleSSHCreateFile}
+                              onDelete={handleSSHDelete}
+                              onRename={handleSSHRename}
+                            />
                           </Suspense>
-                        </PanelFade>
-                        {activeSSHProfile && (
-                          <div className="flex min-h-0 flex-1 flex-col overflow-hidden border-t border-border/70 bg-sidebar">
-                            <Suspense fallback={<ShellSkeleton />}>
-                              <SSHFileExplorer
-                                connectionId={sshConn.connectionId ?? ''}
-                                isConnected={sshConn.isConnected}
-                                sftpReady={sshConn.sftpReady}
-                                entries={sshConn.entries}
-                                currentPath={sshConn.currentPath}
-                                expandedDirs={sshConn.expandedDirs}
-                                childEntries={sshConn.childEntries}
-                                loadingDirs={sshConn.loadingDirs}
-                                isLoadingRoot={sshConn.isLoadingRoot}
-                                profileName={activeSSHProfile.name}
-                                onConnect={sshConn.handleConnect}
-                                onBrowseFiles={sshConn.handleBrowseFiles}
-                                onToggleDir={sshConn.toggleDirectory}
-                                onLoadDir={sshConn.loadDirectory}
-                                onMkdir={handleSSHMkdir}
-                                onCreateFile={handleSSHCreateFile}
-                                onDelete={handleSSHDelete}
-                                onRename={handleSSHRename}
-                              />
-                            </Suspense>
-                          </div>
-                        )}
-                      </div>
-                    </ResizableRail>
-                  </PanelFade>
+                        </div>
+                      ) : null
+                    }
+                  />
                 </div>
               </PaneDndProvider>
             </div>

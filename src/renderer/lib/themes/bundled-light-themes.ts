@@ -12,31 +12,31 @@ import type { ColorThemeDefinition } from './types'
  * table does not carry.
  */
 export const BRAND_LIGHT_THEME: ColorThemeDefinition = {
-  // syntax: VS Code Light+ fallback
+  // Se Velvet Dawn — warm alabaster light twin paired with velvet plum accent
   id: brandCanonical().themeFamilyLight,
   name: 'Se Light',
   appearance: 'light',
   familyId: brandCanonical().themeId,
   dark: {
     palette: {
-      neutral: '#ffffff',
-      ink: '#1e1e1e',
-      primary: '#0451a5',
-      accent: '#811f3f',
-      success: '#098658',
-      warning: '#cd9731',
-      error: '#cd3131',
-      info: '#0598bc'
+      neutral: '#faf7f5',
+      ink: '#251e38',
+      primary: '#7d54b5',
+      accent: '#9164cc',
+      success: '#2d8377',
+      warning: '#b87924',
+      error: '#b84266',
+      info: '#3b7796'
     },
     overrides: {
-      'syntax-comment': '#008000',
-      'syntax-keyword': '#0000ff',
-      'syntax-string': '#a31515',
-      'syntax-type': '#267f99',
-      'syntax-constant': '#098658',
-      'syntax-variable': '#001080',
-      'syntax-property': '#001080',
-      'syntax-function': '#795e26'
+      'syntax-comment': '#7f7696',
+      'syntax-keyword': '#7d54b5',
+      'syntax-string': '#b87924',
+      'syntax-type': '#2d8377',
+      'syntax-constant': '#b84266',
+      'syntax-variable': '#3b7796',
+      'syntax-property': '#3b7796',
+      'syntax-function': '#5b428a'
     }
   }
 }

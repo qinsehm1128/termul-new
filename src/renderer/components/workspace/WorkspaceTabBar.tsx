@@ -13,6 +13,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/shallow'
 import { pathBasename } from '@/components/lists'
+import { SpringSlidingPill } from '@/components/ui/motion-primitives'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
 import { TabAgentMark, TabRunMark } from '@/components/workspace/tab-marks'
 import { AgentIcon } from '@/features/agent-session/agents/AgentIcon'
@@ -709,7 +711,6 @@ export function WorkspaceTabBar({
   const [shells, setShells] = useState<DetectedShells | null>(null)
   const [loading, setLoading] = useState(true)
   const [hasOverflow, setHasOverflow] = useState(false)
-  const terminalMenuRef = useRef<HTMLDivElement>(null)
   const tabsContainerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -727,20 +728,6 @@ export function WorkspaceTabBar({
     }
     void fetchShells()
   }, [])
-
-  useEffect(() => {
-    const handleClickOutside = (e: globalThis.MouseEvent): void => {
-      if (terminalMenuRef.current && !terminalMenuRef.current.contains(e.target as Node)) {
-        setIsTerminalMenuOpen(false)
-      }
-    }
-    if (isTerminalMenuOpen) {
-      document.addEventListener('mousedown', handleClickOutside)
-    }
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside)
-    }
-  }, [isTerminalMenuOpen])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: tabs.length intentionally retriggers overflow checks
   useEffect(() => {
@@ -1027,9 +1014,16 @@ export function WorkspaceTabBar({
             {tabs.map((tab) => {
               const dragging = isTabDragging(tab.id)
               const { isTarget, position } = isTabDropTarget(tab.id)
+              const isTabActive = tab.id === activeTabId
 
               return (
-                <div key={tab.id} className="list-none h-full">
+                <div key={tab.id} className="relative list-none h-full">
+                  {isTabActive && (
+                    <SpringSlidingPill
+                      layoutId={`workspace-tab-active-${paneId}`}
+                      className="inset-x-0 top-0 bottom-auto z-10 h-[2px] rounded-none bg-accent"
+                    />
+                  )}
                   {tab.type === 'terminal' ? (
                     (() => {
                       const terminal = terminalsById.get(tab.terminalId)
@@ -1187,56 +1181,69 @@ export function WorkspaceTabBar({
           </button>
         )}
         {onAddTerminal && (
-          <div ref={terminalMenuRef} className="relative flex h-full items-center">
-            <button
-              type="button"
-              onClick={() => setIsTerminalMenuOpen((open) => !open)}
-              className="flex h-full w-7 items-center justify-center text-muted-foreground transition-colors duration-150 ease-[var(--ease-out)] hover:bg-secondary hover:text-foreground"
-              title={t('tabs.terminalMenu')}
-            >
-              <TerminalIcon size={14} />
-            </button>
-
-            {isTerminalMenuOpen && (
-              <div className="absolute top-full right-0 z-50 mt-px w-44 overflow-hidden border border-border/70 bg-popover shadow-md">
-                <div className="bg-secondary/30 px-2.5 py-1 text-2xs font-medium text-muted-foreground">
-                  {t('tabs.terminal')}
-                </div>
-                {loading ? (
-                  <div className="space-y-1.5 px-2.5 py-1">
-                    <Skeleton className="h-6 w-full" />
-                    <Skeleton className="h-6 w-full" />
-                  </div>
-                ) : sortedShells && sortedShells.length > 0 ? (
-                  <div className="py-1">
-                    {sortedShells.map((shell) => (
-                      <button
-                        type="button"
-                        key={shell.name}
-                        onClick={() => handleSelectShell(shell)}
-                        className={cn(
-                          'flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-2xs leading-none hover:bg-secondary',
-                          isPreferredShell(shell, defaultShell) && 'text-primary'
-                        )}
-                      >
-                        <TerminalIcon size={11} />
-                        <span className="truncate">{shell.displayName}</span>
-                        {isPreferredShell(shell, defaultShell) && (
-                          <span className="ml-auto text-3xs text-muted-foreground">
-                            {t('tabs.default')}
-                          </span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="px-2.5 py-1.5 text-2xs text-muted-foreground">
-                    {t('tabs.noShells')}
-                  </div>
+          <Popover open={isTerminalMenuOpen} onOpenChange={setIsTerminalMenuOpen}>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className={cn(
+                  'flex h-full w-7 items-center justify-center text-muted-foreground transition-colors duration-150 ease-[var(--ease-out)] hover:bg-secondary hover:text-foreground',
+                  isTerminalMenuOpen && 'bg-secondary text-foreground'
                 )}
+                title={t('tabs.terminalMenu')}
+                aria-label={t('tabs.terminalMenu')}
+                aria-haspopup="menu"
+              >
+                <TerminalIcon size={14} />
+              </button>
+            </PopoverTrigger>
+
+            <PopoverContent
+              align="end"
+              sideOffset={4}
+              role="menu"
+              aria-label={t('tabs.terminal')}
+              className="w-48 overflow-hidden p-1 shadow-lg"
+            >
+              <div className="px-2 py-1 font-mono text-3xs font-medium uppercase tracking-wider text-muted-foreground">
+                {t('tabs.terminal')}
               </div>
-            )}
-          </div>
+              {loading ? (
+                <div className="space-y-1.5 px-2 py-1">
+                  <Skeleton className="h-6 w-full" />
+                  <Skeleton className="h-6 w-full" />
+                </div>
+              ) : sortedShells && sortedShells.length > 0 ? (
+                <div className="space-y-0.5 py-0.5">
+                  {sortedShells.map((shell) => (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      key={shell.name}
+                      onClick={() => handleSelectShell(shell)}
+                      className={cn(
+                        'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-2xs leading-none transition-colors hover:bg-secondary focus-visible:bg-secondary focus-visible:outline-none',
+                        isPreferredShell(shell, defaultShell)
+                          ? 'font-medium text-accent'
+                          : 'text-foreground'
+                      )}
+                    >
+                      <TerminalIcon size={11} className="shrink-0 opacity-80" />
+                      <span className="truncate">{shell.displayName}</span>
+                      {isPreferredShell(shell, defaultShell) && (
+                        <span className="ml-auto font-mono text-3xs text-muted-foreground">
+                          {t('tabs.default')}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="px-2 py-1.5 text-2xs text-muted-foreground">
+                  {t('tabs.noShells')}
+                </div>
+              )}
+            </PopoverContent>
+          </Popover>
         )}
 
         {onAddBrowserTab && (

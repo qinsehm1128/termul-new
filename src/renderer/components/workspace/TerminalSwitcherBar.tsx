@@ -2,9 +2,9 @@ import { PanelRight, Terminal as TerminalIcon } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useMatch, useNavigate } from 'react-router-dom'
+import { SpringSlidingPill, TERMINAL_STATUS_DOT_CLASS } from '@/components/ui/motion-primitives'
 import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
 import { buildConversationTerminalNames } from '@/lib/conversation-terminal-names'
-import type { TerminalBoardStatusKey } from '@/lib/terminal-board'
 import { openBoardTerminal } from '@/lib/terminal-board-navigation'
 import {
   groupTerminalsByProject,
@@ -18,14 +18,6 @@ import { cn } from '@/lib/utils'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { isConversationScopedTerminal } from '@/types/project'
-
-const STATUS_DOT: Record<TerminalBoardStatusKey, string> = {
-  live: 'bg-emerald-500',
-  hidden: 'bg-muted-foreground/60',
-  exited: 'bg-muted-foreground/60',
-  disconnected: 'bg-destructive',
-  attention: 'bg-amber-500'
-}
 
 /**
  * A one-line project switcher above the pane area.
@@ -140,11 +132,12 @@ export function TerminalSwitcherBar({
   return (
     <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border/70 bg-sidebar px-2">
       <fieldset
-        className="flex shrink-0 items-center gap-0.5 rounded-md border-0 bg-muted/50 p-0.5"
+        className="relative flex shrink-0 items-center gap-0.5 rounded-md border-0 bg-muted/55 p-0.5 shadow-[inset_0_0_0_1px_hsl(var(--border)/0.45)]"
         aria-label={t('switcher.scopeLabel')}
       >
         {TERMINAL_BAR_SCOPES.map((candidate) => {
           const selectable = candidate !== 'group' || Boolean(activeGroup)
+          const selected = candidate === effectiveScope
           return (
             <button
               key={candidate}
@@ -152,21 +145,29 @@ export function TerminalSwitcherBar({
               onClick={() => setScope(candidate)}
               disabled={!selectable}
               title={selectable ? undefined : t('switcher.scopeUnavailable')}
-              aria-pressed={candidate === effectiveScope}
+              aria-pressed={selected}
               className={cn(
-                'rounded px-1.5 py-0.5 text-2xs transition-colors duration-150',
+                'relative isolate rounded-[5px] px-2 py-0.5 text-2xs font-medium transition-colors duration-150',
                 !selectable
                   ? 'cursor-not-allowed text-muted-foreground/40'
-                  : candidate === effectiveScope
-                    ? 'bg-background text-foreground shadow-sm'
+                  : selected
+                    ? 'text-foreground'
                     : 'text-muted-foreground hover:text-foreground'
               )}
             >
+              {selected && selectable && (
+                <SpringSlidingPill
+                  layoutId="terminal-switcher-scope"
+                  className="-z-10 bg-background shadow-[0_1px_2px_hsl(var(--background)/0.4),0_0_0_1px_hsl(var(--border)/0.75)]"
+                />
+              )}
               {t(`switcher.scope.${candidate}`)}
             </button>
           )
         })}
       </fieldset>
+
+      <div className="h-3.5 w-px shrink-0 bg-border/60" aria-hidden="true" />
 
       {onToggleList ? (
         <button
@@ -176,9 +177,9 @@ export function TerminalSwitcherBar({
           title={t(isListOpen ? 'switcher.hideList' : 'switcher.showList')}
           aria-label={t(isListOpen ? 'switcher.hideList' : 'switcher.showList')}
           className={cn(
-            'order-last shrink-0 rounded p-1 transition-colors duration-150',
+            'order-last shrink-0 rounded-md p-1 transition-colors duration-150',
             isListOpen
-              ? 'bg-secondary text-foreground'
+              ? 'bg-secondary text-foreground shadow-[inset_0_0_0_1px_hsl(var(--border)/0.85)]'
               : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
           )}
         >
@@ -190,7 +191,7 @@ export function TerminalSwitcherBar({
         <span className="truncate text-2xs text-muted-foreground">{t('switcher.empty')}</span>
       ) : (
         <div
-          className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
+          className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto scrollbar-hide"
           role="tablist"
           aria-label={t('switcher.listLabel')}
         >
@@ -228,21 +229,27 @@ export function TerminalSwitcherBar({
                   }
                 )}
                 className={cn(
-                  'inline-flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 text-2xs transition-colors duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                  'relative inline-flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 text-2xs font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
                   isActive
-                    ? 'bg-secondary text-foreground'
-                    : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
+                    ? 'bg-secondary text-foreground shadow-[inset_0_0_0_1px_hsl(var(--border)/0.85)]'
+                    : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground'
                 )}
               >
                 <span
-                  className={cn('size-1.5 shrink-0 rounded-full', STATUS_DOT[entry.status])}
+                  className={cn(
+                    'size-1.5 shrink-0 rounded-full',
+                    TERMINAL_STATUS_DOT_CLASS[entry.status]
+                  )}
                   aria-hidden="true"
                 />
                 {entry.kind === 'quick' ? (
                   <TerminalIcon className="size-3 shrink-0" aria-hidden="true" />
                 ) : null}
                 <span className="max-w-32 truncate">{entry.name}</span>
-                <span className="shrink-0 tabular-nums text-muted-foreground/70" aria-hidden="true">
+                <span
+                  className="shrink-0 rounded bg-background/50 px-1 py-px font-mono text-3xs tabular-nums text-muted-foreground"
+                  aria-hidden="true"
+                >
                   {entry.terminals.length}
                 </span>
               </button>

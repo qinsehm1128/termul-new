@@ -308,6 +308,20 @@ describe('StatusBar', () => {
     })
   })
 
+  describe('notifications popover', () => {
+    it('renders an interactive notifications button and opens the popover on click', () => {
+      useUpdaterStore.setState({ downloaded: true, version: '2.0.0' })
+      renderWithProviders(<StatusBar project={mockProject} />)
+
+      const bell = screen.getByRole('button', { name: 'Notifications' })
+      expect(bell).toBeVisible()
+      expect(screen.getByTestId('status-bar-notification-dot')).toBeInTheDocument()
+
+      fireEvent.click(bell)
+      expect(screen.getByText(/2\.0\.0/)).toBeInTheDocument()
+    })
+  })
+
   describe('project color marker', () => {
     it('uses the same 6px square micro-marker as project sidebar rows', () => {
       renderWithProviders(<StatusBar project={mockProject} />)

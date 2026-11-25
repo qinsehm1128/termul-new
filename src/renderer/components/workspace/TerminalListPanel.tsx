@@ -1,23 +1,15 @@
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
+import { TERMINAL_STATUS_DOT_CLASS } from '@/components/ui/motion-primitives'
 import { AgentIcon } from '@/features/agent-session/agents/AgentIcon'
 import { useConversationStore } from '@/features/agent-session/stores/conversation-store'
 import { buildConversationTerminalNames } from '@/lib/conversation-terminal-names'
-import type { TerminalBoardStatusKey } from '@/lib/terminal-board'
 import { buildTerminalBoard, terminalBoardStatus } from '@/lib/terminal-board'
 import { openBoardTerminal } from '@/lib/terminal-board-navigation'
 import { cn } from '@/lib/utils'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
-
-const STATUS_DOT: Record<TerminalBoardStatusKey, string> = {
-  live: 'bg-emerald-500',
-  hidden: 'bg-muted-foreground/60',
-  exited: 'bg-muted-foreground/60',
-  disconnected: 'bg-destructive',
-  attention: 'bg-amber-500'
-}
 
 /**
  * Vertical terminal list docked at the right edge of the pane area.
@@ -77,7 +69,7 @@ export function TerminalListPanel(): React.JSX.Element {
 
   return (
     <aside
-      className="flex w-44 shrink-0 flex-col overflow-y-auto border-l border-border/70 bg-sidebar py-1"
+      className="flex h-full w-48 shrink-0 flex-col overflow-y-auto border-l border-border/70 bg-sidebar px-1.5 py-1.5"
       aria-label={t('switcher.listPanelLabel')}
     >
       {terminals.length === 0 ? (
@@ -85,41 +77,43 @@ export function TerminalListPanel(): React.JSX.Element {
       ) : (
         board.map((group) =>
           group.projects.map((project) => (
-            <div key={`${group.groupId ?? 'none'}:${project.projectId}`} className="mb-1">
-              <p className="truncate px-2 py-0.5 text-2xs text-muted-foreground">
+            <div key={`${group.groupId ?? 'none'}:${project.projectId}`} className="mb-1.5">
+              <p className="truncate px-2 py-1 font-mono text-3xs font-medium uppercase tracking-wider text-muted-foreground/80">
                 {project.projectName}
               </p>
-              {project.terminals.map((terminal) => (
-                <button
-                  key={terminal.id}
-                  type="button"
-                  onClick={() => open(terminal.id, terminal.projectId)}
-                  title={terminal.name}
-                  aria-current={terminal.id === activeTerminalId ? 'true' : undefined}
-                  className={cn(
-                    'flex h-6 w-full items-center gap-1.5 px-2 text-left text-2xs transition-colors duration-150',
-                    terminal.id === activeTerminalId
-                      ? 'bg-sidebar-accent text-foreground'
-                      : 'text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground'
-                  )}
-                >
-                  <span
+              <div className="space-y-0.5">
+                {project.terminals.map((terminal) => (
+                  <button
+                    key={terminal.id}
+                    type="button"
+                    onClick={() => open(terminal.id, terminal.projectId)}
+                    title={terminal.name}
+                    aria-current={terminal.id === activeTerminalId ? 'true' : undefined}
                     className={cn(
-                      'size-1.5 shrink-0 rounded-full',
-                      STATUS_DOT[terminalBoardStatus(terminal)]
+                      'flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left text-2xs font-medium transition-colors duration-150',
+                      terminal.id === activeTerminalId
+                        ? 'bg-sidebar-accent text-foreground shadow-[inset_0_0_0_1px_hsl(var(--border)/0.8)]'
+                        : 'text-muted-foreground hover:bg-sidebar-accent/55 hover:text-foreground'
                     )}
-                    aria-hidden="true"
-                  />
-                  {terminal.agentId ? (
-                    <AgentIcon
-                      agentId={terminal.agentId}
-                      name={terminal.agentName}
-                      className="size-3"
+                  >
+                    <span
+                      className={cn(
+                        'size-1.5 shrink-0 rounded-full',
+                        TERMINAL_STATUS_DOT_CLASS[terminalBoardStatus(terminal)]
+                      )}
+                      aria-hidden="true"
                     />
-                  ) : null}
-                  <span className="truncate">{terminal.name}</span>
-                </button>
-              ))}
+                    {terminal.agentId ? (
+                      <AgentIcon
+                        agentId={terminal.agentId}
+                        name={terminal.agentName}
+                        className="size-3"
+                      />
+                    ) : null}
+                    <span className="truncate">{terminal.name}</span>
+                  </button>
+                ))}
+              </div>
             </div>
           ))
         )
