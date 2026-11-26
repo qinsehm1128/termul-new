@@ -30,6 +30,19 @@ enum ShellPresentation {
         usesSidebar(isRegular: isRegular, width: width)
     }
 
+    /// Whether the hub toolbar should expose an explicit sidebar/drawer button.
+    /// iPadOS (`>= 1024pt` without a vertical Duo bar) provides its own native
+    /// `.sidebarAdaptable` sidebar toggle; iPhone and iPhone Duo (both outer and
+    /// inner screens, where `.tabBar` placement has no system sidebar toggle)
+    /// always keep the explicit drawer trigger visible.
+    static func showsDrawerToolbarButton(
+        usesSidebar: Bool,
+        verticalBarEdge: DuoVerticalEdge?,
+        width: Double
+    ) -> Bool {
+        !usesSidebar || verticalBarEdge != nil || width < 1024
+    }
+
     /// Whether the leading terminal rail starts visible inside the workbench.
     /// Roomy regular widths (iPad portrait/landscape >= 744pt and iPhone Duo inner
     /// landscape 951pt) show the collapsible rail by default; narrower regular

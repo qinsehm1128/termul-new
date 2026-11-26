@@ -17,6 +17,7 @@ struct ConnectedShellScreen: View {
     @Environment(\.sePalette) private var palette
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.duoVerticalEdge) private var duoVerticalEdge
 
     @State private var navigation = ShellNavigationState()
     @State private var hub = TerminalsHubStore()
@@ -147,6 +148,11 @@ struct ConnectedShellScreen: View {
             let sidebar = ShellPresentation.usesSidebar(isRegular: sizeClass == .regular, width: geometry.size.width)
             let inlineInspector = ShellPresentation.usesInlineInspector(isRegular: sizeClass == .regular, width: geometry.size.width)
             let portrait = geometry.size.width <= geometry.size.height
+            let showsHubDrawer = ShellPresentation.showsDrawerToolbarButton(
+                usesSidebar: sidebar,
+                verticalBarEdge: duoVerticalEdge,
+                width: geometry.size.width
+            )
             let defaultRailVisible = ShellPresentation.defaultWorkbenchRailVisible(
                 width: geometry.size.width,
                 isRegular: sizeClass == .regular
@@ -154,14 +160,14 @@ struct ConnectedShellScreen: View {
             let showsWorkbenchRail = sidebar && (workbenchRailVisibleOverride ?? defaultRailVisible)
             let collapsed = railCollapsed ?? ShellPresentation.defaultRailCollapsed(
                 width: geometry.size.width, height: geometry.size.height)
-            let railWidth = showsWorkbenchRail
-                ? (collapsed ? ShellPresentation.railCollapsedWidth : ShellPresentation.railExpandedWidth)
-                : 0
             let defaultInspectorOpen = ShellPresentation.defaultInspectorOpen(
                 width: geometry.size.width,
                 height: geometry.size.height,
                 isRegular: sizeClass == .regular
             )
+            let railWidth = showsWorkbenchRail
+                ? (collapsed ? ShellPresentation.railCollapsedWidth : ShellPresentation.railExpandedWidth)
+                : 0
             let idealInspectorWidth = ShellPresentation.inspectorColumnWidth(
                 availableWidth: geometry.size.width,
                 railWidth: railWidth
@@ -175,101 +181,19 @@ struct ConnectedShellScreen: View {
                 }
             )
 
-            ZStack(alignment: .leading) {
-                nativeHubTabs(sidebar: sidebar)
-                    .opacity(workbenchVisible ? 0 : 1)
-                    .allowsHitTesting(!workbenchVisible)
-                    .accessibilityHidden(workbenchVisible)
-
-                // Deliberately outside TabView and every layout conditional so
-                // switching tabs or toggling the inspector never reconstructs
-                // the mounted TerminalScreen (I1) or ends a host PTY (I5).
-                // Wrapping the workbench in a stable NavigationStack lets iOS 27.1+
-                // host terminal actions in iPhone Duo's trailing vertical bar,
-                // while `.inspector` sits outside the leading rail so it never
-                // compresses AdaptiveSidebarShell.
-                ZStack(alignment: .leading) {
-                    NavigationStack {
-                        workbench(
-                            inlineInspector: inlineInspector,
-                            isInspectorOpen: inspectorOpen,
-                            onToggleInspector: {
-                                toggleInspector(
-                                    currentlyOpen: inspectorOpen,
-                                    requested: .files,
-                                    inlineInspector: inlineInspector
-                                )
-                            },
-                            showsRailToggle: sidebar,
-                            isRailVisible: showsWorkbenchRail,
-                            onToggleRail: {
-                                workbenchRailVisibleOverride = !showsWorkbenchRail
-                            }
-                        )
-                    }
-                    .tint(palette.accent)
-                    .duoBackgroundExtension()
-                    .inspector(isPresented: inspectorBinding) {
-                        inspector(root: fileRoot) {
-                            inspectorOpenOverride = false
-                            HostLog.ui.info("Inspector collapsed from header")
-                        }
-                        .inspectorColumnWidth(
-                            min: ShellPresentation.inspectorMinWidth,
-                            ideal: idealInspectorWidth,
-                            max: ShellPresentation.inspectorMaxWidth
-                        )
-                    }
-                    .padding(.leading, railWidth)
-
-                    if showsWorkbenchRail {
-                        AdaptiveSidebarShell(
-                            selection: Binding(
-                                get: { navigation.destination },
-                                set: { navigation.select($0) }
-                            ),
-                            collapsed: Binding(get: { collapsed }, set: { railCollapsed = $0 }),
-                            hostName: hostName,
-                            hostOnline: session.phase == .connected,
-                            counts: [.conversations: "\(conversationEntries.count)"],
-                            version: ShellPresentation.appVersion,
-                            onOpenCommand: { showsCommand = true },
-                            terminalGroups: railGroups,
-                            selectedTerminalID: terminalModel.activeID,
-                            onOpenTerminal: { row in openListed(terminalID: row.id) }
-                        )
-                        .transition(.move(edge: .leading).combined(with: .opacity))
-                    }
-                }
-                .opacity(workbenchVisible ? 1 : 0)
-                .allowsHitTesting(workbenchVisible)
-                .accessibilityHidden(!workbenchVisible)
-
-                if showsDrawer {
-                    phoneDrawer
-                }
-
-                if showsCommand {
-                    ConnectedCommandPalette(
-                        session: session,
-                        onOpenSession: {
-                            showsCommand = false
-                            reopenWorkbench()
-                        },
-                        onOpenConversation: { conversationID in
-                            showsCommand = false
-                            openConversation(id: conversationID)
-                        },
-                        onOpenProject: { projectID in
-                            showsCommand = false
-                            openProject(projectID)
-                        },
-                        onClose: { showsCommand = false }
-                    )
-                    .transition(.opacity)
-                    .zIndex(20)
-                }
-            }
+            // Single top-level TabView owns iOS 27.1+ iPhone Duo's trailing
+            // vertical bar and iPad's adaptive sidebar with zero competing
+            // sibling NavigationStacks in a ZStack.
+            nativeHubTabs(
+                sidebar: sidebar,
+                showsHubDrawer: showsHubDrawer,
+                inlineInspector: inlineInspector,
+                showsWorkbenchRail: showsWorkbenchRail,
+                collapsed: collapsed,
+                inspectorOpen: inspectorOpen,
+                inspectorBinding: inspectorBinding,
+                idealInspectorWidth: idealInspectorWidth
+            )
             .onChange(of: portrait) { _, _ in
                 railCollapsed = nil
                 workbenchRailVisibleOverride = nil
@@ -311,6 +235,28 @@ struct ConnectedShellScreen: View {
             }
         }
         .background(palette.canvas.ignoresSafeArea())
+        .sheet(isPresented: $showsDrawer) {
+            phoneDrawerSheet
+        }
+        .fullScreenCover(isPresented: $showsCommand) {
+            ConnectedCommandPalette(
+                session: session,
+                onOpenSession: {
+                    showsCommand = false
+                    reopenWorkbench()
+                },
+                onOpenConversation: { conversationID in
+                    showsCommand = false
+                    openConversation(id: conversationID)
+                },
+                onOpenProject: { projectID in
+                    showsCommand = false
+                    openProject(projectID)
+                },
+                onClose: { showsCommand = false }
+            )
+            .background(palette.canvas.ignoresSafeArea())
+        }
         .onAppear(perform: bootstrap)
         .onDisappear {
             selectionTask?.cancel()
@@ -440,39 +386,116 @@ struct ConnectedShellScreen: View {
         )
     }
 
-    private func nativeHubTabs(sidebar: Bool) -> some View {
+    private func nativeHubTabs(
+        sidebar: Bool,
+        showsHubDrawer: Bool,
+        inlineInspector: Bool,
+        showsWorkbenchRail: Bool,
+        collapsed: Bool,
+        inspectorOpen: Bool,
+        inspectorBinding: Binding<Bool>,
+        idealInspectorWidth: CGFloat
+    ) -> some View {
         TabView(selection: destinationBinding) {
             Tab(
                 SidebarDestination.terminals.title,
                 systemImage: SidebarDestination.terminals.systemImage,
                 value: SidebarDestination.terminals
             ) {
-                NavigationStack {
-                    TerminalsHubScreen(
-                        session: session,
-                        store: hub,
-                        hostName: hostName,
-                        hostMeta: session.phase == .connected
-                            ? String(localized: "Connected")
-                            : String(localized: "Connecting"),
-                        themeIcon: themeIcon,
-                        lastTerminalID: navigation.openRequest?.terminalID,
-                        allowsCreate: link.allows("terminal.create"),
-                        isRefreshing: refreshingHub,
-                        notice: landingNotice,
-                        query: $hubQuery,
-                        onRefresh: { await refreshHub() },
-                        onSelectHost: { showsHosts = true },
-                        onToggleTheme: { settings.appearance = mode.toggled.appearance },
-                        onOpenDrawer: {
-                            if sidebar { railCollapsed = false } else { showsDrawer = true }
-                        },
-                        onOpenCommand: { showsCommand = true },
-                        onOpen: { request in Task { await open(request) } },
-                        onDismissNotice: { landingNotice = nil },
-                        usesSystemChrome: true
-                    )
-                    .toolbar { hubToolbar(showsCompactDrawer: !sidebar) }
+                HStack(spacing: 0) {
+                    // Side-by-side in HStack so NavigationStack / .inspector can
+                    // never overlap or obscure AdaptiveSidebarShell on iPad / Duo.
+                    if workbenchVisible && showsWorkbenchRail {
+                        AdaptiveSidebarShell(
+                            selection: Binding(
+                                get: { navigation.destination },
+                                set: { navigation.select($0) }
+                            ),
+                            collapsed: Binding(get: { collapsed }, set: { railCollapsed = $0 }),
+                            hostName: hostName,
+                            hostOnline: session.phase == .connected,
+                            counts: [.conversations: "\(conversationEntries.count)"],
+                            version: ShellPresentation.appVersion,
+                            onOpenCommand: { showsCommand = true },
+                            terminalGroups: railGroups,
+                            selectedTerminalID: terminalModel.activeID,
+                            onOpenTerminal: { row in openListed(terminalID: row.id) }
+                        )
+                        .transition(.move(edge: .leading).combined(with: .opacity))
+                    }
+
+                    NavigationStack {
+                        ZStack {
+                            TerminalsHubScreen(
+                                session: session,
+                                store: hub,
+                                hostName: hostName,
+                                hostMeta: session.phase == .connected
+                                    ? String(localized: "Connected")
+                                    : String(localized: "Connecting"),
+                                themeIcon: themeIcon,
+                                lastTerminalID: navigation.openRequest?.terminalID,
+                                allowsCreate: link.allows("terminal.create"),
+                                isRefreshing: refreshingHub,
+                                notice: landingNotice,
+                                query: $hubQuery,
+                                onRefresh: { await refreshHub() },
+                                onSelectHost: { showsHosts = true },
+                                onToggleTheme: { settings.appearance = mode.toggled.appearance },
+                                onOpenDrawer: {
+                                    if sidebar { railCollapsed = false } else { showsDrawer = true }
+                                },
+                                onOpenCommand: { showsCommand = true },
+                                onOpen: { request in Task { await open(request) } },
+                                onDismissNotice: { landingNotice = nil },
+                                usesSystemChrome: true
+                            )
+                            .opacity(workbenchVisible ? 0 : 1)
+                            .allowsHitTesting(!workbenchVisible)
+                            .accessibilityHidden(workbenchVisible)
+
+                            // Mounted once inside Tab(.terminals)'s persistent VC so
+                            // switching tabs or toggling panels never recreates TerminalScreen (I1/I5).
+                            workbench(
+                                inlineInspector: inlineInspector,
+                                isInspectorOpen: inspectorOpen,
+                                onToggleInspector: {
+                                    toggleInspector(
+                                        currentlyOpen: inspectorOpen,
+                                        requested: .files,
+                                        inlineInspector: inlineInspector
+                                    )
+                                },
+                                showsRailToggle: sidebar,
+                                isRailVisible: showsWorkbenchRail,
+                                onToggleRail: {
+                                    workbenchRailVisibleOverride = !showsWorkbenchRail
+                                }
+                            )
+                            .opacity(workbenchVisible ? 1 : 0)
+                            .allowsHitTesting(workbenchVisible)
+                            .accessibilityHidden(!workbenchVisible)
+                        }
+                        .toolbar {
+                            if !workbenchVisible {
+                                hubToolbar(showsCompactDrawer: showsHubDrawer)
+                            }
+                        }
+                        .toolbar(workbenchVisible ? .hidden : .visible, for: .tabBar)
+                        .duoCompressionBehavior(workbenchVisible ? .prefersToolbarItems : .prefersTabBar)
+                    }
+                    .tint(palette.accent)
+                    .inspector(isPresented: inspectorBinding) {
+                        inspector(root: fileRoot) {
+                            inspectorOpenOverride = false
+                            HostLog.ui.info("Inspector collapsed from header")
+                        }
+                        .inspectorColumnWidth(
+                            min: ShellPresentation.inspectorMinWidth,
+                            ideal: idealInspectorWidth,
+                            max: ShellPresentation.inspectorMaxWidth
+                        )
+                    }
                 }
             }
 
@@ -499,7 +522,7 @@ struct ConnectedShellScreen: View {
                         onOpenRail: { showsDrawer = true },
                         usesSystemChrome: true
                     )
-                    .toolbar { hubToolbar(showsCompactDrawer: !sidebar) }
+                    .toolbar { hubToolbar(showsCompactDrawer: showsHubDrawer) }
                 }
             }
             .badge(needSummary.total)
@@ -518,7 +541,7 @@ struct ConnectedShellScreen: View {
                     onSelectHost: { showsHosts = true },
                     onOpenSettings: { navigation.select(.settings) },
                     usesSystemChrome: true,
-                    showsCompactDrawerButton: !sidebar
+                    showsCompactDrawerButton: showsHubDrawer
                 )
             }
 
@@ -536,7 +559,7 @@ struct ConnectedShellScreen: View {
                         },
                         usesSystemChrome: true
                     )
-                    .toolbar { hubToolbar(showsCompactDrawer: !sidebar) }
+                    .toolbar { hubToolbar(showsCompactDrawer: showsHubDrawer) }
                 }
             }
         }
@@ -693,7 +716,7 @@ struct ConnectedShellScreen: View {
             showsRailToggle: showsRailToggle,
             isRailVisible: isRailVisible,
             onToggleRail: onToggleRail,
-            usesSystemToolbar: true
+            usesSystemToolbar: workbenchVisible
         )
     }
 
@@ -766,38 +789,37 @@ struct ConnectedShellScreen: View {
 
     // MARK: - Phone chrome
 
-    private var phoneDrawer: some View {
-        ZStack(alignment: .leading) {
-            Color.black.opacity(mode.isNight ? 0.5 : 0.22)
-                .ignoresSafeArea()
-                .onTapGesture { showsDrawer = false }
-            AdaptiveSidebarShell(
-                selection: Binding(
-                    get: { navigation.destination },
-                    set: { navigation.select($0) }
-                ),
-                collapsed: .constant(false),
-                hostName: hostName,
-                hostOnline: session.phase == .connected,
-                counts: [.conversations: "\(conversationEntries.count)"],
-                version: ShellPresentation.appVersion,
-                onOpenCommand: {
+    private var phoneDrawerSheet: some View {
+        AdaptiveSidebarShell(
+            selection: Binding(
+                get: { navigation.destination },
+                set: {
                     showsDrawer = false
-                    showsCommand = true
-                },
-                terminalGroups: railGroups,
-                selectedTerminalID: terminalModel.activeID,
-                onOpenTerminal: { row in
-                    showsDrawer = false
-                    openListed(terminalID: row.id)
-                },
-                expandedWidth: 288,
-                onClose: { showsDrawer = false }
-            )
-            .transition(.move(edge: .leading).combined(with: .opacity))
-        }
-        .zIndex(30)
-        .animation(reduceMotion ? nil : SeNocturneMotion.sheet, value: showsDrawer)
+                    navigation.select($0)
+                }
+            ),
+            collapsed: .constant(false),
+            hostName: hostName,
+            hostOnline: session.phase == .connected,
+            counts: [.conversations: "\(conversationEntries.count)"],
+            version: ShellPresentation.appVersion,
+            onOpenCommand: {
+                showsDrawer = false
+                showsCommand = true
+            },
+            terminalGroups: railGroups,
+            selectedTerminalID: terminalModel.activeID,
+            onOpenTerminal: { row in
+                showsDrawer = false
+                openListed(terminalID: row.id)
+            },
+            fillsWidth: true,
+            onClose: { showsDrawer = false }
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .background(mode.railSurface.ignoresSafeArea())
+        .presentationDetents([.large, .medium])
+        .presentationDragIndicator(.visible)
     }
 
     private var hostPicker: some View {

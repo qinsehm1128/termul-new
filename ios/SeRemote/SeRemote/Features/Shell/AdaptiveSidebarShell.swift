@@ -59,6 +59,9 @@ struct AdaptiveSidebarShell: View {
     var selectedTerminalID: String? = nil
     var onOpenTerminal: ((TerminalLandingModel.Row) -> Void)? = nil
     var expandedWidth: CGFloat = ShellPresentation.railExpandedWidth
+    /// When presented inside a sheet drawer, fill the sheet's full width instead
+    /// of pinning to a fixed column width.
+    var fillsWidth = false
     /// The phone drawer passes this so the header's trailing button closes the
     /// drawer (prototype `.railclose`) instead of folding a nil-effect rail.
     var onClose: (() -> Void)? = nil
@@ -127,11 +130,13 @@ struct AdaptiveSidebarShell: View {
             Spacer(minLength: 0)
             footer
         }
-        .frame(width: width)
-        .frame(maxHeight: .infinity, alignment: .top)
+        .frame(width: fillsWidth ? nil : width)
+        .frame(maxWidth: fillsWidth ? .infinity : nil, maxHeight: .infinity, alignment: .top)
         .background(mode.railSurface)
         .overlay(alignment: .trailing) {
-            Rectangle().fill(mode.hairline).frame(width: 1)
+            if !fillsWidth {
+                Rectangle().fill(mode.hairline).frame(width: 1)
+            }
         }
         .ignoresSafeArea(edges: duoVerticalEdge == .leading ? [] : .leading)
         .animation(reduceMotion ? nil : SeNocturneMotion.panel, value: collapsed)

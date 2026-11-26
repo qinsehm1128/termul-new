@@ -171,6 +171,21 @@ struct DuoAndInspectorLayoutTests {
         )
     }
 
+    @Test("Hub drawer button remains reachable on iPhone and all iPhone Duo postures while deferring to native sidebar on wide iPad")
+    func hubDrawerToolbarButtonPolicy() {
+        // Compact iPhone & iPhone Duo outer screen
+        #expect(ShellPresentation.showsDrawerToolbarButton(usesSidebar: false, verticalBarEdge: nil, width: 393))
+        #expect(ShellPresentation.showsDrawerToolbarButton(usesSidebar: false, verticalBarEdge: .trailing, width: 466))
+        #expect(ShellPresentation.showsDrawerToolbarButton(usesSidebar: false, verticalBarEdge: .trailing, width: 678))
+
+        // iPhone Duo inner portrait (669) & inner landscape (951) — TabView uses .tabBar without native sidebar toggle
+        #expect(ShellPresentation.showsDrawerToolbarButton(usesSidebar: true, verticalBarEdge: nil, width: 669))
+        #expect(ShellPresentation.showsDrawerToolbarButton(usesSidebar: true, verticalBarEdge: .trailing, width: 951))
+
+        // Wide iPad landscape (1194, horizontal bar) — uses native iPadOS .sidebarAdaptable toggle
+        #expect(!ShellPresentation.showsDrawerToolbarButton(usesSidebar: true, verticalBarEdge: nil, width: 1194))
+    }
+
     @Test("Workbench leading rail defaults hidden on iPhone Duo inner portrait and visible on iPad / Duo inner landscape")
     func workbenchRailDefaultVisibility() {
         // iPad portrait & landscape + iPhone Duo inner landscape (951pt) show rail by default.
