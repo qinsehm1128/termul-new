@@ -91,6 +91,7 @@ struct TerminalWorkbenchScreen: View {
                 workbenchToolbar
             }
         }
+        .duoCompressionBehavior(.prefersToolbarItems)
         .navigationBarTitleDisplayMode(.inline)
         .terminalKeyboardHeight($keyboardHeight)
         .onAppear(perform: syncCapabilities)
@@ -175,6 +176,7 @@ struct TerminalWorkbenchScreen: View {
             .accessibilityLabel(Text(verbatim: model.panelPresentation.title))
             .accessibilityHint(Text(verbatim: hubText("Switch terminal")))
         }
+        .duoAxisBehavior(.horizontalOnly)
 
         if let onOpenSwitcher {
             ToolbarItem(placement: DuoToolbarPlacement.pinnedTrailing) {
@@ -184,6 +186,7 @@ struct TerminalWorkbenchScreen: View {
                 .accessibilityLabel(Text(verbatim: hubText("Switch terminal")))
             }
             .duoVisibilityPriority(.high)
+            .duoAxisBehavior(.verticalPreferred)
         }
 
         if showsInspectorToggle, let onToggleInspector {

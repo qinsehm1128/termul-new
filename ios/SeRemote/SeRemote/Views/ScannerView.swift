@@ -62,6 +62,7 @@ struct ScannerView: View {
             }
         }
         .tint(palette.accent)
+        .duoVerticalBarDisabled()
         .seHaptic(.error, trigger: cameraError)
     }
 }

@@ -205,6 +205,39 @@ struct DuoAndInspectorLayoutTests {
         #expect(day[5] == 0x7D54B5)
     }
 
+    @Test("Fold crease policy lifts floating controls clear of active tabletop or book creases")
+    func foldCreaseAvoidancePolicy() {
+        // Flat unfolded (no active division regions) -> standard 14pt gutter.
+        #expect(DuoFoldCreasePolicy.bottomClearance(containerHeight: 669, divisionFrames: []) == 14)
+        #expect(DuoFoldCreasePolicy.trailingClearance(containerWidth: 951, divisionFrames: []) == 14)
+
+        // Active horizontal crease near bottom -> lifts bottom clearance above crease.
+        let lowHorizontalCrease = CGRect(x: 0, y: 600, width: 669, height: 18)
+        let liftedBottom = DuoFoldCreasePolicy.bottomClearance(
+            containerHeight: 669,
+            divisionFrames: [lowHorizontalCrease]
+        )
+        #expect(liftedBottom >= 79)
+
+        // Centered horizontal crease (far from bottom) -> keeps standard 14pt gutter.
+        let midHorizontalCrease = CGRect(x: 0, y: 325, width: 951, height: 18)
+        #expect(
+            DuoFoldCreasePolicy.bottomClearance(
+                containerHeight: 669,
+                divisionFrames: [midHorizontalCrease]
+            ) == 14
+        )
+
+        // Split View vertical bar edge (leading vs trailing) resolves cluster alignment cleanly.
+        #expect(
+            DuoFoldCreasePolicy.clusterAlignment(
+                verticalBarEdge: .leading,
+                divisionFrames: [],
+                containerSize: CGSize(width: 475, height: 669)
+            ) == .bottomTrailing
+        )
+    }
+
     @Test("Every navigation destination exposes a non-empty SF Symbol for native TabView and Duo vertical bar")
     func destinationSystemImages() {
         for destination in SidebarDestination.allCases {

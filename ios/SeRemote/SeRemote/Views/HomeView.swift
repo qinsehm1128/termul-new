@@ -9,6 +9,7 @@ struct HomeView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.sePalette) private var palette
     @Environment(\.seThemeMode) private var mode
+    @Environment(\.duoVerticalEdge) private var duoVerticalEdge
 
     @State private var showPairing = false
     @State private var showSettings = false
@@ -143,6 +144,7 @@ struct HomeView: View {
                 }
                 .duoVisibilityPriority(.standard)
             }
+            .duoCompressionBehavior(.prefersToolbarItems)
         }
         .onAppear {
             activity.reload()
@@ -266,8 +268,8 @@ struct HomeView: View {
         .frame(maxWidth: .infinity)
         .accessibilityIdentifier("home.pair")
         .padding(.horizontal, 18)
-        .padding(.top, 20)
-        .padding(.bottom, 28)
+        .padding(.top, duoVerticalEdge != nil ? 12 : 20)
+        .padding(.bottom, duoVerticalEdge != nil ? 16 : 28)
         .background(
             LinearGradient(
                 stops: [

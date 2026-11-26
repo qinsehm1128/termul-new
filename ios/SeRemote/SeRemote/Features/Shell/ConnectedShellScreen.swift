@@ -542,6 +542,7 @@ struct ConnectedShellScreen: View {
         }
         .tabViewStyle(.sidebarAdaptable)
         .duoPreferredTabBarPlacement()
+        .duoCompressionBehavior(.prefersTabBar)
         .tint(palette.accent)
     }
 

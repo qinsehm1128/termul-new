@@ -33,6 +33,7 @@ struct TerminalWorkbenchChrome<Canvas: View>: View {
     @Environment(\.sePalette) private var palette
     @Environment(\.seThemeMode) private var mode
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.duoVerticalEdge) private var duoVerticalEdge
 
     /// Fixed top gutter: the first terminal row clears the floating pill.
     static var topInset: CGFloat { 44 }
@@ -56,7 +57,11 @@ struct TerminalWorkbenchChrome<Canvas: View>: View {
                 panel
                     .padding(.horizontal, 12)
                     .padding(.top, 8)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .transition(
+                        usesSystemToolbar
+                            ? .opacity.combined(with: .scale(scale: 0.97, anchor: .top))
+                            : .move(edge: .top).combined(with: .opacity)
+                    )
                     .zIndex(2)
             } else if !usesSystemToolbar {
                 topRow
@@ -72,12 +77,29 @@ struct TerminalWorkbenchChrome<Canvas: View>: View {
                     .zIndex(3)
             }
         }
-        .overlay(alignment: .bottomTrailing) {
+        .overlay {
             if !keyboardVisible, !model.panelExpanded {
-                cluster
-                    .padding(.trailing, 14)
-                    .padding(.bottom, 14)
-                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                GeometryReader { proxy in
+                    let divisions = proxy.duoDivisionFrames
+                    let bottomPad = DuoFoldCreasePolicy.bottomClearance(
+                        containerHeight: proxy.size.height,
+                        divisionFrames: divisions
+                    )
+                    let trailingPad = DuoFoldCreasePolicy.trailingClearance(
+                        containerWidth: proxy.size.width,
+                        divisionFrames: divisions
+                    )
+                    let alignment = DuoFoldCreasePolicy.clusterAlignment(
+                        verticalBarEdge: duoVerticalEdge,
+                        divisionFrames: divisions,
+                        containerSize: proxy.size
+                    )
+                    cluster
+                        .padding(.trailing, trailingPad)
+                        .padding(.bottom, bottomPad)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment)
+                }
+                .transition(.opacity.combined(with: .scale(scale: 0.9)))
             }
         }
         .animation(SeNocturneMotion.resolved(SeNocturneMotion.panel, reduceMotion: reduceMotion),

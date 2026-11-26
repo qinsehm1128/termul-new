@@ -67,6 +67,7 @@ struct AdaptiveSidebarShell: View {
     @Environment(\.seThemeMode) private var mode
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.duoVerticalEdge) private var duoVerticalEdge
 
     private var width: CGFloat {
         collapsed ? ShellPresentation.railCollapsedWidth : expandedWidth
@@ -132,7 +133,7 @@ struct AdaptiveSidebarShell: View {
         .overlay(alignment: .trailing) {
             Rectangle().fill(mode.hairline).frame(width: 1)
         }
-        .ignoresSafeArea(edges: .leading)
+        .ignoresSafeArea(edges: duoVerticalEdge == .leading ? [] : .leading)
         .animation(reduceMotion ? nil : SeNocturneMotion.panel, value: collapsed)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(String(localized: "Sidebar"))
