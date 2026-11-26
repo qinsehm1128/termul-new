@@ -79,8 +79,8 @@ struct CommandPaletteView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            Color(hex: mode.isNight ? 0x07080B : 0xEBF0F7)
-                .opacity(mode.isNight ? 0.82 : 0.86)
+            Color(hex: mode.isNight ? 0x12101A : 0xF4EEF7)
+                .opacity(mode.isNight ? 0.84 : 0.88)
                 .background(.ultraThinMaterial)
                 .ignoresSafeArea()
                 .onTapGesture { onClose?() }

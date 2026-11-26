@@ -37,76 +37,113 @@ struct HomeView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 0) {
-                    pageTop
-                    if let recentHost {
-                        resumeRow(recentHost)
-                            .padding(.horizontal, 18)
-                            .padding(.top, 12)
-                    }
+        NavigationStack {
+            ZStack(alignment: .bottom) {
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        pageTop
+                        if let recentHost {
+                            resumeRow(recentHost)
+                                .padding(.horizontal, 18)
+                                .padding(.top, 12)
+                        }
 
-                    SeGroupLabel(title: String(localized: "Recent hosts"), count: String(format: "%02d", store.savedLinks.count))
+                        SeGroupLabel(title: String(localized: "Recent hosts"), count: String(format: "%02d", store.savedLinks.count))
 
-                    if store.savedLinks.isEmpty {
-                        emptyState
-                            .padding(.horizontal, 18)
-                    } else {
-                        VStack(spacing: 0) {
-                            ForEach(Array(store.savedLinks.enumerated()), id: \.element.id) { index, link in
-                                SeHostRowView(
-                                    index: String(format: "%02d", index + 1),
-                                    name: link.title,
-                                    meta: meta(for: link),
-                                    latency: nil,
-                                    // Pre-connection there is no active link, so
-                                    // `activeLink == link` is always false here and
-                                    // would paint every saved host offline. The dot
-                                    // only belongs to surfaces with a live probe.
-                                    online: nil,
-                                    onTap: { open(link) },
-                                    onMore: { actionLink = link }
-                                )
-                                .contextMenu {
-                                    Button("Open") { open(link) }
-                                    Button("Rename") { beginRename(link) }
-                                    Button("Remove", role: .destructive) { deletingLink = link }
+                        if store.savedLinks.isEmpty {
+                            emptyState
+                                .padding(.horizontal, 18)
+                        } else if sizeClass == .regular {
+                            LazyVGrid(
+                                columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 2),
+                                spacing: 10
+                            ) {
+                                ForEach(Array(store.savedLinks.enumerated()), id: \.element.id) { index, link in
+                                    hostRow(index: index, link: link)
                                 }
                             }
+                            .padding(.horizontal, 18)
+                        } else {
+                            VStack(spacing: 0) {
+                                ForEach(Array(store.savedLinks.enumerated()), id: \.element.id) { index, link in
+                                    hostRow(index: index, link: link)
+                                }
+                            }
+                            .padding(.horizontal, 18)
+                        }
+
+                        SeLinkRow(title: String(localized: "Add host with pairing link")) {
+                            store.dismissError()
+                            showPairing = true
                         }
                         .padding(.horizontal, 18)
-                    }
+                        .padding(.top, 4)
 
-                    SeLinkRow(title: String(localized: "Add host with pairing link")) {
+                        if store.isPairing {
+                            ProgressView("Pairing device…")
+                                .font(SeNocturneType.font(12))
+                                .padding(.horizontal, 22)
+                        }
+                        if let error = store.errorMessage {
+                            SeErrorBanner(message: error)
+                                .padding(.horizontal, 18)
+                                .padding(.top, 8)
+                        }
+
+                        Color.clear
+                            .frame(height: 120)
+                    }
+                    .frame(maxWidth: sizeClass == .regular ? 860 : 680)
+                    .frame(maxWidth: .infinity)
+                }
+
+                dock
+            }
+            .background(SeVelvetBackdrop())
+            .foregroundStyle(palette.ink)
+            .toolbar {
+                ToolbarItem(placement: DuoToolbarPlacement.pinnedTrailing) {
+                    Button {
                         store.dismissError()
                         showPairing = true
+                    } label: {
+                        Image(systemName: "qrcode.viewfinder")
                     }
-                    .padding(.horizontal, 18)
-                    .padding(.top, 4)
-
-                    if store.isPairing {
-                        ProgressView("Pairing device…")
-                            .font(SeNocturneType.font(12))
-                            .padding(.horizontal, 22)
-                    }
-                    if let error = store.errorMessage {
-                        SeErrorBanner(message: error)
-                            .padding(.horizontal, 18)
-                            .padding(.top, 8)
-                    }
-
-                    Color.clear
-                        .frame(height: 120)
+                    .accessibilityLabel(String(localized: "Pair a new host"))
                 }
-                .frame(maxWidth: 680)
-                .frame(maxWidth: .infinity)
-            }
+                .duoVisibilityPriority(.high)
 
-            dock
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        activity.reload()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .accessibilityLabel(String(localized: "Refresh"))
+                }
+                .duoVisibilityPriority(.standard)
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        settings.appearance = mode.toggled.appearance
+                    } label: {
+                        Image(systemName: mode == .night ? "moon" : "sun.max")
+                    }
+                    .accessibilityLabel(String(localized: "Toggle theme"))
+                }
+                .duoVisibilityPriority(.low)
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .accessibilityLabel(String(localized: "Settings"))
+                }
+                .duoVisibilityPriority(.standard)
+            }
         }
-        .background(palette.canvas.ignoresSafeArea())
-        .foregroundStyle(palette.ink)
         .onAppear {
             activity.reload()
             consumePairingRequest()
@@ -166,26 +203,32 @@ struct HomeView: View {
 
     // MARK: - Page
 
+    private func hostRow(index: Int, link: RemoteLink) -> some View {
+        SeHostRowView(
+            index: String(format: "%02d", index + 1),
+            name: link.title,
+            meta: meta(for: link),
+            latency: nil,
+            // Pre-connection there is no active link, so `activeLink == link`
+            // is always false here and would paint every saved host offline.
+            online: nil,
+            onTap: { open(link) },
+            onMore: { actionLink = link }
+        )
+        .contextMenu {
+            Button("Open") { open(link) }
+            Button("Rename") { beginRename(link) }
+            Button("Remove", role: .destructive) { deletingLink = link }
+        }
+    }
+
     private var pageTop: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                SeEyebrow(text: today)
-                Spacer(minLength: 0)
-                SeIconButton(icon: .refresh, accessibilityLabel: String(localized: "Refresh"), size: 34) {
-                    activity.reload()
-                }
-                SeIconButton(icon: mode == .night ? .moon : .sun, accessibilityLabel: String(localized: "Toggle theme"), size: 34) {
-                    settings.appearance = mode.toggled.appearance
-                }
-                SeIconButton(icon: .gear, accessibilityLabel: String(localized: "Settings"), size: 34) {
-                    showSettings = true
-                }
-            }
+        VStack(alignment: .leading, spacing: 4) {
+            SeEyebrow(text: today)
             SeDisplayText(text: String(localized: "Hosts"))
-                .padding(.top, 4)
         }
         .padding(.horizontal, 18)
-        .padding(.top, 10)
+        .padding(.top, 4)
     }
 
     private func resumeRow(_ link: RemoteLink) -> some View {

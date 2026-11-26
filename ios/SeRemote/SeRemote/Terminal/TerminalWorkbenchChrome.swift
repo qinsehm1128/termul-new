@@ -25,6 +25,10 @@ struct TerminalWorkbenchChrome<Canvas: View>: View {
     var showsInspectorToggle = false
     var isInspectorOpen = false
     var onToggleInspector: (() -> Void)? = nil
+    /// When hosted inside a native `NavigationStack` with `.toolbar`, the system
+    /// navigation/vertical bar owns Back, Switcher, Files/Inspector, Agent and Menu
+    /// actions, so the custom top pill and its 44pt top gutter are omitted.
+    var usesSystemToolbar = false
 
     @Environment(\.sePalette) private var palette
     @Environment(\.seThemeMode) private var mode
@@ -36,11 +40,14 @@ struct TerminalWorkbenchChrome<Canvas: View>: View {
     private var presentation: TerminalPanelPresentation { model.panelPresentation }
 
     var body: some View {
+        let topClearance: CGFloat = usesSystemToolbar ? 0 : Self.topInset
         ZStack(alignment: .top) {
             VStack(spacing: 0) {
-                Color.clear
-                    .frame(height: Self.topInset)
-                    .allowsHitTesting(false)
+                if topClearance > 0 {
+                    Color.clear
+                        .frame(height: topClearance)
+                        .allowsHitTesting(false)
+                }
                 canvas
             }
 
@@ -51,7 +58,7 @@ struct TerminalWorkbenchChrome<Canvas: View>: View {
                     .padding(.top, 8)
                     .transition(.move(edge: .top).combined(with: .opacity))
                     .zIndex(2)
-            } else {
+            } else if !usesSystemToolbar {
                 topRow
                     .padding(.horizontal, 12)
                     .padding(.top, 8)
@@ -61,7 +68,7 @@ struct TerminalWorkbenchChrome<Canvas: View>: View {
 
             if let error = model.displayError {
                 errorCapsule(error)
-                    .padding(.top, Self.topInset + 8)
+                    .padding(.top, topClearance + 8)
                     .zIndex(3)
             }
         }

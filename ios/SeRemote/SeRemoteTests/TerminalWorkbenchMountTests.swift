@@ -134,16 +134,22 @@ struct TerminalWorkbenchMountTests {
         @Binding var inspectorOpen: Bool
 
         var body: some View {
-            TerminalWorkbenchScreen(
-                session: session,
-                model: model,
-                isActive: true,
-                onBack: {},
-                onExternalAction: { _ in },
-                showsInspectorToggle: true,
-                isInspectorOpen: inspectorOpen,
-                onToggleInspector: { inspectorOpen.toggle() }
-            )
+            NavigationStack {
+                TerminalWorkbenchScreen(
+                    session: session,
+                    model: model,
+                    isActive: true,
+                    onBack: {},
+                    onExternalAction: { _ in },
+                    showsInspectorToggle: true,
+                    isInspectorOpen: inspectorOpen,
+                    onToggleInspector: { inspectorOpen.toggle() },
+                    showsRailToggle: true,
+                    isRailVisible: false,
+                    onToggleRail: {},
+                    usesSystemToolbar: true
+                )
+            }
             .inspector(isPresented: $inspectorOpen) {
                 Text("Files")
                     .inspectorColumnWidth(

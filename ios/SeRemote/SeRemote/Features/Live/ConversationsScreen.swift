@@ -80,7 +80,7 @@ struct ConversationsScreen: View {
         .refreshable {
             await session.conversations.refresh()
         }
-        .background(palette.canvas)
+        .background(SeVelvetBackdrop())
         .foregroundStyle(palette.ink)
         .alert("Rename session", isPresented: Binding(
             get: { renaming != nil },

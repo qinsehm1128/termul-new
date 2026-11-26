@@ -97,7 +97,7 @@ struct TerminalHubView<Header: View>: View {
         .scrollDismissesKeyboard(.interactively)
         .environment(\.defaultMinListRowHeight, 0)
         .refreshable { await actions.refresh() }
-        .background(palette.canvas)
+        .background(SeVelvetBackdrop())
         .safeAreaInset(edge: .bottom, spacing: 0) { controls }
         .animation(reduceMotion ? nil : SeNocturneMotion.quick, value: expandedQuick)
         .animation(reduceMotion ? nil : SeNocturneMotion.quick, value: collapsedGroups)

@@ -37,11 +37,11 @@ struct NocturneGlyph: View {
     }
 }
 
-/// One scrolling screen in the prototype's visual language: a custom left
-/// aligned nav bar (back / title / mono subtitle) followed by screen content.
+/// One scrolling tool screen aligned with native iOS 26/27 & iPhone Duo navigation:
+/// system navigation bar carries Back and trailing actions (automatically placed
+/// into iPhone Duo's vertical trailing bar), while the scroll body stays clean.
 struct NocturneToolScreen<Content: View>: View {
     @Environment(\.sePalette) private var palette
-    @Environment(\.dismiss) private var dismiss
 
     let title: String
     let subtitle: String
@@ -52,18 +52,33 @@ struct NocturneToolScreen<Content: View>: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                NocturneNavBar(title: title, subtitle: subtitle, onBack: { dismiss() }, trailing: trailing)
+                if !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(SeNocturneType.monoSmall)
+                        .foregroundStyle(palette.inkTertiary)
+                        .lineLimit(1)
+                        .padding(.horizontal, NocturneToolMetrics.gutter)
+                        .padding(.top, 6)
+                }
                 content()
             }
             .padding(.bottom, 30)
         }
         .scrollIndicators(.hidden)
-        .background(palette.canvas.ignoresSafeArea())
+        .background(SeVelvetBackdrop())
         .foregroundStyle(palette.ink)
         .nocturneRefreshable(onRefresh)
-        .toolbar(.hidden, for: .navigationBar)
-        .navigationBarBackButtonHidden(true)
-        .navigationTitle("")
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .toolbar {
+            if let trailing {
+                ToolbarItem(placement: DuoToolbarPlacement.pinnedTrailing) {
+                    trailing
+                }
+                .duoVisibilityPriority(.high)
+            }
+        }
     }
 }
 
@@ -204,6 +219,7 @@ struct NocturneSegment<Value: Hashable>: Identifiable {
 struct NocturneSegmented<Value: Hashable>: View {
     @Environment(\.sePalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var pillNamespace
 
     let segments: [NocturneSegment<Value>]
     @Binding var selection: Value
@@ -213,26 +229,31 @@ struct NocturneSegmented<Value: Hashable>: View {
             ForEach(segments) { segment in
                 let isOn = selection == segment.value
                 Button {
-                    withAnimation(SeNocturneMotion.resolved(SeNocturneMotion.panel, reduceMotion: reduceMotion)) {
+                    withAnimation(
+                        reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.82)
+                    ) {
                         selection = segment.value
                     }
                 } label: {
                     HStack(spacing: 5) {
                         Text(segment.title)
-                            .font(SeNocturneType.font(12, weight: isOn ? .medium : .regular))
+                            .font(SeNocturneType.font(12, weight: isOn ? .semibold : .regular))
                         if let count = segment.count {
                             Text(verbatim: "\(count)")
                                 .font(SeNocturneType.font(9, weight: .regular, mono: true))
-                                .opacity(0.6)
+                                .opacity(0.7)
                         }
                     }
                     .foregroundStyle(isOn ? palette.onAccent : palette.inkSecondary)
                     .frame(maxWidth: .infinity)
                     .frame(height: 32)
-                    .background(
-                        isOn ? palette.ink : .clear,
-                        in: RoundedRectangle(cornerRadius: 8)
-                    )
+                    .background {
+                        if isOn {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(palette.accent)
+                                .matchedGeometryEffect(id: "nocturne-segment-pill", in: pillNamespace)
+                        }
+                    }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -240,9 +261,9 @@ struct NocturneSegmented<Value: Hashable>: View {
             }
         }
         .padding(3)
-        .background(palette.card, in: RoundedRectangle(cornerRadius: 11))
+        .background(palette.card, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 11)
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
                 .strokeBorder(palette.stroke, lineWidth: 1)
         }
         .padding(.horizontal, NocturneToolMetrics.gutter)

@@ -26,6 +26,13 @@ struct TerminalWorkbenchScreen: View {
     var showsInspectorToggle = false
     var isInspectorOpen = false
     var onToggleInspector: (() -> Void)? = nil
+    /// Regular-width leading terminal rail toggle button (e.g. Duo inner portrait).
+    var showsRailToggle = false
+    var isRailVisible = false
+    var onToggleRail: (() -> Void)? = nil
+    /// When true, workbench chrome actions are hosted in SwiftUI's native
+    /// `.toolbar` so iPhone Duo renders them in the trailing vertical bar.
+    var usesSystemToolbar = false
 
     @Environment(\.remoteDeviceLink) private var deviceLink
     @Environment(\.sePalette) private var palette
@@ -74,10 +81,17 @@ struct TerminalWorkbenchScreen: View {
             onOpenSwitcher: onOpenSwitcher,
             showsInspectorToggle: showsInspectorToggle,
             isInspectorOpen: isInspectorOpen,
-            onToggleInspector: onToggleInspector
+            onToggleInspector: onToggleInspector,
+            usesSystemToolbar: usesSystemToolbar
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(palette.terminalCanvas)
+        .toolbar {
+            if usesSystemToolbar {
+                workbenchToolbar
+            }
+        }
+        .navigationBarTitleDisplayMode(.inline)
         .terminalKeyboardHeight($keyboardHeight)
         .onAppear(perform: syncCapabilities)
         .onChange(of: allowsInput) { _, _ in syncCapabilities() }
@@ -110,6 +124,122 @@ struct TerminalWorkbenchScreen: View {
                 break
             }
         }
+    }
+
+    // MARK: - Native System Toolbar (iPhone Duo vertical bar & Liquid Glass)
+
+    @ToolbarContentBuilder
+    private var workbenchToolbar: some ToolbarContent {
+        ToolbarItem(placement: .cancellationAction) {
+            Button {
+                onBack()
+                Task { await model.back() }
+            } label: {
+                Image(systemName: "chevron.left")
+            }
+            .accessibilityLabel(Text("Back"))
+        }
+        .duoVisibilityPriority(.high)
+
+        if showsRailToggle, let onToggleRail {
+            ToolbarItem(placement: .topBarLeading) {
+                Button(action: onToggleRail) {
+                    Image(systemName: "sidebar.leading")
+                        .foregroundStyle(isRailVisible ? palette.accent : palette.inkSecondary)
+                }
+                .accessibilityLabel(isRailVisible ? Text("Hide sidebar") : Text("Show sidebar"))
+                .accessibilityAddTraits(isRailVisible ? .isSelected : [])
+            }
+            .duoVisibilityPriority(.standard)
+        }
+
+        ToolbarItem(placement: .principal) {
+            Button {
+                onOpenSwitcher?()
+            } label: {
+                HStack(spacing: 5) {
+                    Text(verbatim: model.panelPresentation.title)
+                        .font(SeNocturneType.font(12.5, weight: .medium, mono: true))
+                        .foregroundStyle(palette.ink)
+                        .lineLimit(1)
+                    Text(verbatim: model.panelPresentation.counter)
+                        .font(SeNocturneType.font(9, mono: true))
+                        .foregroundStyle(palette.inkSecondary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(palette.cardAlt, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(onOpenSwitcher == nil)
+            .accessibilityLabel(Text(verbatim: model.panelPresentation.title))
+            .accessibilityHint(Text(verbatim: hubText("Switch terminal")))
+        }
+
+        if let onOpenSwitcher {
+            ToolbarItem(placement: DuoToolbarPlacement.pinnedTrailing) {
+                Button(action: onOpenSwitcher) {
+                    Image(systemName: "rectangle.stack")
+                }
+                .accessibilityLabel(Text(verbatim: hubText("Switch terminal")))
+            }
+            .duoVisibilityPriority(.high)
+        }
+
+        if showsInspectorToggle, let onToggleInspector {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button(action: onToggleInspector) {
+                    Image(systemName: "sidebar.trailing")
+                        .foregroundStyle(isInspectorOpen ? palette.accent : palette.inkSecondary)
+                }
+                .accessibilityLabel(isInspectorOpen ? Text("Hide files panel") : Text("Show files panel"))
+                .accessibilityAddTraits(isInspectorOpen ? .isSelected : [])
+                .accessibilityIdentifier("terminal-inspector-toggle")
+            }
+            .duoVisibilityPriority(.high)
+        } else {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    model.present(.files)
+                } label: {
+                    Image(systemName: "folder")
+                }
+                .accessibilityLabel(Text("Files"))
+            }
+            .duoVisibilityPriority(.standard)
+        }
+
+        if model.agentReady {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    model.present(.agent)
+                } label: {
+                    Image(
+                        systemName: model.agentPermissionCount > 0
+                            ? "bubble.left.and.exclamationmark.bubble.right"
+                            : "bubble.left.and.bubble.right"
+                    )
+                    .foregroundStyle(model.agentPermissionCount > 0 ? palette.warning : palette.accent)
+                }
+                .accessibilityLabel(Text("Agent conversation"))
+                .accessibilityValue(Text(model.agentPermissionCount > 0
+                    ? "\(model.agentPermissionCount) pending"
+                    : String(localized: "Idle")))
+            }
+            .duoVisibilityPriority(.high)
+        }
+
+        ToolbarItem(placement: .topBarTrailing) {
+            Button {
+                model.panelExpanded.toggle()
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .foregroundStyle(model.panelExpanded ? palette.accent : palette.inkSecondary)
+            }
+            .accessibilityLabel(Text("Terminal menu"))
+            .accessibilityAddTraits(model.panelExpanded ? .isSelected : [])
+        }
+        .duoVisibilityPriority(.standard)
     }
 
     // MARK: - Canvas

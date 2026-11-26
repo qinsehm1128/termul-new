@@ -63,61 +63,102 @@ struct SePalette: Sendable {
     let terminalCanvas: Color
     let terminalInk: Color
 
+    /// Velvet Plum (Night) — moonlit plum-obsidian base with Rosé Pine iris
+    /// highlights and harmonized pine-jade / warm-gold / rose status tokens.
+    /// Matches the Se desktop & web renderer Velvet Plum theme 1:1.
     static let night = SePalette(
-        canvas: Color(hex: 0x0B0D12),
-        surface: Color(hex: 0x0B0D12),
-        card: Color(hex: 0x12161F),
-        cardAlt: Color(hex: 0x181D28),
-        ink: Color(hex: 0xF2F0E8),
-        inkSecondary: Color(hex: 0xA9AEBB),
-        inkTertiary: Color(hex: 0x6F7585),
-        stroke: Color.white.opacity(0.085),
-        strokeStrong: Color.white.opacity(0.16),
-        accent: Color(hex: 0x98A6FF),
-        onAccent: Color(hex: 0x0B0D12),
-        accentSubtle: Color(hex: 0x8B9BFF).opacity(0.14),
-        live: Color(hex: 0x4FD8AE),
-        liveSubtle: Color(hex: 0x4FD8AE).opacity(0.13),
-        warning: Color(hex: 0xF2B36B),
-        warningSubtle: Color(hex: 0xF2B36B).opacity(0.12),
-        danger: Color(hex: 0xFF8F84),
-        dangerSubtle: Color(hex: 0xFF8F84).opacity(0.12),
-        codeCanvas: Color(hex: 0x05070A),
-        codeInk: Color(hex: 0xE9E7DC),
-        terminalCanvas: Color(hex: 0x05070A),
-        terminalInk: Color(hex: 0xE9E7DC)
+        canvas: Color(hex: 0x181523),
+        surface: Color(hex: 0x201C2E),
+        card: Color(hex: 0x242034),
+        cardAlt: Color(hex: 0x29243B),
+        ink: Color(hex: 0xECE8FA),
+        inkSecondary: Color(hex: 0xB0A9C9),
+        inkTertiary: Color(hex: 0x7E7599),
+        stroke: Color(hex: 0xE0DEF4).opacity(0.09),
+        strokeStrong: Color(hex: 0xE0DEF4).opacity(0.16),
+        accent: Color(hex: 0xC4A7E7),
+        onAccent: Color(hex: 0x181523),
+        accentSubtle: Color(hex: 0x9F63C9).opacity(0.18),
+        live: Color(hex: 0x8BC9B8),
+        liveSubtle: Color(hex: 0x8BC9B8).opacity(0.15),
+        warning: Color(hex: 0xF6C177),
+        warningSubtle: Color(hex: 0xF6C177).opacity(0.14),
+        danger: Color(hex: 0xEB6F92),
+        dangerSubtle: Color(hex: 0xEB6F92).opacity(0.14),
+        codeCanvas: Color(hex: 0x12101A),
+        codeInk: Color(hex: 0xECE8FA),
+        terminalCanvas: Color(hex: 0x14111E),
+        terminalInk: Color(hex: 0xECE8FA)
     )
 
+    /// Velvet Dawn (Day) — warm alabaster surfaces paired with deep velvet plum
+    /// accent and high-contrast eggplant ink. Matches desktop & web `Se Light`.
     static let day = SePalette(
-        canvas: Color(hex: 0xF1F4F8),
-        surface: Color(hex: 0xF1F4F8),
+        canvas: Color(hex: 0xFAF7F5),
+        surface: Color(hex: 0xFFFFFF),
         card: Color(hex: 0xFFFFFF),
-        cardAlt: Color(hex: 0xE7ECF3),
-        ink: Color(hex: 0x10151C),
-        inkSecondary: Color(hex: 0x4B5666),
-        inkTertiary: Color(hex: 0x7A8697),
-        stroke: Color.black.opacity(0.10),
-        strokeStrong: Color.black.opacity(0.20),
-        accent: Color(hex: 0x4353EE),
+        cardAlt: Color(hex: 0xF4EEF7),
+        ink: Color(hex: 0x251E38),
+        inkSecondary: Color(hex: 0x62587A),
+        inkTertiary: Color(hex: 0x8A7FA3),
+        stroke: Color(hex: 0x251E38).opacity(0.09),
+        strokeStrong: Color(hex: 0x251E38).opacity(0.18),
+        accent: Color(hex: 0x7D54B5),
         onAccent: Color(hex: 0xFFFFFF),
-        accentSubtle: Color(hex: 0x4353EE).opacity(0.10),
-        live: Color(hex: 0x0C7A5A),
-        liveSubtle: Color(hex: 0x0C7A5A).opacity(0.10),
-        warning: Color(hex: 0x9A5B08),
-        warningSubtle: Color(hex: 0x9A5B08).opacity(0.10),
-        danger: Color(hex: 0xC0392B),
-        dangerSubtle: Color(hex: 0xC0392B).opacity(0.10),
-        codeCanvas: Color(hex: 0xF1F4F8),
-        codeInk: Color(hex: 0x10151C),
-        // The terminal is a surface inside the screen, so it needs a light
-        // variant too: readable ink on a near-white canvas in Day, the
-        // original dark canvas in Night.
-        terminalCanvas: Color(hex: 0xF7F8FB),
-        terminalInk: Color(hex: 0x1B2028)
+        accentSubtle: Color(hex: 0x7D54B5).opacity(0.11),
+        live: Color(hex: 0x2D8377),
+        liveSubtle: Color(hex: 0x2D8377).opacity(0.11),
+        warning: Color(hex: 0xB87924),
+        warningSubtle: Color(hex: 0xB87924).opacity(0.11),
+        danger: Color(hex: 0xB84266),
+        dangerSubtle: Color(hex: 0xB84266).opacity(0.11),
+        codeCanvas: Color(hex: 0xF4EEF7),
+        codeInk: Color(hex: 0x251E38),
+        terminalCanvas: Color(hex: 0xFAF7F5),
+        terminalInk: Color(hex: 0x251E38)
     )
 
     static func palette(for mode: SeThemeMode) -> SePalette {
         mode.palette
+    }
+
+    /// 16-color ANSI hex palette for SwiftTerm aligned with desktop xterm Velvet Plum / Dawn.
+    static func terminalAnsiHexes(for mode: SeThemeMode) -> [UInt32] {
+        switch mode {
+        case .night:
+            return [
+                0x14111E, 0xEB6F92, 0x8BC9B8, 0xF6C177, 0x2472C8, 0xC4A7E7, 0x9CCFD8, 0xECE8FA,
+                0x6E6A86, 0xF28BA8, 0xA4DACB, 0xFAD39C, 0x5B9CF0, 0xD4BDF2, 0xB4E0E8, 0xFCF9FF,
+            ]
+        case .day:
+            return [
+                0x251E38, 0xB84266, 0x2D8377, 0xB87924, 0x0451A5, 0x7D54B5, 0x3B7796, 0x62587A,
+                0x8A7FA3, 0xD14D76, 0x379E90, 0xCF8B2A, 0x2568C9, 0x9164CC, 0x478EB0, 0x251E38,
+            ]
+        }
+    }
+}
+
+/// Subtle Velvet Plum atmospheric backdrop used on hub/home screens to match
+/// the desktop workbench's refined radial top glow without lowering contrast.
+struct SeVelvetBackdrop: View {
+    @Environment(\.sePalette) private var palette
+    @Environment(\.seThemeMode) private var mode
+
+    var body: some View {
+        ZStack {
+            palette.canvas
+            RadialGradient(
+                colors: [
+                    Color(hex: mode.isNight ? 0x9F63C9 : 0x7D54B5).opacity(mode.isNight ? 0.14 : 0.065),
+                    .clear,
+                ],
+                center: UnitPoint(x: 0.18, y: -0.05),
+                startRadius: 20,
+                endRadius: 520
+            )
+        }
+        .ignoresSafeArea()
     }
 }
 

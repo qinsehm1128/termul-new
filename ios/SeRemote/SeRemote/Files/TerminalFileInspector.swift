@@ -183,28 +183,38 @@ private struct TerminalInspectorSegmentControl: View {
     let agentAvailable: Bool
 
     @Environment(\.sePalette) private var palette
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var pillNamespace
 
     var body: some View {
         HStack(spacing: 2) {
             ForEach(TerminalInspectorSegment.allCases) { option in
                 let enabled = option != .agent || agentAvailable
+                let isSelected = segment == option
                 Button {
-                    segment = option
+                    withAnimation(
+                        reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.82)
+                    ) {
+                        segment = option
+                    }
                 } label: {
                     Text(option.title)
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(segment == option ? palette.canvas : palette.inkTertiary)
+                        .foregroundStyle(isSelected ? palette.onAccent : palette.inkTertiary)
                         .frame(maxWidth: .infinity, minHeight: 30)
-                        .background(
-                            segment == option ? palette.ink : Color.clear,
-                            in: Capsule(style: .continuous)
-                        )
+                        .background {
+                            if isSelected {
+                                Capsule(style: .continuous)
+                                    .fill(palette.accent)
+                                    .matchedGeometryEffect(id: "inspector-segment-pill", in: pillNamespace)
+                            }
+                        }
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .disabled(!enabled)
                 .opacity(enabled ? 1 : 0.5)
-                .accessibilityAddTraits(segment == option ? .isSelected : [])
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
             }
         }
         .padding(2)

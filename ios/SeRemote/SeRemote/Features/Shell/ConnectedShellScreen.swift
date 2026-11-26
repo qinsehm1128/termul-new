@@ -33,6 +33,7 @@ struct ConnectedShellScreen: View {
     @State private var inspectorSegment: TerminalInspectorSegment = .files
     @State private var inspectorOpenOverride: Bool?
     @State private var railCollapsed: Bool?
+    @State private var workbenchRailVisibleOverride: Bool?
     @State private var openingSession = false
     @State private var selectionTask: Task<Void, Never>?
     @State private var landingNotice: String?
@@ -146,9 +147,16 @@ struct ConnectedShellScreen: View {
             let sidebar = ShellPresentation.usesSidebar(isRegular: sizeClass == .regular, width: geometry.size.width)
             let inlineInspector = ShellPresentation.usesInlineInspector(isRegular: sizeClass == .regular, width: geometry.size.width)
             let portrait = geometry.size.width <= geometry.size.height
+            let defaultRailVisible = ShellPresentation.defaultWorkbenchRailVisible(
+                width: geometry.size.width,
+                isRegular: sizeClass == .regular
+            )
+            let showsWorkbenchRail = sidebar && (workbenchRailVisibleOverride ?? defaultRailVisible)
             let collapsed = railCollapsed ?? ShellPresentation.defaultRailCollapsed(
                 width: geometry.size.width, height: geometry.size.height)
-            let railWidth = collapsed ? ShellPresentation.railCollapsedWidth : ShellPresentation.railExpandedWidth
+            let railWidth = showsWorkbenchRail
+                ? (collapsed ? ShellPresentation.railCollapsedWidth : ShellPresentation.railExpandedWidth)
+                : 0
             let defaultInspectorOpen = ShellPresentation.defaultInspectorOpen(
                 width: geometry.size.width,
                 height: geometry.size.height,
@@ -156,7 +164,7 @@ struct ConnectedShellScreen: View {
             )
             let idealInspectorWidth = ShellPresentation.inspectorColumnWidth(
                 availableWidth: geometry.size.width,
-                railWidth: sidebar ? railWidth : 0
+                railWidth: railWidth
             )
             let inspectorOpen = inlineInspector && workbenchVisible && (inspectorOpenOverride ?? defaultInspectorOpen)
             let inspectorBinding = Binding<Bool>(
@@ -176,20 +184,30 @@ struct ConnectedShellScreen: View {
                 // Deliberately outside TabView and every layout conditional so
                 // switching tabs or toggling the inspector never reconstructs
                 // the mounted TerminalScreen (I1) or ends a host PTY (I5).
-                // The inspector modifier sits only on the workbench column so
-                // opening it never compresses the leading AdaptiveSidebarShell.
+                // Wrapping the workbench in a stable NavigationStack lets iOS 27.1+
+                // host terminal actions in iPhone Duo's trailing vertical bar,
+                // while `.inspector` sits outside the leading rail so it never
+                // compresses AdaptiveSidebarShell.
                 ZStack(alignment: .leading) {
-                    workbench(
-                        inlineInspector: inlineInspector,
-                        isInspectorOpen: inspectorOpen,
-                        onToggleInspector: {
-                            toggleInspector(
-                                currentlyOpen: inspectorOpen,
-                                requested: .files,
-                                inlineInspector: inlineInspector
-                            )
-                        }
-                    )
+                    NavigationStack {
+                        workbench(
+                            inlineInspector: inlineInspector,
+                            isInspectorOpen: inspectorOpen,
+                            onToggleInspector: {
+                                toggleInspector(
+                                    currentlyOpen: inspectorOpen,
+                                    requested: .files,
+                                    inlineInspector: inlineInspector
+                                )
+                            },
+                            showsRailToggle: sidebar,
+                            isRailVisible: showsWorkbenchRail,
+                            onToggleRail: {
+                                workbenchRailVisibleOverride = !showsWorkbenchRail
+                            }
+                        )
+                    }
+                    .tint(palette.accent)
                     .duoBackgroundExtension()
                     .inspector(isPresented: inspectorBinding) {
                         inspector(root: fileRoot) {
@@ -202,9 +220,9 @@ struct ConnectedShellScreen: View {
                             max: ShellPresentation.inspectorMaxWidth
                         )
                     }
-                    .padding(.leading, sidebar ? railWidth : 0)
+                    .padding(.leading, railWidth)
 
-                    if sidebar {
+                    if showsWorkbenchRail {
                         AdaptiveSidebarShell(
                             selection: Binding(
                                 get: { navigation.destination },
@@ -220,6 +238,7 @@ struct ConnectedShellScreen: View {
                             selectedTerminalID: terminalModel.activeID,
                             onOpenTerminal: { row in openListed(terminalID: row.id) }
                         )
+                        .transition(.move(edge: .leading).combined(with: .opacity))
                     }
                 }
                 .opacity(workbenchVisible ? 1 : 0)
@@ -253,6 +272,7 @@ struct ConnectedShellScreen: View {
             }
             .onChange(of: portrait) { _, _ in
                 railCollapsed = nil
+                workbenchRailVisibleOverride = nil
                 inspectorOpenOverride = ShellPresentation.inspectorOverrideAfterOrientationChange(
                     currentOverride: inspectorOpenOverride,
                     newDefaultOpen: defaultInspectorOpen
@@ -522,7 +542,7 @@ struct ConnectedShellScreen: View {
         }
         .tabViewStyle(.sidebarAdaptable)
         .duoPreferredTabBarPlacement()
-        .tint(palette.ink)
+        .tint(palette.accent)
     }
 
     @ToolbarContentBuilder
@@ -636,7 +656,10 @@ struct ConnectedShellScreen: View {
     private func workbench(
         inlineInspector: Bool,
         isInspectorOpen: Bool,
-        onToggleInspector: @escaping () -> Void
+        onToggleInspector: @escaping () -> Void,
+        showsRailToggle: Bool,
+        isRailVisible: Bool,
+        onToggleRail: @escaping () -> Void
     ) -> some View {
         TerminalWorkbenchScreen(
             session: session,
@@ -665,7 +688,11 @@ struct ConnectedShellScreen: View {
             },
             showsInspectorToggle: inlineInspector,
             isInspectorOpen: isInspectorOpen,
-            onToggleInspector: onToggleInspector
+            onToggleInspector: onToggleInspector,
+            showsRailToggle: showsRailToggle,
+            isRailVisible: isRailVisible,
+            onToggleRail: onToggleRail,
+            usesSystemToolbar: true
         )
     }
 

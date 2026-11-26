@@ -156,7 +156,7 @@ struct SettingsScreen: View {
                     .padding(.bottom, 28)
             }
         }
-        .background(palette.canvas.ignoresSafeArea())
+        .background(SeVelvetBackdrop())
         .foregroundStyle(palette.ink)
         .tint(palette.accent)
         .navigationTitle(usesSystemChrome ? String(localized: "Settings") : "")

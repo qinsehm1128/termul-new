@@ -92,11 +92,7 @@ struct WorkspaceHubScreen: View {
             .disabled(selectingProject)
             .overlay { if selectingProject { ProgressView().accessibilityLabel("Opening project") } }
             .navigationDestination(for: ToolDestination.self) { destination in
-                // Route directly so each tool keeps the prototype's custom nav.
-                // WorkspaceToolDestinationView forces the system bar visible,
-                // which would draw a second bar above the Nocturne header.
                 toolDestination(destination)
-                    .toolbar(.hidden, for: .navigationBar)
             }
             .fullScreenCover(isPresented: $pluginsCover) {
                 PluginBrowserScreen(

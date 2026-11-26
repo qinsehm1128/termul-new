@@ -171,6 +171,40 @@ struct DuoAndInspectorLayoutTests {
         )
     }
 
+    @Test("Workbench leading rail defaults hidden on iPhone Duo inner portrait and visible on iPad / Duo inner landscape")
+    func workbenchRailDefaultVisibility() {
+        // iPad portrait & landscape + iPhone Duo inner landscape (951pt) show rail by default.
+        #expect(ShellPresentation.defaultWorkbenchRailVisible(width: 744, isRegular: true))
+        #expect(ShellPresentation.defaultWorkbenchRailVisible(width: 834, isRegular: true))
+        #expect(ShellPresentation.defaultWorkbenchRailVisible(width: 951, isRegular: true))
+        #expect(ShellPresentation.defaultWorkbenchRailVisible(width: 1194, isRegular: true))
+
+        // iPhone Duo inner portrait (669pt) starts full-width so the terminal keeps all 669pt.
+        #expect(!ShellPresentation.defaultWorkbenchRailVisible(width: 669, isRegular: true))
+
+        // Compact screens never show the workbench rail.
+        #expect(!ShellPresentation.defaultWorkbenchRailVisible(width: 466, isRegular: false))
+        #expect(!ShellPresentation.defaultWorkbenchRailVisible(width: 393, isRegular: false))
+    }
+
+    @Test("Velvet Plum & Velvet Dawn palettes expose 16-color ANSI tables aligned with desktop")
+    func velvetPlumAnsiPalettes() {
+        let night = SePalette.terminalAnsiHexes(for: .night)
+        let day = SePalette.terminalAnsiHexes(for: .day)
+        #expect(night.count == 16)
+        #expect(day.count == 16)
+        // Velvet Plum ANSI anchors: rose red, pine jade green, gold yellow, iris magenta, foam cyan.
+        #expect(night[1] == 0xEB6F92)
+        #expect(night[2] == 0x8BC9B8)
+        #expect(night[3] == 0xF6C177)
+        #expect(night[5] == 0xC4A7E7)
+        #expect(night[6] == 0x9CCFD8)
+        // Velvet Dawn ANSI anchors.
+        #expect(day[1] == 0xB84266)
+        #expect(day[2] == 0x2D8377)
+        #expect(day[5] == 0x7D54B5)
+    }
+
     @Test("Every navigation destination exposes a non-empty SF Symbol for native TabView and Duo vertical bar")
     func destinationSystemImages() {
         for destination in SidebarDestination.allCases {

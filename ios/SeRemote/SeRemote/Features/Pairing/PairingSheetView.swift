@@ -146,13 +146,13 @@ private struct QRBox: View {
             let cell = (side - 24) / 12
             ZStack {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color(hex: 0xF2F0E8))
+                    .fill(Color(hex: 0xECE8FA))
                 VStack(spacing: 0) {
                     ForEach(0..<12, id: \.self) { row in
                         HStack(spacing: 0) {
                             ForEach(0..<12, id: \.self) { column in
                                 Rectangle()
-                                    .fill(cells[row * 12 + column] ? Color(hex: 0x0B0D12) : Color.clear)
+                                    .fill(cells[row * 12 + column] ? Color(hex: 0x181523) : Color.clear)
                                     .frame(width: cell, height: cell)
                             }
                         }
@@ -163,7 +163,7 @@ private struct QRBox: View {
         }
         .overlay {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color(hex: 0xF2F0E8), lineWidth: 1)
+                .strokeBorder(Color(hex: 0xECE8FA), lineWidth: 1)
         }
         .accessibilityLabel(String(localized: "QR code"))
     }

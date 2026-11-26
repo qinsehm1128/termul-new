@@ -51,8 +51,14 @@ struct ToolsView: View {
                                           accessibilityLabel: String(localized: "Tools unavailable"))
                             }
                         }
+                        let gridCount = columns == .single
+                            ? 1
+                            : ShellPresentation.evenGridColumnCount(
+                                width: Double(geometry.size.width),
+                                isRegular: sizeClass == .regular
+                            )
                         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), alignment: .top),
-                            count: columns == .single ? 1 : 2), spacing: SeSpace.md) {
+                            count: gridCount), spacing: SeSpace.md) {
                             ForEach(ToolDestination.hubCases) { tool in
                                 Group {
                                     if tool == .plugins {

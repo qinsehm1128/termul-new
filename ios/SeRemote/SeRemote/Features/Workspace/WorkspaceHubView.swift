@@ -112,7 +112,7 @@ struct WorkspaceHubView: View {
             containerWidth = newWidth
         }
         .scrollIndicators(.hidden)
-        .background(palette.canvas.ignoresSafeArea())
+        .background(SeVelvetBackdrop())
     }
 
     // MARK: Header

@@ -10,7 +10,7 @@ struct ScannerView: View {
 
     var body: some View {
         ZStack {
-            Color(hex: 0x05070A).ignoresSafeArea()
+            Color(hex: 0x12101A).ignoresSafeArea()
 
             Group {
                 if let cameraError {

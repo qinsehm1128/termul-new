@@ -30,6 +30,15 @@ enum ShellPresentation {
         usesSidebar(isRegular: isRegular, width: width)
     }
 
+    /// Whether the leading terminal rail starts visible inside the workbench.
+    /// Roomy regular widths (iPad portrait/landscape >= 744pt and iPhone Duo inner
+    /// landscape 951pt) show the collapsible rail by default; narrower regular
+    /// canvases like iPhone Duo inner portrait (669pt) start full-width and let
+    /// the user toggle the rail on demand.
+    static func defaultWorkbenchRailVisible(width: Double, isRegular: Bool) -> Bool {
+        isRegular && width >= 744
+    }
+
     /// Landscape starts expanded, portrait starts collapsed. This is a
     /// width-vs-height rule, not a device check.
     static func defaultRailCollapsed(width: Double, height: Double) -> Bool {

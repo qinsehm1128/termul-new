@@ -80,6 +80,14 @@ struct TerminalScreen: UIViewRepresentable {
         view.nativeForegroundColor = UIColor(mode.palette.terminalInk)
         view.backgroundColor = canvas
         view.layer.backgroundColor = canvas.cgColor
+        let ansi = SePalette.terminalAnsiHexes(for: mode).map { hex in
+            SwiftTerm.Color(
+                red8: UInt16((hex >> 16) & 0xFF),
+                green8: UInt16((hex >> 8) & 0xFF),
+                blue8: UInt16(hex & 0xFF)
+            )
+        }
+        view.installColors(ansi)
     }
 
     func updateUIView(_ uiView: PhoneTerminalView, context: Context) {

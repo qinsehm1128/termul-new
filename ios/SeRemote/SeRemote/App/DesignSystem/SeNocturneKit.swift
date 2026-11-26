@@ -5,35 +5,35 @@ import SwiftUI
 extension SeThemeMode {
     var isNight: Bool { self == .night }
 
-    /// Bottom sheets sit one step above the page in both modes.
+    /// Bottom sheets sit one step above the page in both modes (Velvet Plum / Velvet Dawn).
     var sheetSurface: Color {
-        isNight ? Color(hex: 0x10141C) : Color(hex: 0xF6F8FB)
+        isNight ? Color(hex: 0x1F1B2D) : Color(hex: 0xFAF7F5)
     }
 
-    /// The translucent bottom bar / rail backdrop.
+    /// The translucent bar / glass backdrop.
     var barSurface: Color {
-        isNight ? Color(hex: 0x0A0C11).opacity(0.90) : Color(hex: 0xF6F8FC).opacity(0.96)
+        isNight ? Color(hex: 0x161322).opacity(0.92) : Color(hex: 0xFAF7F5).opacity(0.96)
     }
 
     var railSurface: Color {
-        isNight ? Color(hex: 0x090B10).opacity(0.98) : Color(hex: 0xF5F8FC).opacity(0.97)
+        isNight ? Color(hex: 0x151220).opacity(0.98) : Color(hex: 0xF7F2F9).opacity(0.97)
     }
 
     /// Filled inset controls (icon buttons, segmented tracks, chips).
     var insetFill: Color {
-        isNight ? Color.white.opacity(0.045) : Color.white
+        isNight ? Color(hex: 0xE0DEF4).opacity(0.055) : Color.white
     }
 
     var insetStroke: Color {
-        isNight ? Color.white.opacity(0.10) : Color.black.opacity(0.12)
+        isNight ? Color(hex: 0xE0DEF4).opacity(0.11) : Color(hex: 0x251E38).opacity(0.11)
     }
 
     var hairline: Color {
-        isNight ? Color.white.opacity(0.08) : Color.black.opacity(0.10)
+        isNight ? Color(hex: 0xE0DEF4).opacity(0.085) : Color(hex: 0x251E38).opacity(0.09)
     }
 
     var strongHairline: Color {
-        isNight ? Color.white.opacity(0.16) : Color.black.opacity(0.20)
+        isNight ? Color(hex: 0xE0DEF4).opacity(0.16) : Color(hex: 0x251E38).opacity(0.18)
     }
 }
 
@@ -138,25 +138,37 @@ struct SeIconButton: View {
     }
 }
 
-/// Bone-white in the night, ink in the day: the one primary action.
+/// Velvet Plum primary action button matching the Se 2.0 desktop/web CTA.
 struct SeSolidButton: View {
     let title: String
     var icon: SeIcon?
     var action: () -> Void
 
-    @Environment(\.sePalette) private var palette
+    @Environment(\.seThemeMode) private var mode
+
+    private var fill: Color {
+        mode.isNight ? Color(hex: 0x8F64C8) : Color(hex: 0x7D54B5)
+    }
+
+    private var foreground: Color {
+        Color(hex: 0xFCF9FF)
+    }
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                if let icon { SeIconView(icon: icon, size: 16, stroke: 1.7, color: palette.canvas) }
+                if let icon { SeIconView(icon: icon, size: 16, stroke: 1.7, color: foreground) }
                 Text(title)
                     .font(SeNocturneType.font(13, weight: .semibold))
             }
-            .foregroundStyle(palette.canvas)
+            .foregroundStyle(foreground)
             .frame(maxWidth: .infinity, minHeight: 44)
             .padding(.horizontal, 12)
-            .background(palette.ink, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .background(fill, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .strokeBorder(Color.white.opacity(mode.isNight ? 0.16 : 0.12), lineWidth: 1)
+            }
         }
         .buttonStyle(SePressable())
     }
