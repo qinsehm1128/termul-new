@@ -221,6 +221,11 @@ const POST_FREEZE_ENV_SUFFIXES = [
   'SSH_CREDENTIALS_FILE',
   'TEST_OBSERVER_BINARY',
   'TEST_OBSERVER_BUILD_ID',
+  // Renderer shell motion tuning (Velvet Plum spring presets).
+  'SPRING_PANEL',
+  'SPRING_SNAPPY',
+  // Explicit `tailscale` CLI path for tailnet discovery (GUI apps lack PATH).
+  'TAILSCALE_PATH',
   '_'
 ]
 
