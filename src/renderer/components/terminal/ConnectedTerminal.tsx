@@ -944,11 +944,18 @@ function ConnectedTerminalComponent({
     }
   }, [companionGeometry, isVisible])
 
+  // Edge tracker for the display-mode listener. The listener (not the render
+  // path) owns this ref so a burst of events is evaluated in arrival order,
+  // independent of when React commits `parkedByPhone`.
+  const wasParkedByPhoneRef = useRef(false)
+
   useEffect(() => {
     if (!terminalApi.onDisplayModeChanged) return
     return terminalApi.onDisplayModeChanged((event) => {
       if (event.terminalId !== ptyIdRef.current) return
       const parked = event.mode === 'phone'
+      const wasParked = wasParkedByPhoneRef.current
+      wasParkedByPhoneRef.current = parked
       parkedByPhoneRef.current = parked
       setParkedByPhone(parked)
       if (!parked) {
@@ -957,6 +964,79 @@ function ConnectedTerminalComponent({
           geometry.setPreferredMode('desktop')
         }
         forceResizeFit()
+
+        // The desktop owns this terminal again. Nothing so far brought the
+        // local xterm back in step with the program: the only automatic input
+        // resync runs once after attach, and it is (correctly) refused while a
+        // phone owns the terminal or the tab is hidden. So any desktop attach
+        // that overlapped a phone session left the renderer with the mode-less
+        // replay state, and the user had to press "resync input takeover".
+        //
+        // Handback is the retry point. Re-apply the host's tracked modes to
+        // this renderer only (the PTY receives nothing) with the same safety
+        // evidence as the attach-time call, now unparked; the resync module
+        // still refuses to rotate a claim for a hidden/phone/shell view. After
+        // a layout frame, so the desktop resize above has been issued first and
+        // the host's reply reflects the program's post-SIGWINCH redraw.
+        //
+        // Only the parked→unparked edge triggers work: a flapping phone
+        // (desktop, phone, desktop within a second) must not stack resyncs,
+        // and a redundant desktop event must not rotate anything.
+        if (wasParked && !isMobileWebShell && isVisibleRef.current) {
+          const ptyId = event.terminalId
+          requestAnimationFrame(() => {
+            if (parkedByPhoneRef.current || ptyIdRef.current !== ptyId) return
+            void resyncRendererInputModes(ptyId, {
+              autoRecoverClaim: {
+                rendererRefAttached: rendererRefAttachedRef.current,
+                visible: isVisibleRef.current,
+                mobileWebShell: isMobileWebShell,
+                companionPhoneSurface:
+                  companionGeometryRef.current?.surfaceActive === true &&
+                  companionGeometryRef.current.preferredMode === 'phone',
+                parkedByPhone: parkedByPhoneRef.current
+              }
+            }).then((result) => {
+              if (result.status === 'applied' && result.rendererBefore !== result.rendererAfter) {
+                const projectId = continuityProjectIdRef.current
+                recordTerminalContinuityEvent({
+                  name: 'input-modes-resynced',
+                  correlationId: getOrCreateProjectContinuityCorrelation(projectId),
+                  projectId,
+                  ptyId,
+                  details: {
+                    trigger: 'display-mode-handback',
+                    automatic: true,
+                    rendererBefore: result.rendererBefore,
+                    rendererAfter: result.rendererAfter
+                  }
+                })
+              } else if (result.status === 'unavailable' && result.reason !== 'no-claim') {
+                // Stable code only: this lands in the persistent log.
+                void logFrontendError({
+                  level: 'warn',
+                  source: 'terminal-input-resync.handback',
+                  message: `code=HANDBACK_INPUT_RESYNC_UNAVAILABLE_${result.reason.replace(/-/g, '_').toUpperCase()}`
+                })
+              }
+            })
+            // Keyboard: xterm lost its focus target when the parked banner
+            // took it or the phone session moved it. Same guard as the
+            // visibility effect — never steal focus from a control.
+            const active = document.activeElement
+            const isInteractiveElementFocused =
+              active &&
+              active !== document.body &&
+              (active.tagName === 'BUTTON' ||
+                active.tagName === 'INPUT' ||
+                active.tagName === 'TEXTAREA' ||
+                active.tagName === 'SELECT' ||
+                active.tagName === 'A')
+            if (!isInteractiveElementFocused) {
+              terminalRef.current?.focus()
+            }
+          })
+        }
       }
       void logFrontendError({
         level: 'warn',
@@ -964,7 +1044,7 @@ function ConnectedTerminalComponent({
         message: `mode=${event.mode} ${event.cols}x${event.rows}`
       })
     })
-  }, [forceResizeFit])
+  }, [forceResizeFit, isMobileWebShell])
 
   const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(null)
   useTerminalColorTheme(terminalInstance)

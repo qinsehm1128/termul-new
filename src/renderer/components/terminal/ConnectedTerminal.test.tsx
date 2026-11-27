@@ -723,6 +723,191 @@ describe('ConnectedTerminal', () => {
     }
   })
 
+  // Regression: after a phone session the desktop lost keyboard+mouse until the
+  // user pressed the manual "resync input takeover" button. The desktop regained
+  // ownership (`mode=desktop`) but the component only flipped the parked flag and
+  // re-fitted; nothing re-applied the host's tracked input modes to the local
+  // xterm, and nothing gave xterm its focus back.
+  it('re-applies host input modes and refocuses xterm when the phone hands the terminal back', async () => {
+    let emitDisplayMode: ((event: { terminalId: string; mode: string }) => void) | undefined
+    vi.mocked(terminalApi).onDisplayModeChanged?.mockImplementation((handler: never) => {
+      emitDisplayMode = handler as never
+      return vi.fn()
+    })
+
+    render(<ConnectedTerminal terminalId="terminal-handback" />)
+
+    await vi.waitFor(() => {
+      expect(emitDisplayMode).toBeDefined()
+      expect(mockTerminalInstance.onData).toHaveBeenCalled()
+    })
+
+    // Let the one-time post-attach resync settle so it does not pollute the
+    // measurement below (it correctly refuses while parked).
+    await vi.waitFor(() => {
+      expect(mockResyncRendererInputModes).toHaveBeenCalledWith(
+        'terminal-handback',
+        expect.objectContaining({
+          autoRecoverClaim: expect.objectContaining({ parkedByPhone: false })
+        })
+      )
+    })
+    mockResyncRendererInputModes.mockClear()
+    mockTerminalInstance.focus.mockClear()
+
+    await act(async () => {
+      emitDisplayMode?.({ terminalId: 'terminal-handback', mode: 'phone' })
+    })
+    // Parked: no input resync while the phone owns the terminal.
+    expect(mockResyncRendererInputModes).not.toHaveBeenCalled()
+
+    await act(async () => {
+      emitDisplayMode?.({ terminalId: 'terminal-handback', mode: 'desktop' })
+    })
+
+    // Desktop owns the terminal again: the local xterm must be brought back in
+    // step with the host's tracked modes (local-only; the PTY receives nothing).
+    await vi.waitFor(() => {
+      expect(mockResyncRendererInputModes).toHaveBeenCalledWith(
+        'terminal-handback',
+        expect.objectContaining({
+          autoRecoverClaim: expect.objectContaining({ parkedByPhone: false })
+        })
+      )
+    })
+    // And it must be able to receive keystrokes again.
+    await vi.waitFor(() => {
+      expect(mockTerminalInstance.focus).toHaveBeenCalled()
+    })
+
+    // Input is live again: keystrokes reach the PTY.
+    const emitTerminalData = mockTerminalInstance.onData.mock.calls.at(-1)?.[0] as (
+      data: string
+    ) => void
+    vi.mocked(terminalApi).write.mockClear()
+    emitTerminalData('c')
+    await vi.waitFor(() => {
+      expect(vi.mocked(terminalApi).write).toHaveBeenCalledWith('terminal-handback', 'c')
+    })
+  })
+
+  // The variant that actually bit the user: the desktop view (re)mounts while
+  // the phone already owns the terminal — a tab switch or pane remount during a
+  // phone session. The fresh xterm is repainted from a replay that carries no
+  // mode switches, so the one-time post-attach resync is its only chance to
+  // learn the program's mouse/keyboard modes. That resync is correctly refused
+  // while parked (no claim rotation on behalf of a phone-owned view), and
+  // nothing ever retried it once the phone handed the terminal back.
+  it('retries the refused attach-time resync once the phone hands a remounted terminal back', async () => {
+    let emitDisplayMode: ((event: { terminalId: string; mode: string }) => void) | undefined
+    vi.mocked(terminalApi).onDisplayModeChanged?.mockImplementation((handler: never) => {
+      emitDisplayMode = handler as never
+      return vi.fn()
+    })
+    mockTerminalStoreState.peekTranscript.mockReturnValue('\x1b[?1049h\x1b[?1002h\x1b[?1006h')
+
+    render(<ConnectedTerminal terminalId="terminal-remount-parked" />)
+
+    // The phone owns the terminal before this mount finishes attaching.
+    await vi.waitFor(() => {
+      expect(emitDisplayMode).toBeDefined()
+      expect(mockTerminalInstance.onData).toHaveBeenCalled()
+    })
+    await act(async () => {
+      emitDisplayMode?.({ terminalId: 'terminal-remount-parked', mode: 'phone' })
+    })
+
+    // The attach-time resync ran with parked evidence, so the resync module
+    // refused it (correctly). The renderer must not have applied any modes.
+    await vi.waitFor(() => {
+      expect(mockResyncRendererInputModes).toHaveBeenCalledWith(
+        'terminal-remount-parked',
+        expect.objectContaining({
+          autoRecoverClaim: expect.objectContaining({ parkedByPhone: true })
+        })
+      )
+    })
+    mockResyncRendererInputModes.mockClear()
+    mockTerminalInstance.focus.mockClear()
+
+    await act(async () => {
+      emitDisplayMode?.({ terminalId: 'terminal-remount-parked', mode: 'desktop' })
+    })
+
+    // Handback is the retry point: the same safety evidence, now unparked.
+    await vi.waitFor(() => {
+      expect(mockResyncRendererInputModes).toHaveBeenCalledWith(
+        'terminal-remount-parked',
+        expect.objectContaining({
+          autoRecoverClaim: expect.objectContaining({ parkedByPhone: false })
+        })
+      )
+    })
+    expect(mockTerminalInstance.focus).toHaveBeenCalled()
+  })
+
+  // Safety rationale (terminal-input-resync.ts): an automatic recovery must
+  // never rotate a claim for a hidden view. A handback that arrives while this
+  // tab is hidden therefore does nothing here; the visible-show effect is the
+  // hidden tab's own recovery path.
+  it('does not resync on handback while the tab is hidden', async () => {
+    let emitDisplayMode: ((event: { terminalId: string; mode: string }) => void) | undefined
+    vi.mocked(terminalApi).onDisplayModeChanged?.mockImplementation((handler: never) => {
+      emitDisplayMode = handler as never
+      return vi.fn()
+    })
+
+    render(<ConnectedTerminal terminalId="terminal-hidden-handback" isVisible={false} />)
+
+    await vi.waitFor(() => {
+      expect(emitDisplayMode).toBeDefined()
+    })
+    await act(async () => {
+      emitDisplayMode?.({ terminalId: 'terminal-hidden-handback', mode: 'phone' })
+    })
+    // Let the attach-time call (refused: hidden) settle, then measure.
+    await vi.waitFor(() => {
+      expect(mockResyncRendererInputModes).toHaveBeenCalled()
+    })
+    mockResyncRendererInputModes.mockClear()
+    mockTerminalInstance.focus.mockClear()
+
+    await act(async () => {
+      emitDisplayMode?.({ terminalId: 'terminal-hidden-handback', mode: 'desktop' })
+    })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    expect(mockResyncRendererInputModes).not.toHaveBeenCalled()
+    expect(mockTerminalInstance.focus).not.toHaveBeenCalled()
+  })
+
+  // A redundant `desktop` event (no phone session preceded it) is not a
+  // handback. Acting on it would rotate claims / write mode bytes for nothing,
+  // and the log shows phones flapping desktop→phone→desktop within a second.
+  it('does not resync on a redundant desktop event without a prior phone park', async () => {
+    let emitDisplayMode: ((event: { terminalId: string; mode: string }) => void) | undefined
+    vi.mocked(terminalApi).onDisplayModeChanged?.mockImplementation((handler: never) => {
+      emitDisplayMode = handler as never
+      return vi.fn()
+    })
+
+    render(<ConnectedTerminal terminalId="terminal-redundant-desktop" />)
+
+    await vi.waitFor(() => {
+      expect(emitDisplayMode).toBeDefined()
+      expect(mockResyncRendererInputModes).toHaveBeenCalled()
+    })
+    mockResyncRendererInputModes.mockClear()
+    mockTerminalInstance.focus.mockClear()
+
+    await act(async () => {
+      emitDisplayMode?.({ terminalId: 'terminal-redundant-desktop', mode: 'desktop' })
+    })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    expect(mockResyncRendererInputModes).not.toHaveBeenCalled()
+  })
+
   it.each([
     ['crashed'],
     ['exited']
