@@ -51,6 +51,16 @@ final class TerminalsHubStore {
         usedProjectFallback = false
     }
 
+    /// Synchronously flips an empty hub to `.loading` so a surface presented
+    /// in this same turn (the switcher sheet) shows its spinner on its first
+    /// frame instead of a one-frame "nothing here" flash before the async
+    /// `refresh` gets to run. A hub that already lists shells keeps them: the
+    /// refresh swaps in the new rows when they arrive.
+    func prepareForRefresh() {
+        guard summaries.isEmpty, state != .loading else { return }
+        state = .loading
+    }
+
     func refresh(projects: [HostProject]) async {
         guard let socket else { return }
         let currentRequest = UUID()

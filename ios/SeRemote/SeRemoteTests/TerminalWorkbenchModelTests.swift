@@ -406,4 +406,48 @@ struct TerminalWorkbenchModelTests {
         #expect(fixture.model.request == nil)
         #expect(fixture.model.activeBackend == nil)
     }
+
+    // MARK: - Optimistic open placeholder
+
+    @Test("An optimistic open shows the attaching placeholder until the surface installs")
+    func awaitingOpenShowsAttaching() async {
+        let fixture = makeFixture()
+        #expect(!fixture.model.showsAttaching)
+
+        // The shell marks the tap accepted before transport and scoping run.
+        fixture.model.beginAwaitingOpen()
+        #expect(fixture.model.showsAttaching)
+        #expect(!fixture.model.isOpening)
+
+        await fixture.model.open(workspaceRequest("t1"))
+        #expect(!fixture.model.showsAttaching)
+        #expect(!fixture.model.isAwaitingOpen)
+    }
+
+    @Test("A failed open clears the placeholder so the error state is not hidden")
+    func failedOpenClearsAttaching() async {
+        let fixture = makeFixture(standaloneFails: true)
+        fixture.model.beginAwaitingOpen()
+
+        await fixture.model.open(standaloneRequest("q1"))
+
+        #expect(!fixture.model.isAwaitingOpen)
+        #expect(!fixture.model.showsAttaching)
+        #expect(fixture.model.errorMessage == "The host refused the attach.")
+    }
+
+    @Test("The resume fast path clears the placeholder too")
+    func resumeFastPathClearsAttaching() async {
+        let fixture = makeFixture(watching: true)
+        await fixture.model.open(workspaceRequest("t1"))
+        await fixture.model.back()
+        fixture.log.clear()
+
+        fixture.model.beginAwaitingOpen()
+        await fixture.model.open(workspaceRequest("t1"))
+
+        #expect(!fixture.model.isAwaitingOpen)
+        #expect(!fixture.model.showsAttaching)
+        #expect(fixture.log.events.filter { $0 == "workspace.select" }.isEmpty)
+    }
 }

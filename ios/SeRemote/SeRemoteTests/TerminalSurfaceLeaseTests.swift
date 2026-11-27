@@ -157,4 +157,50 @@ struct TerminalSurfaceLeaseTests {
         #expect(session.takeAgentDraft(terminalID: "t1") == nil)
         #expect(session.takeAgentDraft(terminalID: "t2") == nil)
     }
+
+    // MARK: - Scope-driven refresh vs. explicit open
+
+    @Test("A refresh keeps the previous terminal, else picks the first listed one")
+    func autoOpenTargetWithoutPendingOpen() {
+        #expect(TerminalStore.autoOpenTarget(previousActive: "b", listedIDs: ["a", "b"], pendingOpenID: nil) == "b")
+        #expect(TerminalStore.autoOpenTarget(previousActive: "x", listedIDs: ["a", "b"], pendingOpenID: nil) == "a")
+        #expect(TerminalStore.autoOpenTarget(previousActive: nil, listedIDs: ["a"], pendingOpenID: nil) == "a")
+        #expect(TerminalStore.autoOpenTarget(previousActive: "a", listedIDs: [], pendingOpenID: nil) == nil)
+    }
+
+    @Test("A refresh never watches a terminal while an explicit open is pending")
+    func refreshDoesNotAutoOpenWithPendingOpen() {
+        // Cross-project switch: the catalog's first terminal is NOT the one
+        // the user asked for; watching it would replay the log only to be
+        // detached when the requested terminal opens.
+        #expect(TerminalStore.autoOpenTarget(previousActive: "old", listedIDs: ["first", "second"], pendingOpenID: "second") == nil)
+        #expect(TerminalStore.autoOpenTarget(previousActive: nil, listedIDs: ["first"], pendingOpenID: "first") == nil)
+        #expect(TerminalStore.autoOpenTarget(previousActive: "first", listedIDs: ["first"], pendingOpenID: "other") == nil)
+    }
+
+    @Test("The catalog pointer still moves to the requested scope while an open is pending")
+    func activeAfterRefreshIgnoresPendingOpen() {
+        // `activeId` is only the catalog pointer; the explicit open overrides it.
+        #expect(TerminalStore.activeAfterRefresh(previousActive: "old", listedIDs: ["first", "second"]) == "first")
+        #expect(TerminalStore.activeAfterRefresh(previousActive: "second", listedIDs: ["first", "second"]) == "second")
+    }
+
+    @Test("A superseded open does not lift its replacement's pending marker")
+    func pendingOpenIsOwnedByTheLatestOpen() {
+        let session = makeSession()
+        let store = session.terminals
+
+        #expect(store.pendingOpenID == nil)
+        store.beginPendingOpen("t1")
+        #expect(store.pendingOpenID == "t1")
+        store.beginPendingOpen("t2")
+        #expect(store.pendingOpenID == "t2")
+
+        // The t1 run finishes late and must leave t2's marker alone.
+        store.endPendingOpen(ifPending: "t1")
+        #expect(store.pendingOpenID == "t2")
+
+        store.endPendingOpen(ifPending: "t2")
+        #expect(store.pendingOpenID == nil)
+    }
 }

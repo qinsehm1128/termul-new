@@ -123,6 +123,48 @@ final class TerminalStore {
     /// Side channel for a local notification when a watched PTY exits.
     var onTerminalExit: ((String) -> Void)?
 
+    /// The terminal an explicit open request is about to reveal. While set, a
+    /// scope-driven catalog refresh (project switch) lists and records the
+    /// catalog but never watches anything itself: the intermediate "first
+    /// terminal" it would pick is not the one the user asked for, and watching
+    /// it replays up to the full log only to be detached a moment later.
+    @ObservationIgnored private(set) var pendingOpenID: String?
+
+    /// Marks `terminalId` as the next explicit open. Cleared by `endPendingOpen`.
+    func beginPendingOpen(_ terminalId: String) {
+        pendingOpenID = terminalId
+    }
+
+    /// Clears the pending open only when it still names `terminalId`: a
+    /// superseded run must not lift the marker its replacement just set.
+    func endPendingOpen(ifPending terminalId: String) {
+        if pendingOpenID == terminalId { pendingOpenID = nil }
+    }
+
+    /// The catalog's recorded `activeId` after a refresh: the previously active
+    /// terminal when the host still lists it, otherwise the first listed one.
+    /// This is only the catalog pointer — whether anything is *watched* is
+    /// `autoOpenTarget`'s decision.
+    nonisolated static func activeAfterRefresh(previousActive: String?, listedIDs: [String]) -> String? {
+        if let previousActive, listedIDs.contains(previousActive) { return previousActive }
+        return listedIDs.first
+    }
+
+    /// Which terminal (if any) a catalog refresh should watch on its own.
+    ///
+    /// Pure so the rule is testable without a socket: the previously active
+    /// terminal keeps its place when the host still lists it, otherwise the
+    /// first listed terminal is chosen — unless an explicit open is pending,
+    /// which will reveal the requested terminal itself.
+    nonisolated static func autoOpenTarget(
+        previousActive: String?,
+        listedIDs: [String],
+        pendingOpenID: String?
+    ) -> String? {
+        guard pendingOpenID == nil else { return nil }
+        return activeAfterRefresh(previousActive: previousActive, listedIDs: listedIDs)
+    }
+
     func attach(socket: TerminalSocket, origin: URL, credentials: HostCredentials) {
         self.socket = socket
         self.origin = origin
@@ -302,14 +344,18 @@ final class TerminalStore {
             let ownedById = Dictionary(uniqueKeysWithValues: terminals.filter(\.owned).map { ($0.id, $0) })
             let previousActive = activeId
             terminals = Self.liveTerminals(from: listed, ownedById: ownedById)
-            if let previousActive, terminals.contains(where: { $0.id == previousActive }) {
-                activeId = previousActive
-            } else {
-                activeId = terminals.first?.id
-            }
+            activeId = Self.activeAfterRefresh(previousActive: previousActive, listedIDs: terminals.map(\.id))
             errorMessage = nil
-            if let activeId, !isWatching(activeId) {
-                await open(activeId)
+            // A scope change (project switch) followed by an explicit open must
+            // not watch the catalog's first terminal on its own: that is a
+            // full replay and a lease claim for a shell the user never chose,
+            // detached again as soon as the requested terminal opens.
+            if let target = Self.autoOpenTarget(
+                previousActive: previousActive,
+                listedIDs: terminals.map(\.id),
+                pendingOpenID: pendingOpenID
+            ), !isWatching(target) {
+                await open(target)
             }
         } catch {
             HostLog.session.error("Terminal catalog refresh failed")

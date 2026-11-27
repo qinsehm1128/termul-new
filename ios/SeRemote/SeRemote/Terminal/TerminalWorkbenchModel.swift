@@ -35,6 +35,25 @@ final class TerminalWorkbenchModel {
     private(set) var errorMessage: String?
     private(set) var activeBackend: (any TerminalSurfaceBackend)?
     private(set) var isOpening = false
+    /// Set by the shell the moment a tap is accepted, before transport and
+    /// scoping run, so the surface shows its attaching placeholder instead of
+    /// "No live terminal" during that gap. Cleared when `open` installs the
+    /// surface or fails.
+    private(set) var isAwaitingOpen = false
+
+    func beginAwaitingOpen() {
+        isAwaitingOpen = true
+    }
+
+    func endAwaitingOpen() {
+        isAwaitingOpen = false
+    }
+
+    /// True while the surface is on its way: the chrome's placeholder reads
+    /// this so an optimistic navigation never shows an empty-state headline.
+    var showsAttaching: Bool {
+        isAwaitingOpen || isOpening || (request != nil && activeBackend == nil && errorMessage == nil)
+    }
 
     /// A sheet the workbench itself presents. `.files`/`.attach` leave through
     /// `onExternalAction` instead, because their views belong to other lanes.
@@ -197,6 +216,7 @@ final class TerminalWorkbenchModel {
            isWatching(request.terminalID) {
             panelExpanded = false
             errorMessage = nil
+            isAwaitingOpen = false
             // Keep the display metadata current without touching the surface.
             self.request = request
             activeBackend = backend
@@ -232,7 +252,10 @@ final class TerminalWorkbenchModel {
         errorMessage = nil
         failedOpenRequest = nil
         isOpening = true
-        defer { isOpening = false }
+        defer {
+            isOpening = false
+            isAwaitingOpen = false
+        }
 
         switch request.attach {
         case .workspace:

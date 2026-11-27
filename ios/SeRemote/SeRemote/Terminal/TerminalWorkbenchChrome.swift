@@ -29,6 +29,10 @@ struct TerminalWorkbenchChrome<Canvas: View>: View {
     /// navigation/vertical bar owns Back, Switcher, Files/Inspector, Agent and Menu
     /// actions, so the custom top pill and its 44pt top gutter are omitted.
     var usesSystemToolbar = false
+    /// Live shells across every project, for the persistent top strip. Hidden
+    /// when fewer than two are listed: a single shell has nothing to switch to.
+    var stripItems: [TerminalHubIndex.StripItem] = []
+    var onSelectStripItem: (String) -> Void = { _ in }
 
     @Environment(\.sePalette) private var palette
     @Environment(\.seThemeMode) private var mode
@@ -40,6 +44,14 @@ struct TerminalWorkbenchChrome<Canvas: View>: View {
 
     private var presentation: TerminalPanelPresentation { model.panelPresentation }
 
+    /// The strip is layout, not an overlay: it sits above the canvas so the
+    /// first terminal row is never covered. It yields to the keyboard (the
+    /// keyboard already costs rows; the strip must not cost more) and hides
+    /// for a single shell.
+    private var showsStrip: Bool {
+        !keyboardVisible && stripItems.count > 1
+    }
+
     var body: some View {
         let topClearance: CGFloat = usesSystemToolbar ? 0 : Self.topInset
         ZStack(alignment: .top) {
@@ -48,6 +60,10 @@ struct TerminalWorkbenchChrome<Canvas: View>: View {
                     Color.clear
                         .frame(height: topClearance)
                         .allowsHitTesting(false)
+                }
+                if showsStrip {
+                    strip
+                        .transition(.opacity)
                 }
                 canvas
             }
@@ -73,10 +89,12 @@ struct TerminalWorkbenchChrome<Canvas: View>: View {
 
             if let error = model.displayError {
                 errorCapsule(error)
-                    .padding(.top, topClearance + 8)
+                    .padding(.top, chromeTopInset + 8)
                     .zIndex(3)
             }
         }
+        .animation(SeNocturneMotion.resolved(SeNocturneMotion.quick, reduceMotion: reduceMotion),
+                   value: showsStrip)
         .overlay {
             if !keyboardVisible, !model.panelExpanded {
                 GeometryReader { proxy in
@@ -107,6 +125,95 @@ struct TerminalWorkbenchChrome<Canvas: View>: View {
     }
 
     // MARK: - Collapsed chrome
+
+    /// Where floating chrome (the error capsule) starts: the pill gutter when
+    /// the custom pill is shown, plus the strip when it is on screen.
+    private var chromeTopInset: CGFloat {
+        (usesSystemToolbar ? 0 : Self.topInset) + (showsStrip ? Self.stripHeight : 0)
+    }
+
+    // MARK: - Terminal strip
+
+    /// Fixed strip height so the canvas layout is stable while chips scroll.
+    static var stripHeight: CGFloat { 36 }
+
+    /// Every live shell across projects, one tap away. Chips print the project
+    /// label once per run, so the strip stays compact with many shells. The
+    /// horizontal gutter follows the Duo trailing clearance so the last chip
+    /// never sits under a vertical bar or fold crease.
+    private var strip: some View {
+        GeometryReader { proxy in
+            let trailingPad = DuoFoldCreasePolicy.trailingClearance(
+                containerWidth: proxy.size.width,
+                divisionFrames: proxy.duoDivisionFrames,
+                basePadding: NocturneToolMetrics.gutter
+            )
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(Array(stripItems.enumerated()), id: \.element.id) { offset, item in
+                        stripChip(item, showsProject: TerminalHubIndex.stripShowsProjectLabel(at: offset, items: stripItems))
+                    }
+                }
+                .padding(.leading, NocturneToolMetrics.gutter)
+                .padding(.trailing, trailingPad)
+                .frame(height: Self.stripHeight)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+        }
+        .frame(height: Self.stripHeight)
+        .background(palette.terminalCanvas)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(mode.hairline).frame(height: 1)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text(verbatim: hubText("Switch terminal")))
+    }
+
+    private func stripChip(_ item: TerminalHubIndex.StripItem, showsProject: Bool) -> some View {
+        Button {
+            guard !item.isActive else { return }
+            onSelectStripItem(item.id)
+        } label: {
+            HStack(spacing: 5) {
+                if showsProject, let project = item.projectLabel {
+                    Text(verbatim: project)
+                        .font(SeNocturneType.font(9, weight: .semibold, mono: true))
+                        .foregroundStyle(palette.inkTertiary)
+                        .lineLimit(1)
+                }
+                if item.hasAgent {
+                    Circle()
+                        .fill(palette.live)
+                        .frame(width: 5, height: 5)
+                }
+                Text(verbatim: item.title)
+                    .font(SeNocturneType.font(11, weight: .medium, mono: true))
+                    .foregroundStyle(item.isActive ? palette.ink : palette.inkSecondary)
+                    .lineLimit(1)
+                    .frame(maxWidth: 160)
+            }
+            .padding(.horizontal, 9)
+            .frame(height: 26)
+            .background(
+                item.isActive
+                    ? AnyShapeStyle(palette.card)
+                    : AnyShapeStyle(Color.clear),
+                in: Capsule(style: .continuous)
+            )
+            .overlay {
+                if item.isActive {
+                    Capsule(style: .continuous)
+                        .strokeBorder(mode.insetStroke, lineWidth: 1)
+                }
+            }
+            .frame(minHeight: SeSpace.hitTarget)
+            .contentShape(Capsule(style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(verbatim: item.title))
+        .accessibilityValue(Text(verbatim: item.projectLabel ?? ""))
+        .accessibilityAddTraits(item.isActive ? .isSelected : [])
+    }
 
     private var topRow: some View {
         HStack(alignment: .center, spacing: 8) {

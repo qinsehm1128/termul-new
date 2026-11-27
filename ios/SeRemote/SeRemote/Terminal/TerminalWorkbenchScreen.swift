@@ -33,6 +33,10 @@ struct TerminalWorkbenchScreen: View {
     /// When true, workbench chrome actions are hosted in SwiftUI's native
     /// `.toolbar` so iPhone Duo renders them in the trailing vertical bar.
     var usesSystemToolbar = false
+    /// Live shells across projects for the persistent top strip, already
+    /// projected by the shell from the shared hub index.
+    var stripItems: [TerminalHubIndex.StripItem] = []
+    var onSelectStripItem: (String) -> Void = { _ in }
 
     @Environment(\.remoteDeviceLink) private var deviceLink
     @Environment(\.sePalette) private var palette
@@ -82,7 +86,9 @@ struct TerminalWorkbenchScreen: View {
             showsInspectorToggle: showsInspectorToggle,
             isInspectorOpen: isInspectorOpen,
             onToggleInspector: onToggleInspector,
-            usesSystemToolbar: usesSystemToolbar
+            usesSystemToolbar: usesSystemToolbar,
+            stripItems: stripItems,
+            onSelectStripItem: onSelectStripItem
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(palette.terminalCanvas)
@@ -163,6 +169,11 @@ struct TerminalWorkbenchScreen: View {
                         .font(SeNocturneType.font(12.5, weight: .medium, mono: true))
                         .foregroundStyle(palette.ink)
                         .lineLimit(1)
+                    // The title is the switcher: without a chevron it reads as
+                    // a label, and the custom pill's hint never renders here.
+                    if onOpenSwitcher != nil {
+                        SeIconView(icon: .chevronUpDown, size: 11, stroke: 1.6, color: palette.inkSecondary)
+                    }
                     Text(verbatim: model.panelPresentation.counter)
                         .font(SeNocturneType.font(9, mono: true))
                         .foregroundStyle(palette.inkSecondary)
@@ -316,7 +327,7 @@ struct TerminalWorkbenchScreen: View {
 
     private var emptyState: some View {
         VStack(spacing: 10) {
-            if model.isOpening {
+            if model.showsAttaching {
                 ProgressView()
                 Text("Attaching to the host shell…")
                     .font(SeNocturneType.font(10, mono: true))

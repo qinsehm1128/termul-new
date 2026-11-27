@@ -106,6 +106,17 @@ nonisolated struct TerminalHubIndex: Equatable, Sendable {
     static var ungroupedName: String { hubText("Ungrouped") }
     static var workspaceName: String { hubText("Workspace") }
 
+    /// One chip of the workbench's top strip: every live shell across every
+    /// project, in index order, with the project as its compact label.
+    nonisolated struct StripItem: Identifiable, Equatable, Sendable {
+        let id: String
+        let title: String
+        /// Compact project label; `nil` for a workspace (project-less) shell.
+        let projectLabel: String?
+        let hasAgent: Bool
+        let isActive: Bool
+    }
+
     var query = Query()
     var quick: [Quick] = []
     var groups: [GroupSection] = []
@@ -122,6 +133,58 @@ nonisolated struct TerminalHubIndex: Equatable, Sendable {
     var totalRunning: Int { counts[.running] ?? 0 }
 
     func count(_ filter: StatusFilter) -> Int { counts[filter] ?? 0 }
+
+    // MARK: - Strip
+
+    /// The workbench strip for this index: the live shells in display order,
+    /// the given terminal highlighted. Built from an unfiltered index so the
+    /// strip never inherits the hub's or the switcher's search text.
+    func strip(activeTerminalID: String?) -> [StripItem] {
+        Self.strip(from: self, activeTerminalID: activeTerminalID)
+    }
+
+    static func strip(from index: TerminalHubIndex, activeTerminalID: String?) -> [StripItem] {
+        index.shells.map { shell in
+            StripItem(
+                id: shell.id,
+                title: stripTitle(shell),
+                projectLabel: stripProjectLabel(shell),
+                hasAgent: shell.hasAgent,
+                isActive: shell.id == activeTerminalID
+            )
+        }
+    }
+
+    /// The chip shows the shell's own title; a title that is just a cwd falls
+    /// back to the directory name, which is what tells two shells apart.
+    nonisolated static func stripTitle(_ shell: Shell) -> String {
+        let title = shell.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !title.isEmpty { return title }
+        if let cwd = shell.cwd, let name = cwd.split(separator: "/").last, !name.isEmpty {
+            return String(name)
+        }
+        return hubText("Terminal")
+    }
+
+    /// Shells of one project share a label, so the strip prints it once per
+    /// run instead of on every chip (see `stripShowsProjectLabel`).
+    nonisolated static func stripProjectLabel(_ shell: Shell) -> String? {
+        shell.projectName?.trimmingCharacters(in: .whitespacesAndNewlines).nilWhenBlank
+    }
+
+    /// Pure layout rule for the strip: a chip prints its project label only
+    /// when it starts a new project run, so a project with five shells shows
+    /// its name once and five compact chips.
+    nonisolated static func stripShowsProjectLabel(
+        at index: Int,
+        items: [StripItem]
+    ) -> Bool {
+        guard items.indices.contains(index) else { return false }
+        let label = items[index].projectLabel
+        if label == nil { return false }
+        guard index > 0 else { return true }
+        return items[index - 1].projectLabel != label
+    }
 
     // MARK: - Build
 

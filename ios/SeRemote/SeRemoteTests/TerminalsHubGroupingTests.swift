@@ -211,3 +211,27 @@ struct TerminalsHubGroupingTests {
         #expect(TerminalsHubPresentation.quickTerminalIds(records) == ["pty-1", "pty-2"])
     }
 }
+
+/// The switcher sheet's first frame must not flash an empty list before the
+/// async refresh runs. No socket: only the synchronous state step is tested.
+@Suite("TerminalsHub store presentation")
+@MainActor
+struct TerminalsHubStorePresentationTests {
+    @Test("An empty hub flips to loading synchronously so the sheet shows a spinner")
+    func prepareMarksEmptyHubLoading() {
+        let store = TerminalsHubStore()
+        #expect(store.state == .idle)
+        #expect(TerminalsHubScreen.isLoading(state: store.state, summaryCount: 0))
+
+        store.prepareForRefresh()
+        #expect(store.state == .loading)
+        #expect(TerminalsHubScreen.isLoading(state: store.state, summaryCount: 0))
+    }
+
+    @Test("A hub that already lists shells, or failed, is not a loading state")
+    func listedOrFailedIsNotLoading() {
+        #expect(TerminalsHubScreen.isLoading(state: .failed("offline"), summaryCount: 0) == false)
+        #expect(TerminalsHubScreen.isLoading(state: .loaded, summaryCount: 3) == false)
+        #expect(TerminalsHubScreen.isLoading(state: .loading, summaryCount: 3) == false)
+    }
+}

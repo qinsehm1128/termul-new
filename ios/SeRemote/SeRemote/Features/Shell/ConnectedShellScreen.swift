@@ -37,6 +37,11 @@ struct ConnectedShellScreen: View {
     @State private var workbenchRailVisibleOverride: Bool?
     @State private var openingSession = false
     @State private var selectionTask: Task<Void, Never>?
+    /// Monotonic token per `open`: a run whose generation is no longer current
+    /// stops at its next checkpoint instead of installing a superseded request.
+    @State private var openGeneration: UInt64 = 0
+    /// Tail of the serialized surface-open chain (see `performOpen`).
+    @State private var openChain: Task<Bool, Never>?
     @State private var landingNotice: String?
     @State private var refreshingHub = false
     @State private var hubRefreshTask: Task<Void, Never>?
@@ -123,6 +128,12 @@ struct ConnectedShellScreen: View {
                 }
             )
         }
+    }
+
+    /// The workbench's persistent strip: every live shell across projects,
+    /// from the same unfiltered index the rail reads, active shell highlighted.
+    private var stripItems: [TerminalHubIndex.StripItem] {
+        hubIndex().strip(activeTerminalID: terminalModel.activeID)
     }
 
     /// Open a shell listed by the rail, the hub or the switcher. Quick-owned
@@ -476,6 +487,13 @@ struct ConnectedShellScreen: View {
                             .allowsHitTesting(workbenchVisible)
                             .accessibilityHidden(!workbenchVisible)
                         }
+                        // The workbench takes over from T1 with a light fade
+                        // (no move: the surface stays mounted where it is).
+                        // Reduce Motion keeps the switch instantaneous.
+                        .animation(
+                            reduceMotion ? nil : SeNocturneMotion.quick,
+                            value: workbenchVisible
+                        )
                         .toolbar {
                             if !workbenchVisible {
                                 hubToolbar(showsCompactDrawer: showsHubDrawer)
@@ -540,6 +558,13 @@ struct ConnectedShellScreen: View {
                     onOpenDrawer: { showsDrawer = true },
                     onSelectHost: { showsHosts = true },
                     onOpenSettings: { navigation.select(.settings) },
+                    // A project row lands on that project's terminals. Without
+                    // this the hub scopes the project and replays the stale
+                    // `openRequest`, bouncing back to the previous project.
+                    onOpenProject: { projectID in
+                        navigation.select(.terminals)
+                        openProject(projectID)
+                    },
                     usesSystemChrome: true,
                     showsCompactDrawerButton: showsHubDrawer
                 )
@@ -707,6 +732,11 @@ struct ConnectedShellScreen: View {
             },
             onOpenSwitcher: {
                 switcherQuery = .init()
+                // Mark the hub as loading synchronously when it has nothing to
+                // show: the sheet's first frame would otherwise render the
+                // stale "empty" state for one turn before the refresh Task
+                // starts. The refresh itself runs while the sheet presents.
+                hub.prepareForRefresh()
                 showsSwitcher = true
                 Task { await refreshHub() }
             },
@@ -716,7 +746,9 @@ struct ConnectedShellScreen: View {
             showsRailToggle: showsRailToggle,
             isRailVisible: isRailVisible,
             onToggleRail: onToggleRail,
-            usesSystemToolbar: workbenchVisible
+            usesSystemToolbar: workbenchVisible,
+            stripItems: stripItems,
+            onSelectStripItem: { terminalID in openListed(terminalID: terminalID) }
         )
     }
 
@@ -1046,17 +1078,65 @@ struct ConnectedShellScreen: View {
         await open(TerminalLandingModel.request(for: summary, projects: session.projects.projects))
     }
 
-    /// Show a terminal: scope the session to its project or conversation first
-    /// so `TerminalStore` lists the PTY, then open the mounted surface.
+    /// Show a terminal. The workbench appears at once with its attaching
+    /// placeholder; transport verification, project scoping and the watch run
+    /// behind it. Nothing between the tap and `navigation.open` awaits, so a
+    /// tap always answers immediately.
+    ///
+    /// `openGeneration` makes a rapid second tap win: a superseded run stops
+    /// at its next checkpoint, and `openChain` serializes the surface opens so
+    /// the two watches never interleave — the second open detaches the first
+    /// terminal's watch and takes over the one canvas (I1) instead of racing it.
     private func open(_ request: TerminalOpenRequest, presentingAgent: Bool = false) async {
+        openGeneration &+= 1
+        let generation = openGeneration
         preview = nil
+        navigation.open(request)
+        session.terminalSurfaceVisible = true
+        // The surface is on screen now but nothing is watched yet: show the
+        // attaching placeholder until the model installs (or fails) the open.
+        terminalModel.beginAwaitingOpen()
+        await performOpen(
+            request,
+            generation: generation,
+            presentingAgent: presentingAgent
+        )
+    }
+
+    /// The background half of an open. Split from `open` so callers that must
+    /// react to the outcome (the bootstrap resume, a deep link) still get an
+    /// awaited result while the user already sees the workbench.
+    private func performOpen(
+        _ request: TerminalOpenRequest,
+        generation: UInt64,
+        presentingAgent: Bool
+    ) async {
         // A tap is the first request after a resume on a phone. Verify the
         // socket that claims to be connected before the watch rides it, so a
         // stale-path failure never becomes the user-visible result of the tap.
         await session.ensureTerminalTransport()
+        guard generation == openGeneration else { return }
+        // The catalog refresh a cross-project scope change triggers must not
+        // watch its own "first" terminal while this open is in flight.
+        session.terminals.beginPendingOpen(request.terminalID)
         await scopeSession(for: request)
-        navigation.open(request)
-        await terminalModel.open(request)
+        guard generation == openGeneration else {
+            session.terminals.endPendingOpen(ifPending: request.terminalID)
+            return
+        }
+        // One surface open at a time: a superseded run's watch finishes (or is
+        // released by the next open) before the next one claims the canvas.
+        let previous = openChain
+        let done = Task<Bool, Never> { @MainActor in
+            _ = await previous?.value
+            guard generation == openGeneration else { return false }
+            await terminalModel.open(request)
+            return generation == openGeneration
+        }
+        openChain = done
+        let current = await done.value
+        session.terminals.endPendingOpen(ifPending: request.terminalID)
+        guard current else { return }
         TerminalLastSeen.save(request, origin: session.origin)
         session.terminalSurfaceVisible = true
         if presentingAgent { terminalModel.present(.agent) }
@@ -1082,6 +1162,11 @@ struct ConnectedShellScreen: View {
     }
 
     private func closeWorkbench() {
+        // Supersede any open still running behind the optimistic navigation:
+        // without this it would finish after Back, re-mark the surface visible
+        // and take the phone-fit lease while the user is on the hub.
+        openGeneration &+= 1
+        terminalModel.endAwaitingOpen()
         navigation.back()
         session.terminalSurfaceVisible = false
         preview = nil

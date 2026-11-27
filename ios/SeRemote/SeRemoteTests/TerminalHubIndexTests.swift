@@ -233,6 +233,74 @@ struct TerminalHubIndexTests {
         #expect(request.projectName == "dslpayment-portal")
         #expect(shell.groupName == "Payments")
     }
+
+    // MARK: - Workbench strip
+
+    @Test("The strip lists every live shell across projects in index order")
+    func stripListsEveryShell() throws {
+        let index = try fixture()
+        let strip = index.strip(activeTerminalID: "t-claude")
+
+        #expect(strip.map(\.id) == ["t-dev", "t-claude", "t-dmit-1", "t-dmit-2", "t-codex", "t-portal", "t-home"])
+        #expect(strip.map(\.title) == ["pnpm tauri dev", "claude", "ssh dmit", "ssh dmit", "codex", "pnpm dev", "zsh"])
+        #expect(strip.map(\.projectLabel) == [
+            "termul", "termul", "se-server-deploy", "se-server-deploy", "dslpayment-portal", "dslpayment-portal", nil,
+        ])
+        #expect(strip.map(\.isActive) == [false, true, false, false, false, false, false])
+    }
+
+    @Test("The strip is built from the index it is given; the shell passes an unfiltered one")
+    func stripFollowsItsIndex() throws {
+        // A filtered index narrows its shells, so its strip narrows too: the
+        // workbench must project from the unfiltered index (as the shell does
+        // with `hubIndex()`), never from the hub's or switcher's query.
+        let filtered = try fixture(query: .init(text: "codex", status: .agent))
+        #expect(filtered.shells.map(\.id) == ["t-codex"])
+        #expect(filtered.strip(activeTerminalID: "t-dev").map(\.id) == ["t-codex"])
+
+        let unfiltered = try fixture()
+        #expect(unfiltered.strip(activeTerminalID: "t-dev").filter(\.isActive).map(\.id) == ["t-dev"])
+    }
+
+    @Test("A project label prints once per run of shells in that project")
+    func stripProjectLabelPerRun() throws {
+        let strip = try fixture().strip(activeTerminalID: nil)
+        let shows = strip.indices.map { TerminalHubIndex.stripShowsProjectLabel(at: $0, items: strip) }
+
+        #expect(shows == [true, false, true, false, true, false, false])
+        #expect(TerminalHubIndex.stripShowsProjectLabel(at: strip.count, items: strip) == false)
+    }
+
+    @Test("A shell with no title falls back to its directory name")
+    func stripTitleFallsBackToCwd() {
+        let shell = TerminalHubIndex.Shell(
+            id: "t1", title: "  ", cwd: "~/project/dsl/dslpayment-portal", branch: nil,
+            projectID: "portal", projectName: "dslpayment-portal", groupID: "g", groupName: "Payments",
+            hasAgent: false, quickID: nil, quickTitle: nil, isLast: false
+        )
+        #expect(TerminalHubIndex.stripTitle(shell) == "dslpayment-portal")
+        #expect(TerminalHubIndex.stripTitle(shell.copyTitle("zsh")) == "zsh")
+    }
+
+    @Test("A blank project name yields no strip label")
+    func stripBlankProjectLabel() {
+        let shell = TerminalHubIndex.Shell(
+            id: "t1", title: "zsh", cwd: nil, branch: nil,
+            projectID: "p", projectName: "   ", groupID: "g", groupName: "G",
+            hasAgent: false, quickID: nil, quickTitle: nil, isLast: false
+        )
+        #expect(TerminalHubIndex.stripProjectLabel(shell) == nil)
+    }
+}
+
+private extension TerminalHubIndex.Shell {
+    func copyTitle(_ title: String) -> TerminalHubIndex.Shell {
+        TerminalHubIndex.Shell(
+            id: id, title: title, cwd: cwd, branch: branch, projectID: projectID,
+            projectName: projectName, groupID: groupID, groupName: groupName,
+            hasAgent: hasAgent, quickID: quickID, quickTitle: quickTitle, isLast: isLast
+        )
+    }
 }
 
 @Suite("New terminal catalog")
