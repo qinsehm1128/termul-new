@@ -596,6 +596,13 @@ pub async fn serve_router(
     }
 
     let handle = tokio::spawn(async move {
+        // Terminal I/O is many tiny frames (one keystroke in, a few bytes of
+        // echo out). Nagle would hold each one back until the previous one is
+        // acked, adding a full round trip per keystroke on a relayed tailnet
+        // or tunnel path. Disable it on every accepted connection; a failure
+        // only costs latency, so it is logged and the connection proceeds.
+        use axum::serve::ListenerExt;
+        let listener = listener.tap_io(configure_accepted_stream);
         // Patch D: `into_make_service_with_connect_info::<SocketAddr>()` so
         // the fs WRITE routes can extract `ConnectInfo<SocketAddr>` for the
         // localhost-only guard. Read routes and `/ws` are unaffected.
@@ -614,6 +621,21 @@ pub async fn serve_router(
     });
 
     Ok((addr, handle))
+}
+
+/// Per-connection socket options for the web listener.
+///
+/// Disables Nagle: terminal keystrokes and echoes are tiny frames that would
+/// otherwise wait for the previous segment's ACK, costing a round trip each on
+/// a relayed tailnet or tunnel path. Failure only costs latency, so it is
+/// logged with a stable code and the connection proceeds.
+fn configure_accepted_stream(stream: &mut tokio::net::TcpStream) {
+    if let Err(err) = stream.set_nodelay(true) {
+        warn!(
+            stable_code = "TCP_NODELAY_FAILED",
+            "failed to set TCP_NODELAY on accepted connection: {err}"
+        );
+    }
 }
 
 /// Forward the desktop Plugin Core's events into the web WS relay.
@@ -751,6 +773,24 @@ mod tests {
     use tempfile::TempDir;
     use tokio::sync::oneshot;
     use uuid::Uuid;
+
+    #[tokio::test]
+    async fn accepted_web_connections_disable_nagle() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let client = tokio::spawn(async move { tokio::net::TcpStream::connect(addr).await });
+        let (mut accepted, _) = listener.accept().await.expect("accept");
+        let _client = client.await.expect("join").expect("connect");
+        assert!(
+            !accepted.nodelay().expect("read nodelay"),
+            "OS default is Nagle on"
+        );
+        configure_accepted_stream(&mut accepted);
+        assert!(
+            accepted.nodelay().expect("read nodelay"),
+            "web listener must set TCP_NODELAY"
+        );
+    }
 
     async fn conversation_relay_fixture(
         session_id: &str,
