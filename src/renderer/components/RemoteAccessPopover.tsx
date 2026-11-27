@@ -52,11 +52,11 @@ export function RemoteAccessPopover(): React.JSX.Element {
   const lanAccessUrl = remoteStatus?.lanUrl ?? remoteStatus?.lanAccessUrl ?? null
   const tunnelAccessUrl =
     remoteStatus?.tunnelUrl ?? remoteStatus?.tunnelAccessUrl ?? remoteStatus?.accessUrl ?? null
-  // MagicDNS first: the name survives re-addressing and reads better in the QR.
+  // The IP needs no resolver; a MagicDNS name breaks under fake-ip proxies.
   const tailnetAccessUrl =
-    remoteStatus?.tailnetDnsUrl ??
     remoteStatus?.tailnetUrl ??
     remoteStatus?.tailnetAccessUrl ??
+    remoteStatus?.tailnetDnsUrl ??
     null
   const accessUrlFor = (mode: RemotePublishMode): string | null =>
     mode === 'lan' ? lanAccessUrl : mode === 'tailnet' ? tailnetAccessUrl : tunnelAccessUrl

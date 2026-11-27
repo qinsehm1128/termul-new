@@ -237,7 +237,7 @@ describe('RemoteAccessPopover', () => {
     expect(mocks.stop).toHaveBeenCalledTimes(1)
     expect(mocks.start).toHaveBeenCalledWith({ bindMode: 'all' })
   })
-  it('pairs over the tailnet MagicDNS origin and restarts with the tailnet bind', async () => {
+  it('pairs over the tailnet IP origin and restarts with the tailnet bind', async () => {
     mocks.status.mockReturnValue(RUNNING)
     mocks.stop.mockResolvedValue({ success: true, data: STOPPED })
     const tailnetRunning: RemoteStatus = {
@@ -261,24 +261,24 @@ describe('RemoteAccessPopover', () => {
     view.rerender(<RemoteAccessPopover />)
     await waitFor(() =>
       expect(screen.getByTestId('qr').getAttribute('data-value')).toBe(
-        'http://mac.vpn.internal:5123/#pair=ONE_TIME_CODE'
+        'http://100.64.0.4:5123/#pair=ONE_TIME_CODE'
       )
     )
     expect(document.body.innerHTML).not.toContain(SECRET)
   })
-  it('falls back to the tailnet IP origin without MagicDNS', async () => {
+  it('falls back to the MagicDNS origin when no tailnet IP origin is reported', async () => {
     mocks.status.mockReturnValue({
       ...RUNNING,
       bindMode: 'tailnet',
       tunnelUrl: null,
       publishMode: 'tailnet',
-      tailnetUrl: 'http://100.101.1.2:5123',
-      tailnetDnsUrl: null
+      tailnetUrl: null,
+      tailnetDnsUrl: 'http://mac.tail1234.ts.net:5123'
     })
     render(<RemoteAccessPopover />)
     await open()
     expect((await screen.findByTestId('qr')).getAttribute('data-value')).toBe(
-      'http://100.101.1.2:5123/#pair=ONE_TIME_CODE'
+      'http://mac.tail1234.ts.net:5123/#pair=ONE_TIME_CODE'
     )
   })
   it('names a disconnected Tailscale instead of a generic failure', async () => {

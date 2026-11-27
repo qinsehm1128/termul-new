@@ -271,14 +271,12 @@ impl RemoteStatus {
         let Some(tailnet) = tailnet else {
             return self;
         };
-        // MagicDNS names stay stable across re-addressing and read better in
-        // the QR, so they are the preferred pairing Origin when present.
-        let preferred = tailnet
-            .dns_origin
-            .as_deref()
-            .unwrap_or(tailnet.ip_origin.as_str());
+        // The tailnet IP is the pairing Origin: it needs no resolver, while
+        // a MagicDNS name breaks whenever a proxy TUN (Clash/Surge fake-ip)
+        // or a local resolver answers for it. The name is still admitted so
+        // a browser opened at `http://<name>:<port>` passes the Origin check.
         self.tailnet_access_url = credential_lease.and_then(|lease| {
-            crate::remote::lan::credentialed_access_url(preferred, lease.bearer())
+            crate::remote::lan::credentialed_access_url(&tailnet.ip_origin, lease.bearer())
         });
         self.tailnet_url = Some(tailnet.ip_origin.clone());
         self.tailnet_dns_url = tailnet.dns_origin.clone();
@@ -1576,7 +1574,7 @@ mod tests {
     }
 
     #[test]
-    fn tailnet_status_prefers_magic_dns_and_publishes_in_tailnet_mode() {
+    fn tailnet_status_pairs_on_the_ip_and_publishes_in_tailnet_mode() {
         let addr: SocketAddr = "100.64.0.4:52953".parse().unwrap();
         let bind = RemoteBindMode::Tailnet(std::net::Ipv4Addr::new(100, 64, 0, 4));
         let publish = TailnetPublish {
@@ -1596,7 +1594,12 @@ mod tests {
         );
         assert_eq!(status.tailnet_flavor.as_deref(), Some("selfHosted"));
         let access = status.access_url.expect("tailnet access url");
-        assert!(access.starts_with("http://mac.vpn.internal:52953/#access_token="));
+        // A fake-ip proxy can hijack the MagicDNS name; the IP needs no resolver.
+        assert!(access.starts_with("http://100.64.0.4:52953/#access_token="));
+        assert_eq!(
+            status.tailnet_dns_url.as_deref(),
+            Some("http://mac.vpn.internal:52953")
+        );
         assert_eq!(status.publish_mode.as_deref(), Some("tailnet"));
         assert!(status.lan_url.is_none());
     }
