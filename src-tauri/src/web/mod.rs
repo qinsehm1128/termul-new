@@ -505,6 +505,15 @@ pub async fn serve_router(
         authority
             .set_public_origin(loopback_origin)
             .map_err(|error| format!("failed to register listener Origin: {error}"))?;
+    } else if let std::net::IpAddr::V4(v4) = addr.ip() {
+        // A tailnet bind (Tailscale / Headscale) serves same-origin browsers
+        // at exactly the listener address; admit it like loopback.
+        if crate::remote::tailnet::is_tailnet_ipv4(v4) {
+            let tailnet_origin = url::Url::parse(&format!("http://{addr}"))?;
+            authority
+                .set_public_origin(tailnet_origin)
+                .map_err(|error| format!("failed to register listener Origin: {error}"))?;
+        }
     }
     info!(
         ingress_provenance = host_ingress_provenance.as_str(),

@@ -247,18 +247,28 @@ pub enum BindMode {
     Localhost,
     /// `0.0.0.0` — all interfaces (explicit expose opt-in).
     All,
+    /// A Tailscale / Headscale node address (`100.64.0.0/10`) — reachable
+    /// only by peers on the same tailnet.
+    Tailnet(std::net::Ipv4Addr),
 }
 
 impl BindMode {
     /// Parse a host string into a bind mode.
     ///
-    /// Accepts `localhost` / `127.0.0.1` / `loopback` → [`Localhost`], and
-    /// `all` / `0.0.0.0` / `any` → [`All`]. Anything else returns `None`.
+    /// Accepts `localhost` / `127.0.0.1` / `loopback` → [`Localhost`],
+    /// `all` / `0.0.0.0` / `any` → [`All`], and a literal tailnet IPv4
+    /// (`100.64.0.0/10`) → [`Tailnet`]. Anything else returns `None`; the CLI
+    /// keyword `tailnet` is resolved to an address before it reaches here.
     pub fn parse(s: &str) -> Option<Self> {
-        match s.trim().to_ascii_lowercase().as_str() {
+        let trimmed = s.trim();
+        match trimmed.to_ascii_lowercase().as_str() {
             "localhost" | "127.0.0.1" | "loopback" => Some(Self::Localhost),
             "all" | "0.0.0.0" | "any" => Some(Self::All),
-            _ => None,
+            _ => trimmed
+                .parse::<std::net::Ipv4Addr>()
+                .ok()
+                .filter(|ip| crate::remote::tailnet::is_tailnet_ipv4(*ip))
+                .map(Self::Tailnet),
         }
     }
 
@@ -267,14 +277,16 @@ impl BindMode {
         match self {
             Self::Localhost => SocketAddr::from(([127, 0, 0, 1], port)),
             Self::All => SocketAddr::from(([0, 0, 0, 0], port)),
+            Self::Tailnet(ip) => SocketAddr::from((ip, port)),
         }
     }
 
     /// Human-readable bind host for logs / CLI help.
-    pub fn display_host(self) -> &'static str {
+    pub fn display_host(self) -> String {
         match self {
-            Self::Localhost => "127.0.0.1",
-            Self::All => "0.0.0.0",
+            Self::Localhost => "127.0.0.1".to_string(),
+            Self::All => "0.0.0.0".to_string(),
+            Self::Tailnet(ip) => ip.to_string(),
         }
     }
 }
@@ -374,7 +386,7 @@ impl ServerConfig {
     pub fn ingress_provenance(&self) -> IngressProvenance {
         match self.bind_mode() {
             Some(BindMode::Localhost) => IngressProvenance::LocalOperator,
-            Some(BindMode::All) | None => IngressProvenance::PublicTunnel,
+            Some(BindMode::All | BindMode::Tailnet(_)) | None => IngressProvenance::PublicTunnel,
         }
     }
 
@@ -471,6 +483,9 @@ impl ServerConfig {
         S: AsRef<str>,
     {
         let mut host = "127.0.0.1".to_string();
+        // `--host tailnet`: resolved to this node's Tailscale/Headscale IPv4
+        // after the loop, once `--port` is known for the Origin.
+        let mut tailnet_host = false;
         let mut port: u16 = 8080;
         let mut event_log_capacity: usize = 4096;
         let mut permission_timeout_secs: u64 = 60;
@@ -515,11 +530,16 @@ impl ServerConfig {
                         .next()
                         .ok_or_else(|| ParseCliError::Message("missing value for --host".into()))?;
                     let value = value.as_ref();
+                    if value.trim().eq_ignore_ascii_case("tailnet") {
+                        tailnet_host = true;
+                        continue;
+                    }
                     if BindMode::parse(value).is_none() {
                         return Err(ParseCliError::Message(format!(
-                            "invalid --host '{value}': use 127.0.0.1 or 0.0.0.0"
+                            "invalid --host '{value}': use 127.0.0.1, 0.0.0.0, tailnet, or a 100.64.0.0/10 tailnet address"
                         )));
                     }
+                    tailnet_host = false;
                     host = value.to_string();
                 }
                 "--port" => {
@@ -795,6 +815,17 @@ impl ServerConfig {
             // same seam (T-A16). Resolved here on the parse thread (FORBID-07).
             .unwrap_or_else(|| project_root.join(crate::brand::canonical().display_name));
 
+        if tailnet_host {
+            let info = crate::remote::tailnet::discover_tailnet().map_err(|error| {
+                ParseCliError::Message(format!(
+                    "{}: --host tailnet could not resolve this node's tailnet address: {}",
+                    error.code(),
+                    error.message()
+                ))
+            })?;
+            host = info.ipv4.to_string();
+        }
+
         if require_remote_auth && (remote_access_token_file.is_none() || allowed_origins.is_empty())
         {
             return Err(ParseCliError::Message(format!(
@@ -942,6 +973,33 @@ mod tests {
             BindMode::All.bind_addr(8080),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 8080)
         );
+    }
+
+    #[test]
+    fn bind_mode_accepts_tailnet_addresses_only_in_cgnat() {
+        let ip = Ipv4Addr::new(100, 64, 0, 4);
+        assert_eq!(BindMode::parse("100.64.0.4"), Some(BindMode::Tailnet(ip)));
+        assert_eq!(
+            BindMode::Tailnet(ip).bind_addr(8080),
+            SocketAddr::new(IpAddr::V4(ip), 8080)
+        );
+        assert_eq!(BindMode::Tailnet(ip).display_host(), "100.64.0.4");
+        // Arbitrary addresses stay rejected; only the tailnet range is new.
+        assert_eq!(BindMode::parse("192.168.1.8"), None);
+        assert_eq!(BindMode::parse("100.128.0.1"), None);
+        // `tailnet` is a CLI keyword resolved before BindMode sees it.
+        assert_eq!(BindMode::parse("tailnet"), None);
+    }
+
+    #[test]
+    fn tailnet_bind_is_public_provenance() {
+        let cfg = ServerConfig::from_maintenance_args(["--host", "100.64.0.4", "--port", "9090"])
+            .expect("tailnet host parses");
+        assert_eq!(
+            cfg.bind_mode(),
+            Some(BindMode::Tailnet(Ipv4Addr::new(100, 64, 0, 4)))
+        );
+        assert_eq!(cfg.ingress_provenance(), IngressProvenance::PublicTunnel);
     }
 
     #[test]

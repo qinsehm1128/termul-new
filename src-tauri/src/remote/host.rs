@@ -106,6 +106,9 @@ pub enum RemoteBindMode {
     Localhost,
     /// `0.0.0.0` — all interfaces (LAN / other devices on the network).
     All,
+    /// This node's tailnet IPv4 only (Tailscale or Headscale). Narrower than
+    /// [`Self::All`]: the listener is unreachable from the physical LAN.
+    Tailnet(std::net::Ipv4Addr),
 }
 
 impl RemoteBindMode {
@@ -113,6 +116,7 @@ impl RemoteBindMode {
     ///
     /// Accepts `localhost` / `127.0.0.1` / `loopback` → [`Localhost`], and
     /// `all` / `0.0.0.0` / `any` → [`All`]. Anything else returns `None`.
+    /// `tailnet` is resolved by the caller, which must discover the address.
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "localhost" | "127.0.0.1" | "loopback" => Some(Self::Localhost),
@@ -125,19 +129,22 @@ impl RemoteBindMode {
         match self {
             Self::Localhost => "localhost",
             Self::All => "all",
+            Self::Tailnet(_) => "tailnet",
         }
     }
 
-    /// Bind host string for [`ServerConfig`] (`127.0.0.1` or `0.0.0.0`).
-    pub fn host(self) -> &'static str {
+    /// Bind host string for [`ServerConfig`] (`127.0.0.1`, `0.0.0.0`, or the
+    /// tailnet IPv4).
+    pub fn host(self) -> String {
         match self {
-            Self::Localhost => "127.0.0.1",
-            Self::All => "0.0.0.0",
+            Self::Localhost => "127.0.0.1".to_string(),
+            Self::All => "0.0.0.0".to_string(),
+            Self::Tailnet(ip) => ip.to_string(),
         }
     }
 
     /// Human-readable bind target for the UI.
-    pub fn display_host(self) -> &'static str {
+    pub fn display_host(self) -> String {
         self.host()
     }
 
@@ -146,10 +153,18 @@ impl RemoteBindMode {
         matches!(self, Self::All)
     }
 
+    /// The tailnet address when bound to it.
+    pub fn tailnet_ip(self) -> Option<std::net::Ipv4Addr> {
+        match self {
+            Self::Tailnet(ip) => Some(ip),
+            Self::Localhost | Self::All => None,
+        }
+    }
+
     fn ingress_provenance(self) -> IngressProvenance {
         match self {
             Self::Localhost => IngressProvenance::LocalOperator,
-            Self::All => IngressProvenance::PublicTunnel,
+            Self::All | Self::Tailnet(_) => IngressProvenance::PublicTunnel,
         }
     }
 }
@@ -180,7 +195,15 @@ pub struct RemoteStatus {
     pub lan_access_url: Option<String>,
     /// Credentialed tunnel URL. Absent when no public Origin is attached.
     pub tunnel_access_url: Option<String>,
-    /// `lan` or `tunnel` — which URL `access_url` currently represents.
+    /// Tailnet Origin (`http://100.x.y.z:port`) when bound to a tailnet address.
+    pub tailnet_url: Option<String>,
+    /// MagicDNS Origin (`http://host.tailnet.ts.net:port`) when MagicDNS is on.
+    pub tailnet_dns_url: Option<String>,
+    /// `official` (Tailscale) / `selfHosted` (Headscale) / `unknown`.
+    pub tailnet_flavor: Option<String>,
+    /// Credentialed tailnet URL (`#access_token=`).
+    pub tailnet_access_url: Option<String>,
+    /// `lan`, `tunnel`, or `tailnet` — which URL `access_url` currently represents.
     pub publish_mode: Option<String>,
 }
 
@@ -198,6 +221,10 @@ impl RemoteStatus {
             lan_url: None,
             lan_access_url: None,
             tunnel_access_url: None,
+            tailnet_url: None,
+            tailnet_dns_url: None,
+            tailnet_flavor: None,
+            tailnet_access_url: None,
             publish_mode: None,
         }
     }
@@ -228,8 +255,35 @@ impl RemoteStatus {
             lan_url: None,
             lan_access_url: None,
             tunnel_access_url,
+            tailnet_url: None,
+            tailnet_dns_url: None,
+            tailnet_flavor: None,
+            tailnet_access_url: None,
             publish_mode: None,
         }
+    }
+
+    fn with_tailnet(
+        mut self,
+        tailnet: Option<&TailnetPublish>,
+        credential_lease: Option<&DesktopCredentialLease>,
+    ) -> Self {
+        let Some(tailnet) = tailnet else {
+            return self;
+        };
+        // MagicDNS names stay stable across re-addressing and read better in
+        // the QR, so they are the preferred pairing Origin when present.
+        let preferred = tailnet
+            .dns_origin
+            .as_deref()
+            .unwrap_or(tailnet.ip_origin.as_str());
+        self.tailnet_access_url = credential_lease.and_then(|lease| {
+            crate::remote::lan::credentialed_access_url(preferred, lease.bearer())
+        });
+        self.tailnet_url = Some(tailnet.ip_origin.clone());
+        self.tailnet_dns_url = tailnet.dns_origin.clone();
+        self.tailnet_flavor = Some(tailnet.flavor.as_str().to_string());
+        self
     }
 
     fn with_provider(mut self, provider: Option<String>) -> Self {
@@ -257,9 +311,20 @@ impl RemoteStatus {
         self.access_url = match mode {
             crate::remote::PublishMode::Lan => self.lan_access_url.clone(),
             crate::remote::PublishMode::Tunnel => self.tunnel_access_url.clone(),
+            crate::remote::PublishMode::Tailnet => self.tailnet_access_url.clone(),
         };
         self
     }
+}
+
+/// Tailnet Origins admitted for the running listener.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TailnetPublish {
+    /// `http://100.x.y.z:port`.
+    pub ip_origin: String,
+    /// `http://<magicdns-fqdn>:port` when MagicDNS is enabled.
+    pub dns_origin: Option<String>,
+    pub flavor: crate::remote::tailnet::TailnetFlavor,
 }
 
 /// Running server handle — owns the shutdown signal, the serve task handle, and
@@ -299,6 +364,8 @@ struct RemoteServer {
     credential_lease: Option<DesktopCredentialLease>,
     authority: Arc<RemoteAccessAuthority>,
     publish_mode: crate::remote::PublishMode,
+    /// Tailnet Origins admitted for a [`RemoteBindMode::Tailnet`] listener.
+    tailnet: Option<TailnetPublish>,
 }
 
 impl RemoteServer {
@@ -765,6 +832,7 @@ impl RemoteServerState {
             credential_lease: Some(pending_credential.into_lease()),
             authority: Arc::clone(&self.authority),
             publish_mode: crate::remote::PublishMode::Tunnel,
+            tailnet: None,
         });
         if bind_mode.is_lan_exposed() {
             // Admit the current LAN Origin before the QR can advertise it, then
@@ -941,6 +1009,34 @@ impl RemoteServerState {
         if let Some(server) = self.inner.lock().unwrap().as_mut() {
             server.publish_mode = mode;
         }
+    }
+
+    /// Admit the tailnet Origins of a [`RemoteBindMode::Tailnet`] listener and
+    /// record them for status/QR. A tailnet IPv4 is stable per node, so no
+    /// address watchdog is needed: if the node is re-addressed the bound
+    /// socket stops receiving and the operator restarts remote access.
+    pub fn attach_tailnet(&self, info: &crate::remote::tailnet::TailnetInfo) -> Result<(), String> {
+        let mut slot = self.inner.lock().unwrap();
+        let server = slot
+            .as_mut()
+            .ok_or_else(|| "Remote server is not running".to_string())?;
+        if server.bind_mode.tailnet_ip() != Some(info.ipv4) {
+            return Err("remote server is not bound to this tailnet address".to_string());
+        }
+        let port = server.addr.port();
+        let publish = TailnetPublish {
+            ip_origin: crate::remote::tailnet::http_origin(&info.ipv4.to_string(), port),
+            dns_origin: info
+                .dns_name
+                .as_deref()
+                .map(|name| crate::remote::tailnet::http_origin(name, port)),
+            flavor: info.flavor,
+        };
+        if !register_tailnet_origins(&server.authority, &publish) {
+            return Err("tailnet Origin was refused by the Origin policy".to_string());
+        }
+        server.tailnet = Some(publish);
+        Ok(())
     }
 
     /// Replace the active pairing bearer. Origins are re-registered because
@@ -1275,7 +1371,35 @@ fn compose_running_status(server: &RemoteServer) -> RemoteStatus {
     )
     .with_provider(server.tunnel_provider.clone())
     .with_lan(lan_url, server.credential_lease.as_ref())
+    .with_tailnet(server.tailnet.as_ref(), server.credential_lease.as_ref())
     .with_publish_mode(server.publish_mode)
+}
+
+/// Admit every Origin a tailnet peer can present: the node IP and, when
+/// MagicDNS is on, its FQDN. Returns `false` when any Origin was refused.
+fn register_tailnet_origins(authority: &RemoteAccessAuthority, tailnet: &TailnetPublish) -> bool {
+    let mut ok = true;
+    for origin in std::iter::once(&tailnet.ip_origin).chain(tailnet.dns_origin.iter()) {
+        let admitted = url::Url::parse(origin)
+            .ok()
+            .is_some_and(|parsed| authority.set_public_origin(parsed).is_ok());
+        ok &= admitted;
+    }
+    if ok {
+        log::info!(
+            target: "se_manager::remote::host",
+            "operation=tailnet_origin_register flavor={} magic_dns={} stable_code=OK",
+            tailnet.flavor.as_str(),
+            tailnet.dns_origin.is_some()
+        );
+    } else {
+        log::warn!(
+            target: "se_manager::remote::host",
+            "operation=tailnet_origin_register flavor={} stable_code=REJECTED",
+            tailnet.flavor.as_str()
+        );
+    }
+    ok
 }
 
 /// Admit `http://<ip>:<port>` as a LAN Origin.
@@ -1365,6 +1489,9 @@ fn reregister_published_origins(server: &RemoteServer) {
     if server.bind_mode.is_lan_exposed() {
         refresh_lan_origin(&server.authority, port);
     }
+    if let Some(tailnet) = server.tailnet.as_ref() {
+        register_tailnet_origins(&server.authority, tailnet);
+    }
     if let Some(tunnel) = server.tunnel_url.as_deref() {
         if let Ok(origin) = url::Url::parse(tunnel) {
             let _ = server.authority.set_public_origin(origin);
@@ -1434,6 +1561,82 @@ mod tests {
     fn remote_bind_mode_is_lan_exposed() {
         assert!(!RemoteBindMode::Localhost.is_lan_exposed());
         assert!(RemoteBindMode::All.is_lan_exposed());
+        let tailnet = RemoteBindMode::Tailnet(std::net::Ipv4Addr::new(100, 64, 0, 4));
+        assert!(
+            !tailnet.is_lan_exposed(),
+            "tailnet bind is not all-interface"
+        );
+        assert_eq!(tailnet.host(), "100.64.0.4");
+        assert_eq!(tailnet.as_str(), "tailnet");
+        assert_eq!(
+            tailnet.ingress_provenance(),
+            IngressProvenance::PublicTunnel,
+            "tailnet peers never inherit local-operator rights"
+        );
+    }
+
+    #[test]
+    fn tailnet_status_prefers_magic_dns_and_publishes_in_tailnet_mode() {
+        let addr: SocketAddr = "100.64.0.4:52953".parse().unwrap();
+        let bind = RemoteBindMode::Tailnet(std::net::Ipv4Addr::new(100, 64, 0, 4));
+        let publish = TailnetPublish {
+            ip_origin: "http://100.64.0.4:52953".to_string(),
+            dns_origin: Some("http://mac.vpn.internal:52953".to_string()),
+            flavor: crate::remote::tailnet::TailnetFlavor::SelfHosted,
+        };
+        let authority = RemoteAccessAuthority::desktop_memory();
+        let (lease, _) = authority.adopt_or_issue_desktop_credential(None).unwrap();
+        let status = RemoteStatus::running(addr, bind, None, Some(&lease))
+            .with_tailnet(Some(&publish), Some(&lease))
+            .with_publish_mode(crate::remote::PublishMode::Tailnet);
+        assert_eq!(status.bind_mode.as_deref(), Some("tailnet"));
+        assert_eq!(
+            status.tailnet_url.as_deref(),
+            Some("http://100.64.0.4:52953")
+        );
+        assert_eq!(status.tailnet_flavor.as_deref(), Some("selfHosted"));
+        let access = status.access_url.expect("tailnet access url");
+        assert!(access.starts_with("http://mac.vpn.internal:52953/#access_token="));
+        assert_eq!(status.publish_mode.as_deref(), Some("tailnet"));
+        assert!(status.lan_url.is_none());
+    }
+
+    #[test]
+    fn tailnet_status_falls_back_to_ip_without_magic_dns() {
+        let addr: SocketAddr = "100.101.1.2:40000".parse().unwrap();
+        let publish = TailnetPublish {
+            ip_origin: "http://100.101.1.2:40000".to_string(),
+            dns_origin: None,
+            flavor: crate::remote::tailnet::TailnetFlavor::Official,
+        };
+        let authority = RemoteAccessAuthority::desktop_memory();
+        let (lease, _) = authority.adopt_or_issue_desktop_credential(None).unwrap();
+        let status = RemoteStatus::running(
+            addr,
+            RemoteBindMode::Tailnet(std::net::Ipv4Addr::new(100, 101, 1, 2)),
+            None,
+            Some(&lease),
+        )
+        .with_tailnet(Some(&publish), Some(&lease))
+        .with_publish_mode(crate::remote::PublishMode::Tailnet);
+        assert!(status
+            .access_url
+            .as_deref()
+            .is_some_and(|url| url.starts_with("http://100.101.1.2:40000/#access_token=")));
+        assert_eq!(status.tailnet_flavor.as_deref(), Some("official"));
+    }
+
+    #[test]
+    fn tailnet_origins_are_admitted_for_ip_and_magic_dns() {
+        let authority = RemoteAccessAuthority::desktop_memory();
+        let publish = TailnetPublish {
+            ip_origin: "http://100.64.0.4:52953".to_string(),
+            dns_origin: Some("http://mac.tail1234.ts.net:52953".to_string()),
+            flavor: crate::remote::tailnet::TailnetFlavor::Official,
+        };
+        let before = authority.allowed_origin_count();
+        assert!(register_tailnet_origins(&authority, &publish));
+        assert_eq!(authority.allowed_origin_count(), before + 2);
     }
 
     #[test]

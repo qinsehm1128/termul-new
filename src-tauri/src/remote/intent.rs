@@ -15,6 +15,8 @@ pub enum PublishMode {
     #[default]
     Tunnel,
     Lan,
+    /// Tailscale or self-hosted Headscale tailnet address.
+    Tailnet,
 }
 
 impl PublishMode {
@@ -23,6 +25,7 @@ impl PublishMode {
         match self {
             Self::Tunnel => "tunnel",
             Self::Lan => "lan",
+            Self::Tailnet => "tailnet",
         }
     }
 
@@ -31,6 +34,7 @@ impl PublishMode {
         match value.trim().to_ascii_lowercase().as_str() {
             "tunnel" => Some(Self::Tunnel),
             "lan" => Some(Self::Lan),
+            "tailnet" => Some(Self::Tailnet),
             _ => None,
         }
     }

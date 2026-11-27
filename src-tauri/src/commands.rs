@@ -4843,23 +4843,53 @@ pub async fn remote_server_start(
     bind_mode: Option<String>,
 ) -> Result<IpcResult<remote::RemoteStatus>, String> {
     let stored_intent = intent_store.load().unwrap_or_default();
-    let (bind_mode, publish_mode) = match bind_mode.as_deref() {
-        None => match stored_intent.publish_mode {
-            remote::PublishMode::Lan => (remote::RemoteBindMode::All, remote::PublishMode::Lan),
-            remote::PublishMode::Tunnel => (
-                remote::RemoteBindMode::Localhost,
-                remote::PublishMode::Tunnel,
-            ),
+    let requested_mode = match bind_mode.as_deref() {
+        None => stored_intent.publish_mode,
+        Some(s) if s.trim().eq_ignore_ascii_case("tailnet") => remote::PublishMode::Tailnet,
+        Some(s) => match remote::RemoteBindMode::parse(s) {
+            Some(remote::RemoteBindMode::All) => remote::PublishMode::Lan,
+            Some(_) => remote::PublishMode::Tunnel,
+            None => {
+                return Err(format!(
+                    "invalid bind mode '{s}': use 'localhost', 'all', or 'tailnet'"
+                ))
+            }
         },
-        Some(s) => {
-            let bind = remote::RemoteBindMode::parse(s)
-                .ok_or_else(|| format!("invalid bind mode '{s}': use 'localhost' or 'all'"))?;
-            let mode = match bind {
-                remote::RemoteBindMode::All => remote::PublishMode::Lan,
-                remote::RemoteBindMode::Localhost => remote::PublishMode::Tunnel,
-            };
-            (bind, mode)
+    };
+    // Tailnet mode binds the node's Tailscale / Headscale IPv4 only, so the
+    // address must be discovered before the listener exists. A restored
+    // session may start before `tailscaled` connects; give it a short grace.
+    let tailnet_info = if requested_mode == remote::PublishMode::Tailnet {
+        match remote::tailnet::discover_tailnet_with_grace(std::time::Duration::from_secs(6)).await
+        {
+            Ok(info) => Some(info),
+            Err(error) => {
+                log::warn!(
+                    target: "se_manager::remote::host",
+                    "operation=tailnet_resolve lifecycle_phase=start stable_code={}",
+                    error.code()
+                );
+                return Ok(IpcResult::error(error.message(), error.code()));
+            }
         }
+    } else {
+        None
+    };
+    let (bind_mode, publish_mode) = match requested_mode {
+        remote::PublishMode::Lan => (remote::RemoteBindMode::All, remote::PublishMode::Lan),
+        remote::PublishMode::Tunnel => (
+            remote::RemoteBindMode::Localhost,
+            remote::PublishMode::Tunnel,
+        ),
+        remote::PublishMode::Tailnet => (
+            remote::RemoteBindMode::Tailnet(
+                tailnet_info
+                    .as_ref()
+                    .map(|info| info.ipv4)
+                    .expect("tailnet info resolved above"),
+            ),
+            remote::PublishMode::Tailnet,
+        ),
     };
     if let Err(error) = intent_store.save(&remote::RemoteAccessIntent {
         wanted: true,
@@ -4902,7 +4932,7 @@ pub async fn remote_server_start(
         Ok(start) => start,
         Err(e) => return Ok(IpcResult::error(e, "TUNNEL_CONFIG_INVALID")),
     };
-    if !start_tunnel {
+    if !start_tunnel && publish_mode == remote::PublishMode::Lan {
         log::warn!(
             target: "se_manager::remote::host",
             "operation=tunnel_skip lifecycle_phase=start publish_mode=lan stable_code=TUNNEL_CONFIG_INVALID"
@@ -4988,8 +5018,22 @@ pub async fn remote_server_start(
             // Remember what the listener actually bound. A phone keeps the
             // whole `http://{lan-ip}:{port}` origin in its saved host record,
             // so a stable port is what lets that record reconnect without a
-            // new QR scan.
-            if publish_mode == remote::PublishMode::Lan {
+            // new QR scan. Tailnet pairings save `http://{tailnet-ip}:{port}`
+            // the same way, so they share the remembered port.
+            if let Some(info) = tailnet_info.as_ref() {
+                if let Err(error) = remote_state.attach_tailnet(info) {
+                    log::error!(
+                        target: "se_manager::remote::host",
+                        "operation=tailnet_attach lifecycle_phase=start stable_code=REMOTE_TAILNET_FAILED"
+                    );
+                    let _ = remote_state.stop().await;
+                    return Ok(IpcResult::error(error, "REMOTE_TAILNET_FAILED"));
+                }
+            }
+            if matches!(
+                publish_mode,
+                remote::PublishMode::Lan | remote::PublishMode::Tailnet
+            ) {
                 log::info!(
                     target: "se_manager::remote::host",
                     "operation=listener_port lifecycle_phase=start stable_code={} port={port}",
@@ -5085,7 +5129,9 @@ fn listener_port_plan(
         return Some(port);
     }
     match publish_mode {
-        remote::PublishMode::Lan => remembered_lan_port.filter(|port| *port != 0),
+        remote::PublishMode::Lan | remote::PublishMode::Tailnet => {
+            remembered_lan_port.filter(|port| *port != 0)
+        }
         remote::PublishMode::Tunnel => None,
     }
 }
@@ -5095,12 +5141,15 @@ fn listener_port_plan(
 /// Tunnel mode needs a valid tunnel, so an invalid config is an error. LAN
 /// mode only adds the tunnel as an extra public URL: an incomplete tunnel
 /// setup (for example an SSH provider with no host yet) must not block
-/// LAN access, so the tunnel is skipped instead.
+/// LAN access, so the tunnel is skipped instead. Tailnet mode never starts a
+/// tunnel: its listener is bound to the tailnet address, which a loopback
+/// tunnel sidecar cannot reach, and the tailnet itself is the transport.
 fn tunnel_start_plan(
     publish_mode: remote::PublishMode,
     config: &remote::tunnel::TunnelConfig,
 ) -> Result<bool, String> {
     match (config.validate_for_start(), publish_mode) {
+        (_, remote::PublishMode::Tailnet) => Ok(false),
         (Ok(()), _) => Ok(true),
         (Err(_), remote::PublishMode::Lan) => Ok(false),
         (Err(e), remote::PublishMode::Tunnel) => Err(e),
@@ -5146,6 +5195,14 @@ mod listener_port_tests {
             Some(8080)
         );
     }
+
+    #[test]
+    fn tailnet_start_reuses_the_remembered_port() {
+        assert_eq!(
+            listener_port_plan(remote::PublishMode::Tailnet, None, Some(52953)),
+            Some(52953)
+        );
+    }
 }
 
 #[cfg(test)]
@@ -5172,6 +5229,18 @@ mod tunnel_start_plan_tests {
     fn tunnel_start_still_rejects_an_incomplete_tunnel() {
         let err = tunnel_start_plan(remote::PublishMode::Tunnel, &incomplete_ssh()).unwrap_err();
         assert_eq!(err, "SSH host is required");
+    }
+
+    #[test]
+    fn tailnet_start_never_starts_a_tunnel() {
+        assert_eq!(
+            tunnel_start_plan(remote::PublishMode::Tailnet, &TunnelConfig::default()),
+            Ok(false)
+        );
+        assert_eq!(
+            tunnel_start_plan(remote::PublishMode::Tailnet, &incomplete_ssh()),
+            Ok(false)
+        );
     }
 
     #[test]
@@ -5273,7 +5342,7 @@ pub async fn remote_access_intent_set(
     if let Some(raw) = update.publish_mode.as_deref() {
         let Some(mode) = remote::PublishMode::parse(raw) else {
             return Ok(IpcResult::error(
-                "publish mode must be lan or tunnel".to_string(),
+                "publish mode must be lan, tunnel, or tailnet".to_string(),
                 "REMOTE_INTENT_INVALID",
             ));
         };

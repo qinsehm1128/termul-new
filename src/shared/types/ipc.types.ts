@@ -788,11 +788,14 @@ export interface VisibilityApi {
 }
 
 /** Network bind scope for the embedded remote terminal server. */
-export type RemoteBindMode = 'localhost' | 'all'
+export type RemoteBindMode = 'localhost' | 'all' | 'tailnet'
 
 export type TunnelProviderKind = 'cloudflareQuick' | 'cloudflareNamed' | 'frp' | 'sshReverse'
 
-export type RemotePublishMode = 'lan' | 'tunnel'
+export type RemotePublishMode = 'lan' | 'tunnel' | 'tailnet'
+
+/** Tailnet control plane: official Tailscale or a self-hosted Headscale. */
+export type RemoteTailnetFlavor = 'official' | 'selfHosted' | 'unknown'
 
 export interface SshConfigHost {
   name: string
@@ -881,6 +884,13 @@ export interface RemoteStatus {
   lanAccessUrl?: string | null
   /** Credentialed tunnel URL. */
   tunnelAccessUrl?: string | null
+  /** Tailnet origin `http://100.x.y.z:port` (Tailscale / Headscale). */
+  tailnetUrl?: string | null
+  /** MagicDNS origin when MagicDNS is enabled. */
+  tailnetDnsUrl?: string | null
+  /** Credentialed tailnet URL. */
+  tailnetAccessUrl?: string | null
+  tailnetFlavor?: RemoteTailnetFlavor | null
   /** Which URL `accessUrl` currently represents. */
   publishMode?: RemotePublishMode | null
 }

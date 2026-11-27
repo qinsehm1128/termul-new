@@ -1,5 +1,5 @@
 import type { RemotePairingCode } from '@shared/remote-devices'
-import type { RemotePublishMode } from '@shared/types/ipc.types'
+import type { RemoteBindMode, RemotePublishMode } from '@shared/types/ipc.types'
 import { Check, Copy, Monitor, RefreshCw } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
 import { useEffect, useRef, useState } from 'react'
@@ -52,13 +52,19 @@ export function RemoteAccessPopover(): React.JSX.Element {
   const lanAccessUrl = remoteStatus?.lanUrl ?? remoteStatus?.lanAccessUrl ?? null
   const tunnelAccessUrl =
     remoteStatus?.tunnelUrl ?? remoteStatus?.tunnelAccessUrl ?? remoteStatus?.accessUrl ?? null
-  const origin = isRunning
-    ? pairingOrigin(publishMode === 'lan' ? lanAccessUrl : tunnelAccessUrl)
-    : null
+  // MagicDNS first: the name survives re-addressing and reads better in the QR.
+  const tailnetAccessUrl =
+    remoteStatus?.tailnetDnsUrl ??
+    remoteStatus?.tailnetUrl ??
+    remoteStatus?.tailnetAccessUrl ??
+    null
+  const accessUrlFor = (mode: RemotePublishMode): string | null =>
+    mode === 'lan' ? lanAccessUrl : mode === 'tailnet' ? tailnetAccessUrl : tunnelAccessUrl
+  const origin = isRunning ? pairingOrigin(accessUrlFor(publishMode)) : null
 
   useEffect(() => {
-    if (remoteStatus?.publishMode === 'lan' || remoteStatus?.publishMode === 'tunnel')
-      setPublishMode(remoteStatus.publishMode)
+    const mode = remoteStatus?.publishMode
+    if (mode === 'lan' || mode === 'tunnel' || mode === 'tailnet') setPublishMode(mode)
   }, [remoteStatus?.publishMode])
   useEffect(() => {
     let cancelled = false
@@ -126,8 +132,16 @@ export function RemoteAccessPopover(): React.JSX.Element {
     )
     if (!result.success) toast.error(t('remote.seedProjectsFailed', { error: result.error }))
   }
-  const bindModeFor = (mode: RemotePublishMode): 'localhost' | 'all' =>
-    mode === 'lan' ? 'all' : 'localhost'
+  const bindModeFor = (mode: RemotePublishMode): RemoteBindMode =>
+    mode === 'lan' ? 'all' : mode === 'tailnet' ? 'tailnet' : 'localhost'
+  const startFailureMessage = (code: string | undefined): string =>
+    code === 'TAILNET_NOT_FOUND'
+      ? '未检测到 Tailscale'
+      : code === 'TAILNET_NOT_RUNNING'
+        ? 'Tailscale 未连接'
+        : code === 'TAILNET_NO_ADDRESS'
+          ? 'Tailscale 没有 IPv4 地址'
+          : '远程服务切换失败'
   const handleRemoteToggle = async (enable: boolean): Promise<void> => {
     setRemoteBusy(true)
     setRemoteError(null)
@@ -139,7 +153,7 @@ export function RemoteAccessPopover(): React.JSX.Element {
         useRemoteStatusStore.getState().setStatus(result.data)
         useRemoteStatusStore.getState().setRestoreError(null)
         if (enable) await seedProjects()
-      } else setRemoteError('远程服务切换失败')
+      } else setRemoteError(startFailureMessage(result.code))
     } catch {
       setRemoteError('远程服务切换失败')
     } finally {
@@ -158,11 +172,11 @@ export function RemoteAccessPopover(): React.JSX.Element {
       }
       setPublishMode(mode)
       if (!isRunning) return
-      if ((mode === 'lan') === (remoteStatus?.bindMode === 'all') && remoteStatus) {
+      if (remoteStatus && bindModeFor(mode) === remoteStatus.bindMode) {
         useRemoteStatusStore.getState().setStatus({
           ...remoteStatus,
           publishMode: mode,
-          accessUrl: mode === 'lan' ? lanAccessUrl : tunnelAccessUrl
+          accessUrl: accessUrlFor(mode)
         })
         return
       }
@@ -177,7 +191,7 @@ export function RemoteAccessPopover(): React.JSX.Element {
         await seedProjects()
       } else {
         useRemoteStatusStore.getState().setStatus(stopped.data)
-        setRemoteError('远程服务启动失败')
+        setRemoteError(mode === 'tailnet' ? startFailureMessage(started.code) : '远程服务启动失败')
       }
     } catch {
       setRemoteError('访问方式切换失败')
@@ -212,11 +226,11 @@ export function RemoteAccessPopover(): React.JSX.Element {
           />
         </div>
         <div
-          className="grid grid-cols-2 gap-1 rounded-md border border-border bg-secondary/30 p-0.5"
+          className="grid grid-cols-3 gap-1 rounded-md border border-border bg-secondary/30 p-0.5"
           role="tablist"
           aria-label={t('remote.publishModeAria')}
         >
-          {(['lan', 'tunnel'] as const).map((mode) => (
+          {(['lan', 'tailnet', 'tunnel'] as const).map((mode) => (
             <button
               key={mode}
               type="button"
@@ -231,7 +245,7 @@ export function RemoteAccessPopover(): React.JSX.Element {
                   : 'text-muted-foreground'
               )}
             >
-              {mode === 'lan' ? '局域网' : '公网'}
+              {mode === 'lan' ? '局域网' : mode === 'tailnet' ? 'Tailscale' : '公网'}
             </button>
           ))}
         </div>
@@ -293,6 +307,8 @@ export function RemoteAccessPopover(): React.JSX.Element {
               '正在生成配对码…'
             ) : publishMode === 'lan' ? (
               '暂无局域网地址'
+            ) : publishMode === 'tailnet' ? (
+              '暂无 Tailscale 地址'
             ) : (
               '等待公网地址…'
             )}

@@ -35,7 +35,8 @@ export function useRemoteProjects(): void {
         useRemoteStatusStore.getState().setStatus(current.data)
         return
       }
-      const bindMode = intent.data.publishMode === 'lan' ? 'all' : 'localhost'
+      const mode = intent.data.publishMode
+      const bindMode = mode === 'lan' ? 'all' : mode === 'tailnet' ? 'tailnet' : 'localhost'
       const started = await remoteServerApi.start({ bindMode })
       if (disposed) return
       if (started.success) {

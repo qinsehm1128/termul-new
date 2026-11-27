@@ -15,6 +15,7 @@ pub mod desktop;
 pub mod host;
 pub mod intent;
 pub mod lan;
+pub mod tailnet;
 pub mod tunnel;
 
 pub use host::{RemoteBindMode, RemoteServerState, RemoteStatus, TunnelRestartPolicy};

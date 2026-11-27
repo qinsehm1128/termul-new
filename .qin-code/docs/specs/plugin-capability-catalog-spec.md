@@ -288,11 +288,11 @@ Conventions: `confirm=none` (read or harmless), `grant` (install-time grant is e
 
 | op id | source cmd (file:line) | class | scope | confirm | exposure | notes |
 |---|---|---|---|---|---|---|
-| se.remote.startServer | remote_server_start `commands.rs:4658` | W | profile | per-call | OPEN | in bindMode? (`localhost`|`all`); starts the shared-live web server + tunnel; persists intent; LAN mode exposes all interfaces |
+| se.remote.startServer | remote_server_start `commands.rs:4658` | W | profile | per-call | OPEN | in bindMode? (`localhost`|`all`|`tailnet`); starts the shared-live web server + tunnel; persists intent; LAN mode exposes all interfaces; tailnet mode binds only the node's Tailscale/Headscale IPv4 and never starts a tunnel (errors `TAILNET_NOT_FOUND`/`TAILNET_NOT_RUNNING`/`TAILNET_NO_ADDRESS`) |
 | se.remote.stopServer | remote_server_stop `commands.rs:4843` | W | profile | grant | OPEN | stops server, clears the in-memory project mirror; live agents survive |
-| se.remote.getStatus | remote_server_status `commands.rs:4875` | R | profile | none | OPEN | out `RemoteStatus`; verify it carries no pairing bearer before exposing |
+| se.remote.getStatus | remote_server_status `commands.rs:4875` | R | profile | none | OPEN | out `RemoteStatus` (incl. `tailnetUrl`/`tailnetDnsUrl`/`tailnetFlavor`; `tailnetAccessUrl` carries the bearer like `lanAccessUrl`); verify it carries no pairing bearer before exposing |
 | se.remote.getAccessIntent | remote_access_intent_get `commands.rs:4896` | R | profile | none | OPEN | out `{wanted, publishMode}` |
-| se.remote.setAccessIntent | remote_access_intent_set `commands.rs:4909` | W | profile | grant | OPEN | in `{wanted?, publishMode?}` (lan|tunnel) |
+| se.remote.setAccessIntent | remote_access_intent_set `commands.rs:4909` | W | profile | grant | OPEN | in `{wanted?, publishMode?}` (lan|tunnel|tailnet) |
 | se.remote.rotateCredential | remote_server_rotate_credential `commands.rs:4941` | W | profile | per-call | OPEN-REDACTED | rotates the remote bearer; out `RemoteStatus` — strip the new token |
 | se.remote.devices.list | remote_devices_list `web/devices_api.rs` | R | profile | none | OPEN | local operator/manage only; host-wide device metadata and connection counts, never credential digests |
 | se.remote.devices.rename | remote_device_rename `web/devices_api.rs` | W | profile | grant | OPEN | local operator/manage only; in id,name |

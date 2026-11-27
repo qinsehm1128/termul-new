@@ -237,6 +237,68 @@ describe('RemoteAccessPopover', () => {
     expect(mocks.stop).toHaveBeenCalledTimes(1)
     expect(mocks.start).toHaveBeenCalledWith({ bindMode: 'all' })
   })
+  it('pairs over the tailnet MagicDNS origin and restarts with the tailnet bind', async () => {
+    mocks.status.mockReturnValue(RUNNING)
+    mocks.stop.mockResolvedValue({ success: true, data: STOPPED })
+    const tailnetRunning: RemoteStatus = {
+      ...RUNNING,
+      bindMode: 'tailnet',
+      bindHost: '100.64.0.4',
+      tunnelUrl: null,
+      publishMode: 'tailnet',
+      tailnetUrl: 'http://100.64.0.4:5123',
+      tailnetDnsUrl: 'http://mac.vpn.internal:5123',
+      tailnetAccessUrl: `http://mac.vpn.internal:5123/#access_token=${SECRET}`,
+      tailnetFlavor: 'selfHosted'
+    }
+    mocks.start.mockResolvedValue({ success: true, data: tailnetRunning })
+    const view = render(<RemoteAccessPopover />)
+    await open()
+    fireEvent.click(screen.getByRole('tab', { name: 'Tailscale' }))
+    await waitFor(() => expect(mocks.start).toHaveBeenCalledWith({ bindMode: 'tailnet' }))
+    expect(mocks.setIntent).toHaveBeenCalledWith({ publishMode: 'tailnet' })
+    mocks.status.mockReturnValue(tailnetRunning)
+    view.rerender(<RemoteAccessPopover />)
+    await waitFor(() =>
+      expect(screen.getByTestId('qr').getAttribute('data-value')).toBe(
+        'http://mac.vpn.internal:5123/#pair=ONE_TIME_CODE'
+      )
+    )
+    expect(document.body.innerHTML).not.toContain(SECRET)
+  })
+  it('falls back to the tailnet IP origin without MagicDNS', async () => {
+    mocks.status.mockReturnValue({
+      ...RUNNING,
+      bindMode: 'tailnet',
+      tunnelUrl: null,
+      publishMode: 'tailnet',
+      tailnetUrl: 'http://100.101.1.2:5123',
+      tailnetDnsUrl: null
+    })
+    render(<RemoteAccessPopover />)
+    await open()
+    expect((await screen.findByTestId('qr')).getAttribute('data-value')).toBe(
+      'http://100.101.1.2:5123/#pair=ONE_TIME_CODE'
+    )
+  })
+  it('names a disconnected Tailscale instead of a generic failure', async () => {
+    mocks.intent.mockResolvedValue({
+      success: true,
+      data: { wanted: false, publishMode: 'tailnet' }
+    })
+    mocks.start.mockResolvedValue({ success: false, error: SECRET, code: 'TAILNET_NOT_RUNNING' })
+    render(<RemoteAccessPopover />)
+    const toggle = await open()
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: 'Tailscale' }).getAttribute('aria-selected')).toBe(
+        'true'
+      )
+    )
+    fireEvent.click(toggle)
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Tailscale 未连接')
+    expect(mocks.start).toHaveBeenCalledWith({ bindMode: 'tailnet' })
+    expect(document.body.innerHTML).not.toContain(SECRET)
+  })
   it('stops service and removes pairing QR when status stops', async () => {
     mocks.status.mockReturnValue(RUNNING)
     mocks.stop.mockResolvedValue({ success: true, data: STOPPED })
