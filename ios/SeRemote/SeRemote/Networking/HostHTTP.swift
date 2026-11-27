@@ -134,7 +134,13 @@ struct HostHTTP: Sendable {
             throw failure
         }
         guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode), text == "OK" || text.hasPrefix("OK") else {
-            if RemoteLink.isPrivateNetworkHost(origin.host() ?? "") {
+            let host = origin.host() ?? ""
+            // A tailnet address has no "same Wi-Fi" to be on: the path is the
+            // Tailscale/Headscale tunnel, so name that instead of the LAN.
+            if RemoteLink.isTailnetHost(host) {
+                throw HostError.network(String(localized: "The phone could not reach the Mac over Tailscale. Confirm Tailscale is connected on both devices and remote access is on."))
+            }
+            if RemoteLink.isPrivateNetworkHost(host) {
                 throw HostError.network(String(localized: "The phone could not reach the Mac on this Wi-Fi. Confirm remote access is on and both devices are on the same network."))
             }
             throw HostError.network(String(localized: "The phone could not reach the host tunnel. Confirm remote access is still on, then retry."))

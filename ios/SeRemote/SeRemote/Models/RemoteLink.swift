@@ -290,6 +290,9 @@ struct RemoteLink: Identifiable, Hashable, Codable {
         return components.url ?? url
     }
 
+    /// Non-routable or link-local numbering that this device may reach without
+    /// crossing the public internet: loopback, RFC1918, link-local, `.local`,
+    /// and the Tailscale/Headscale tailnet range (CGNAT 100.64.0.0/10, RFC 6598).
     static func isPrivateNetworkHost(_ host: String) -> Bool {
         let lowered = host.lowercased()
         if lowered == "localhost" || lowered.hasSuffix(".local") {
@@ -309,8 +312,33 @@ struct RemoteLink: Identifiable, Hashable, Codable {
             return (16 ... 31).contains(parts[1])
         case 192:
             return parts[1] == 168
+        case 100:
+            return (64 ... 127).contains(parts[1])
         default:
             return false
+        }
+    }
+
+    /// True only for a Tailscale/Headscale tailnet address: an IPv4 literal in
+    /// CGNAT 100.64.0.0/10. Tailscale assigns each node one stable address from
+    /// this range, so unlike a DHCP lease it does not move between launches — a
+    /// saved tailnet origin stays valid, and a timeout means the tailnet itself
+    /// is down rather than that the Mac moved. MagicDNS names
+    /// (`host.tailnet.ts.net`, `host.vpn.internal`) are deliberately not matched
+    /// here: they resolve through the tailnet, and only the literal carries the
+    /// guarantee.
+    static func isTailnetHost(_ host: String) -> Bool {
+        guard let address = Self.ipv4(host) else { return false }
+        return Self.isTailnetAddress(address)
+    }
+
+    /// 100.64.0.0/10 checked directly on the `in_addr` bytes in wire order
+    /// (octet 0 first), so it is independent of the host's integer endianness
+    /// and an interface address needs no formatting first.
+    private static func isTailnetAddress(_ address: in_addr) -> Bool {
+        withUnsafeBytes(of: address) { bytes in
+            guard bytes.count >= 2 else { return false }
+            return bytes[0] == 100 && (64 ... 127).contains(bytes[1])
         }
     }
 
@@ -319,32 +347,51 @@ struct RemoteLink: Identifiable, Hashable, Codable {
     /// RFC 6598, loopback, link-local). "Same Wi-Fi" establishes
     /// reachability, but only non-routable numbering keeps a sniffed bearer
     /// from being useful off-segment — campus-public L2 must pair over HTTPS.
+    ///
+    /// Two kinds of interface count as on-link:
+    /// - `en*` (Wi-Fi/Ethernet): the host must fall inside the interface's
+    ///   subnet, as before.
+    /// - `utun*` (Tailscale on iOS): a tunnel interface carries a /32 (or /10)
+    ///   address, so a subnet match is meaningless. A tailnet host counts as
+    ///   reachable when any `utun*` interface holds an IPv4 address in
+    ///   100.64.0.0/10 — that is the phone being on the tailnet.
     static func isOnLinkIPv4Host(_ host: String) -> Bool {
         let octets = host.split(separator: ".").compactMap { UInt8($0) }
         guard octets.count == 4, isCleartextSafeOctets(octets),
               let target = Self.ipv4(host) else { return false }
         let targetAddress = target.s_addr
+        let targetIsTailnet = Self.isTailnetHost(host)
         var interfaceList: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&interfaceList) == 0, let first = interfaceList else { return false }
         defer { freeifaddrs(interfaceList) }
         var cursor: UnsafeMutablePointer<ifaddrs>? = first
         while let current = cursor {
             defer { cursor = current.pointee.ifa_next }
-            guard let name = current.pointee.ifa_name,
-                  String(cString: name).hasPrefix("en"),
+            guard let name = current.pointee.ifa_name else { continue }
+            let interfaceName = String(cString: name)
+            let isTunnel = interfaceName.hasPrefix("utun")
+            guard isTunnel || interfaceName.hasPrefix("en"),
                   let addressSockaddr = current.pointee.ifa_addr,
-                  addressSockaddr.pointee.sa_family == UInt8(AF_INET),
-                  let maskSockaddr = current.pointee.ifa_netmask,
-                  maskSockaddr.pointee.sa_family == UInt8(AF_INET)
+                  addressSockaddr.pointee.sa_family == UInt8(AF_INET)
             else { continue }
             let address = addressSockaddr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) {
-                $0.pointee.sin_addr.s_addr
+                $0.pointee.sin_addr
             }
+            guard address.s_addr != 0 else { continue }
+            if isTunnel {
+                // The tunnel's own address in 100.64.0.0/10 is the phone's
+                // tailnet membership; no netmask check, since it is /32.
+                if targetIsTailnet, Self.isTailnetAddress(address) { return true }
+                continue
+            }
+            guard let maskSockaddr = current.pointee.ifa_netmask,
+                  maskSockaddr.pointee.sa_family == UInt8(AF_INET)
+            else { continue }
             let mask = maskSockaddr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) {
                 $0.pointee.sin_addr.s_addr
             }
-            guard address != 0, mask != 0 else { continue }
-            if address & mask == targetAddress & mask {
+            guard mask != 0 else { continue }
+            if address.s_addr & mask == targetAddress & mask {
                 return true
             }
         }
@@ -359,8 +406,9 @@ struct RemoteLink: Identifiable, Hashable, Codable {
 
     /// Cleartext HTTP pairing is confined to ranges that are not globally
     /// routable: RFC1918, CGNAT (100.64.0.0/10), loopback, link-local.
-    /// Mirrors the host-side publish allow-list (src-tauri lan.rs) — keep the
-    /// two policies in step.
+    /// Mirrors the host-side publish allow-lists (src-tauri lan.rs for the LAN
+    /// ranges, tailnet.rs for the Tailscale/Headscale CGNAT range) — keep the
+    /// policies in step.
     private static func isCleartextSafeOctets(_ octets: [UInt8]) -> Bool {
         guard octets.count == 4 else { return false }
         switch octets[0] {

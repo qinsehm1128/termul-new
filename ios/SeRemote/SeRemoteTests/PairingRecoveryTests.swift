@@ -51,6 +51,17 @@ struct PairingRecoveryTests {
         #expect(!PairingRecovery.needsRePairing(URLError(.timedOut), origin: tunnel))
     }
 
+    @Test("A tailnet address that times out stays retryable")
+    func tailnetTimeout() throws {
+        let tailnet = try #require(URL(string: "http://100.64.0.4:52953"))
+        // A Tailscale address is stable per node, so the saved origin is still
+        // the right one: the timeout means the tailnet is down (Tailscale off on
+        // either device), which a rescan cannot fix. Only the LAN rule above
+        // treats a timeout as a moved address.
+        #expect(RemoteLink.isPrivateNetworkHost(tailnet.host() ?? ""))
+        #expect(!PairingRecovery.needsRePairing(URLError(.timedOut), origin: tailnet))
+    }
+
     @Test("The link retries transient transport failures, including -1004")
     func retryPolicy() {
         // A stale path after resume reports -1004 (cannotConnectToHost); that is

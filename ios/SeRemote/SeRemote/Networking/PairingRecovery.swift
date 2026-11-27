@@ -21,6 +21,12 @@ enum PairingRecovery {
     ///   DHCP lease, another Wi-Fi) and only a scan carries the new one, while a
     ///   tunnel hostname that times out is just a slow Mac. Naming the origin
     ///   resolves that; without one, a timeout stays retryable.
+    ///
+    ///   A tailnet address (`100.64.0.0/10`) is grouped with the tunnel, not the
+    ///   LAN: Tailscale gives each node one stable address, so the saved origin
+    ///   is still the right one and a timeout means the tailnet is down (Tailscale
+    ///   disconnected on either device), which a fresh scan cannot fix. It stays
+    ///   retryable.
     static func needsRePairing(_ error: Error, origin: URL? = nil) -> Bool {
         if let hostError = error as? HostError {
             switch hostError {
@@ -36,7 +42,9 @@ enum PairingRecovery {
             return true
         case .timedOut:
             guard let origin else { return false }
-            return RemoteLink.isPrivateNetworkHost(origin.host() ?? "")
+            let host = origin.host() ?? ""
+            if RemoteLink.isTailnetHost(host) { return false }
+            return RemoteLink.isPrivateNetworkHost(host)
         default:
             return false
         }

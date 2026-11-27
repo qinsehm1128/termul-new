@@ -79,4 +79,29 @@ struct RemoteLinkTests {
     func privateHosts(host: String, expected: Bool) {
         #expect(RemoteLink.isPrivateNetworkHost(host) == expected)
     }
+
+    @Test("The Tailscale CGNAT range counts as a private network host", arguments: [
+        // RFC 6598 100.64.0.0/10: inclusive bounds, and the two just outside.
+        ("100.64.0.4", true), ("100.127.255.254", true),
+        ("100.63.255.255", false), ("100.128.0.1", false),
+        ("100.64.0.4.5", false), ("not-an-ip", false),
+    ])
+    func cgnatPrivateHosts(host: String, expected: Bool) {
+        #expect(RemoteLink.isPrivateNetworkHost(host) == expected)
+    }
+
+    @Test("A tailnet host is a CGNAT literal only", arguments: [
+        ("100.64.0.4", true), ("100.100.100.100", true),
+        ("100.128.0.1", false), ("192.168.1.20", false), ("8.8.8.8", false),
+        // MagicDNS names resolve through the tailnet but carry no such guarantee.
+        ("mac.tail1234.ts.net", false), ("mac.vpn.internal", false), ("", false),
+    ])
+    func tailnetHosts(host: String, expected: Bool) {
+        #expect(RemoteLink.isTailnetHost(host) == expected)
+        // Every tailnet host is private, so the cleartext policy agrees with the
+        // tailnet-specific messaging.
+        if expected {
+            #expect(RemoteLink.isPrivateNetworkHost(host))
+        }
+    }
 }

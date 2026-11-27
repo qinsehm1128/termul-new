@@ -12617,6 +12617,16 @@
           }
         }
       }
+    },
+    "The phone could not reach the Mac over Tailscale. Confirm Tailscale is connected on both devices and remote access is on." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "手机无法通过 Tailscale 连接到 Mac。请确认两台设备都已连接 Tailscale，且远程访问已开启。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
