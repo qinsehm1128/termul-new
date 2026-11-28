@@ -58,8 +58,64 @@ async function invokeIpc<T>(command: string, args?: InvokeArgs): Promise<IpcResu
  * Detection threshold: 2x interval (60 seconds) = system was asleep
  */
 const HEARTBEAT_INTERVAL_MS = 30_000
+
+/**
+ * One shared heartbeat, reference counted by subscriber.
+ *
+ * Every mounted terminal subscribes (`ConnectedTerminal`), so a timer per
+ * subscription is both waste and a leak: the module used to hold a single
+ * `heartbeatTimer` handle that each new subscriber overwrote, which left every
+ * earlier interval running with no way to clear it. A leaked interval is not
+ * merely a 30s wake-up — its callback closes over the unmounted component's
+ * refs, so it retains that terminal's xterm instance, buffer and DOM for the
+ * lifetime of the renderer.
+ */
+const resumeListeners = new Set<() => void>()
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
 let lastHeartbeat = Date.now()
+
+function startHeartbeatIfNeeded(): void {
+  if (heartbeatTimer !== null) return
+  lastHeartbeat = Date.now()
+  heartbeatTimer = setInterval(() => {
+    const now = Date.now()
+    const elapsed = now - lastHeartbeat
+
+    if (elapsed > HEARTBEAT_INTERVAL_MS * 2) {
+      // System likely resumed from sleep: more than 2 intervals have passed
+      // without the timer running. Snapshot first — a listener may unsubscribe.
+      for (const listener of [...resumeListeners]) {
+        try {
+          listener()
+        } catch {
+          // A resume handler failing must not stop the others or the timer.
+        }
+      }
+    }
+    lastHeartbeat = now
+  }, HEARTBEAT_INTERVAL_MS)
+}
+
+function stopHeartbeatIfIdle(): void {
+  if (resumeListeners.size > 0 || heartbeatTimer === null) return
+  clearInterval(heartbeatTimer)
+  heartbeatTimer = null
+}
+
+function subscribePowerResume(callback: () => void): () => void {
+  // Heartbeat-based power resume detection (chosen approach)
+  // See: docs/decisions/keyboard-system-event-mode-final.md
+  resumeListeners.add(callback)
+  startHeartbeatIfNeeded()
+
+  let subscribed = true
+  return () => {
+    if (!subscribed) return
+    subscribed = false
+    resumeListeners.delete(callback)
+    stopHeartbeatIfIdle()
+  }
+}
 
 /**
  * Create a SystemApi implementation using Tauri IPC
@@ -83,26 +139,10 @@ export function createTauriSystemApi(): SystemApi {
     },
 
     onPowerResume(callback: () => void): () => void {
-      // Heartbeat-based power resume detection (chosen approach)
-      // See: docs/decisions/keyboard-system-event-mode-final.md
-      heartbeatTimer = setInterval(() => {
-        const now = Date.now()
-        const elapsed = now - lastHeartbeat
-
-        if (elapsed > HEARTBEAT_INTERVAL_MS * 2) {
-          // System likely resumed from sleep
-          // More than 2 intervals have passed without the timer running
-          callback()
-        }
-        lastHeartbeat = now
-      }, HEARTBEAT_INTERVAL_MS)
-
-      return () => {
-        if (heartbeatTimer) {
-          clearInterval(heartbeatTimer)
-          heartbeatTimer = null
-        }
-      }
+      // One refcounted heartbeat shared by every subscriber — a timer per
+      // terminal leaks one interval (and the terminal it closes over) per
+      // mount. See `subscribePowerResume`.
+      return subscribePowerResume(callback)
     }
   }
 }
@@ -121,26 +161,8 @@ export const tauriSystemApi = {
   },
 
   onPowerResume(callback: () => void): () => void {
-    // Heartbeat-based power resume detection (chosen approach)
-    // See: docs/decisions/keyboard-system-event-mode-final.md
-    heartbeatTimer = setInterval(() => {
-      const now = Date.now()
-      const elapsed = now - lastHeartbeat
-
-      if (elapsed > HEARTBEAT_INTERVAL_MS * 2) {
-        // System likely resumed from sleep
-        // More than 2 intervals have passed without the timer running
-        callback()
-      }
-      lastHeartbeat = now
-    }, HEARTBEAT_INTERVAL_MS)
-
-    return () => {
-      if (heartbeatTimer) {
-        clearInterval(heartbeatTimer)
-        heartbeatTimer = null
-      }
-    }
+    // Shared refcounted heartbeat — see `subscribePowerResume`.
+    return subscribePowerResume(callback)
   }
 }
 
@@ -152,5 +174,6 @@ export function _resetSystemHeartbeatForTesting(): void {
     clearInterval(heartbeatTimer)
     heartbeatTimer = null
   }
+  resumeListeners.clear()
   lastHeartbeat = Date.now()
 }

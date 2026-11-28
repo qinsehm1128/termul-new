@@ -150,6 +150,32 @@ describe('host UI revision cache', () => {
     dispose()
   })
 
+  it('keeps retired boots bounded across many host reboots', async () => {
+    const f = fixture()
+    const dispose = f.store.getState().subscribe()
+    await settle()
+
+    // Ten reboots. Only the recent ones can still have a message in flight.
+    for (let index = 1; index <= 10; index += 1) {
+      f.connection('connected', `boot-${index}`)
+      await settle()
+    }
+
+    // A boot retired long ago is no longer remembered, so a late message from it
+    // is treated as a new connection instead of being ignored forever.
+    f.api.getHostUi.mockResolvedValue({ success: true, data: f.snapshot(1, 'boot') })
+    f.changed({ bootId: 'boot', seq: 99 })
+    await settle()
+    expect(f.store.getState().snapshot?.bootId).toBe('boot')
+
+    // A boot retired recently is still suppressed.
+    f.api.getHostUi.mockResolvedValue({ success: true, data: f.snapshot(1, 'boot-9') })
+    f.changed({ bootId: 'boot-9', seq: 100 })
+    await settle()
+    expect(f.store.getState().snapshot?.bootId).toBe('boot')
+    dispose()
+  })
+
   it('preserves accepted context for redundant same-boot connected events', async () => {
     const f = fixture()
     const dispose = f.store.getState().subscribe()

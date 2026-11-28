@@ -65,6 +65,11 @@ import {
 import { resyncRendererInputModes } from '@/lib/terminal-input-resync'
 import { buildTerminalUrlLinks, isSupportedTerminalUrl } from '@/lib/terminal-url-links'
 import { applyThemeToTerminal, getActiveTerminalTheme } from '@/lib/themes'
+import {
+  noteWebglAddonCreated,
+  noteWebglAddonDisposed,
+  noteWebglContextLost
+} from '@/lib/webgl-lifecycle-counters'
 import { claimWebglSlot, dropWebglSlot, releaseWebglVisibility } from '@/lib/webgl-renderer-budget'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import {
@@ -1058,6 +1063,7 @@ function ConnectedTerminalComponent({
     if (webglAddonRef.current) {
       webglAddonRef.current.dispose()
       webglAddonRef.current = null
+      noteWebglAddonDisposed()
     }
     webglContextLostRef.current = false
   }, [])
@@ -1713,6 +1719,8 @@ function ConnectedTerminalComponent({
         webglAddon.onContextLoss(() => {
           webglAddon.dispose()
           webglAddonRef.current = null
+          noteWebglContextLost()
+          noteWebglAddonDisposed()
           // Mark context as lost for recovery decisions
           webglContextLostRef.current = true
           if (!isVisibleRef.current || !shouldUseWebglRenderer(rendererPreferenceRef.current)) {
@@ -1733,6 +1741,9 @@ function ConnectedTerminalComponent({
         })
         term.loadAddon(webglAddon)
         webglAddonRef.current = webglAddon
+        // Counted only once it is attached: a constructor or load failure
+        // never owned a GPU context, so it must not read as a leaked one.
+        noteWebglAddonCreated()
         // Clear context lost flag on successful load
         webglContextLostRef.current = false
         if (!isRecovery) {

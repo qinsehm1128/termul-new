@@ -14,11 +14,34 @@ interface RemoteStatusStore {
   setRestoreError: (error: string | null) => void
 }
 
+/**
+ * Whether two status payloads carry the same values.
+ *
+ * The desktop polls `remote_server_status` every 3 s, and the backend builds a
+ * fresh object each time. `set({ status })` therefore notified every subscriber
+ * 1200 times an hour while nothing had changed. Every field is a primitive, so
+ * a shallow compare over the union of keys is exact.
+ */
+function sameRemoteStatus(a: RemoteStatus | null, b: RemoteStatus | null): boolean {
+  if (a === b) return true
+  if (!a || !b) return false
+  const keys = Object.keys(a) as (keyof RemoteStatus)[]
+  if (keys.length !== Object.keys(b).length) return false
+  for (const key of keys) {
+    if (a[key] !== b[key]) return false
+  }
+  return true
+}
+
 export const useRemoteStatusStore = create<RemoteStatusStore>((set) => ({
   status: null,
   restoreError: null,
-  setStatus: (status) => set({ status }),
-  setRestoreError: (restoreError) => set({ restoreError })
+  // Returning the same state object makes zustand skip the notification, so a
+  // poll that learned nothing new no longer re-renders the whole shell.
+  setStatus: (status) =>
+    set((state) => (sameRemoteStatus(state.status, status) ? state : { status })),
+  setRestoreError: (restoreError) =>
+    set((state) => (state.restoreError === restoreError ? state : { restoreError }))
 }))
 
 /** Selector: current remote status (or null). */

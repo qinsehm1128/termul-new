@@ -23,12 +23,15 @@ export function installRendererMemoryMarkers(nonce: string): void {
   // Delay imports until initial rendering has settled. No browser client sends
   // these local machine diagnostics to its remote host.
   const start = async (): Promise<void> => {
-    const [terminalStore, terminalCache, webglBudget, registry] = await Promise.all([
-      import('@/stores/terminal-store'),
-      import('@/components/terminal/terminal-cache'),
-      import('./webgl-renderer-budget'),
-      import('@/utils/terminal-registry')
-    ])
+    const [terminalStore, terminalCache, webglBudget, registry, webglLifecycle] = await Promise.all(
+      [
+        import('@/stores/terminal-store'),
+        import('@/components/terminal/terminal-cache'),
+        import('./webgl-renderer-budget'),
+        import('@/utils/terminal-registry'),
+        import('./webgl-lifecycle-counters')
+      ]
+    )
     const sample = async (): Promise<void> => {
       const { terminals } = terminalStore.useTerminalStore.getState()
       let attached = 0
@@ -51,6 +54,12 @@ export function installRendererMemoryMarkers(nonce: string): void {
       const cachedXterms = terminalCache.forEachCachedTerminal((terminal) => {
         cachedCells += logicalCells(terminal)
       })
+      // DOM node count catches growth the terminal counters cannot see:
+      // detached-but-referenced nodes and per-tick node creation. The WebGL
+      // counters catch addon/context churn between two samples.
+      const domNodes =
+        typeof document === 'undefined' ? 0 : document.getElementsByTagName('*').length
+      const webgl = webglLifecycle.getWebglLifecycleSnapshot()
       await logFrontendError({
         level: 'warn',
         source: 'renderer-memory',
@@ -59,7 +68,9 @@ export function installRendererMemoryMarkers(nonce: string): void {
           `mounted_xterms=${registry.getRegistrySize()} mounted_cells=${mountedCells} ` +
           `cached_xterms=${cachedXterms} cached_cells=${cachedCells} webgl_slots=${webglBudget.countWebglSlots()} ` +
           `transcript_chars=${transcriptChars} detached_chars=${detachedChars} ` +
-          `pending_scrollback_lines=${pendingScrollbackLines} hidden_terminals=${hidden}`
+          `pending_scrollback_lines=${pendingScrollbackLines} hidden_terminals=${hidden} ` +
+          `dom_nodes=${domNodes} webgl_created=${webgl.created} webgl_disposed=${webgl.disposed} ` +
+          `webgl_live=${webgl.live} webgl_context_lost=${webgl.contextsLost}`
       })
     }
     const tick = (): void => {

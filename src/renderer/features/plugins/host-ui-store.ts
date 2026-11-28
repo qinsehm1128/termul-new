@@ -34,10 +34,25 @@ export function createPluginHostUiStore(
   let unsupported = false
   let ready = false
   let bootId: string | null = null
+  /**
+   * Boot ids whose late events must be ignored.
+   *
+   * Bounded on purpose: a retired boot only matters while a message from it can
+   * still be in flight. Unbounded, the set grew one entry per host reboot for
+   * the whole lifetime of the renderer.
+   */
   const retiredBoots = new Set<string>()
+  const MAX_RETIRED_BOOTS = 8
   const selectBoot = (next: string | null) => {
     if (next && retiredBoots.has(next)) return false
-    if (bootId && next && next !== bootId) retiredBoots.add(bootId)
+    if (bootId && next && next !== bootId) {
+      retiredBoots.add(bootId)
+      while (retiredBoots.size > MAX_RETIRED_BOOTS) {
+        const oldest = retiredBoots.values().next().value
+        if (oldest === undefined) break
+        retiredBoots.delete(oldest)
+      }
+    }
     if (next) bootId = next
     return true
   }

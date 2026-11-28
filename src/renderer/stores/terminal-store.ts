@@ -1010,7 +1010,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       // Agents repaint their title on every spinner frame. Bailing on an
       // unchanged value keeps that off the store's subscriber fan-out.
       const target = state.terminals.find((t) => t.id === id)
-      if (!target || (target.oscTitle ?? null) === oscTitle) return {}
+      // `state` (not `{}`): an empty merge still notifies every subscriber.
+      if (!target || (target.oscTitle ?? null) === oscTitle) return state
       return {
         terminals: state.terminals.map((t) => (t.id === id ? { ...t, oscTitle } : t))
       }
@@ -1020,7 +1021,10 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   setTerminalAgentState: (id: string, agentState: AgentTerminalState): void => {
     set((state) => {
       const target = state.terminals.find((t) => t.id === id)
-      if (!target || target.agentState === agentState) return {}
+      // `state`, not `{}`: the agent-state tick re-derives every agent terminal
+      // every 600ms while idle, and zustand notifies on any merge — even an
+      // empty one — so `{}` woke every store subscriber forever.
+      if (!target || target.agentState === agentState) return state
       return {
         terminals: state.terminals.map((t) => (t.id === id ? { ...t, agentState } : t))
       }
@@ -1474,8 +1478,12 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   truncateHiddenTerminalBuffers: (): void => {
     get().commitTranscripts()
     const now = Date.now()
-    set((state) => ({
-      terminals: state.terminals.map((t) => {
+    set((state) => {
+      // Runs on a timer while the app is hidden. A pass that trims nothing must
+      // not notify: the mapped array alone would be a new state object, and a
+      // no-op notification still fans out to every subscriber.
+      let changed = false
+      const terminals = state.terminals.map((t) => {
         const hiddenSince = t.appHiddenSince ?? t.hiddenSince
         const isEligibleForTruncation =
           (t.isAppHidden || t.isHidden) &&
@@ -1518,6 +1526,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
           return t
         }
 
+        changed = true
         return {
           ...t,
           pendingScrollback: nextScrollback,
@@ -1529,7 +1538,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
           detachedOutput: nextDetachedOutput
         }
       })
-    }))
+      return changed ? { terminals } : state
+    })
   },
 
   cleanupProjectTerminals: (projectId: string): void => {

@@ -65,13 +65,17 @@ describe('renderer memory markers', () => {
     installRendererMemoryMarkers('boot2')
     expect(mocks.log).not.toHaveBeenCalled()
     await advanceSample()
+    // jsdom owns a few nodes of its own; the sample must report the live count,
+    // not a constant, so read it from the same document the sampler walks.
+    const domNodes = document.getElementsByTagName('*').length
     expect(mocks.log).toHaveBeenCalledExactlyOnceWith({
       level: 'warn',
       source: 'renderer-memory',
       message:
         'event=sample nonce=boot1 terminals=2 attached=1 mounted_xterms=2 mounted_cells=10800 ' +
         'cached_xterms=1 cached_cells=6000 webgl_slots=2 ' +
-        'transcript_chars=6 detached_chars=7 pending_scrollback_lines=1 hidden_terminals=1'
+        'transcript_chars=6 detached_chars=7 pending_scrollback_lines=1 hidden_terminals=1 ' +
+        `dom_nodes=${domNodes} webgl_created=0 webgl_disposed=0 webgl_live=0 webgl_context_lost=0`
     })
     await advanceSample()
     expect(mocks.log).toHaveBeenCalledTimes(2)

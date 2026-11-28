@@ -101,7 +101,8 @@ export const useGitStatusStore = create<GitStatusState>((set, get) => ({
       // Drop any stale context so the footer disables its actions rather than
       // acting on out-of-date ahead/staged/HEAD data.
       set((state) => {
-        if (!(cwd in state.commitContexts)) return {}
+        // `state` (not `{}`): an empty merge still notifies every subscriber.
+        if (!(cwd in state.commitContexts)) return state
         const commitContexts = { ...state.commitContexts }
         delete commitContexts[cwd]
         return { commitContexts }
