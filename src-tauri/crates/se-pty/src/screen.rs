@@ -5,12 +5,12 @@ use se_screen_protocol::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicUsize, Ordering},
         mpsc::{sync_channel, SyncSender},
-        Arc, Mutex, OnceLock,
+        Arc, Mutex, OnceLock, Weak,
     },
     time::{Duration, Instant},
 };
@@ -44,6 +44,8 @@ pub enum ScreenObservationReason {
     Protocol,
     SizeLimit,
     LegacyHost,
+    /// The owning PTY session ended; observation is no longer useful.
+    Exited,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -95,6 +97,12 @@ impl ScreenReadReply {
 
 static CONFIG: OnceLock<Option<String>> = OnceLock::new();
 static HELPERS: AtomicUsize = AtomicUsize::new(0);
+/// One observer child per logical terminal slot. Spawning a replacement for an
+/// occupied slot kills and reaps the previous child first, so a respawn can
+/// never leave two observers running for the same terminal.
+static SLOTS: OnceLock<Mutex<HashMap<String, Weak<Inner>>>> = OnceLock::new();
+/// Observer children this process spawned and has not yet reaped.
+const REAP_DEADLINE: Duration = Duration::from_millis(200);
 const MAX_QUEUE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_QUEUE_FRAMES: usize = 256;
 const DEADLINE: Duration = Duration::from_secs(2);
@@ -123,8 +131,106 @@ struct Inner {
     state: Mutex<State>,
     child: Mutex<Option<Child>>,
     expected_build_id: String,
+    slot: Option<String>,
 }
+
+#[derive(Debug, Default)]
+struct ReapReport {
+    pid: Option<u32>,
+    reaped: bool,
+}
+
+fn slot_registry() -> &'static Mutex<HashMap<String, Weak<Inner>>> {
+    SLOTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn register_slot_owner(slot: &str, inner: &Arc<Inner>) {
+    slot_registry()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(slot.to_owned(), Arc::downgrade(inner));
+}
+
+/// Remove a dead owner without disturbing a newer replacement in the same slot.
+fn unregister_slot_owner(slot: &str, inner: &Arc<Inner>) {
+    let mut slots = slot_registry()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let owned = slots
+        .get(slot)
+        .and_then(|weak| weak.upgrade())
+        .is_some_and(|current| Arc::ptr_eq(&current, inner));
+    if owned {
+        slots.remove(slot);
+    }
+}
+
+/// Kill and reap any child still owning `slot` (the registry lock is not held
+/// while waiting, so unrelated slot churn is not blocked behind a reap).
+fn replace_slot_owner(slot: &str) {
+    let previous = slot_registry()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(slot)
+        .and_then(|weak| weak.upgrade());
+    let Some(previous) = previous else {
+        return;
+    };
+    previous.failed(ScreenObservationReason::Crash);
+    let report = previous.terminate_child();
+    log::info!(
+        "[screen-observer] stable_code=OBSERVER_REPLACED slot={slot} previous_pid={} reaped={}",
+        report.pid.map(i64::from).unwrap_or(-1),
+        report.reaped
+    );
+}
+
 impl Inner {
+    fn child_pid(&self) -> Option<u32> {
+        self.child
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .map(Child::id)
+    }
+
+    /// Kill and reap the child exactly once. The slot mutex is held across the
+    /// wait, so a later caller sees `None` only after the reap finished: a
+    /// successful replacement implies the previous child is gone, not merely
+    /// signalled.
+    fn terminate_child(&self) -> ReapReport {
+        let mut slot = self
+            .child
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(mut child) = slot.take() else {
+            return ReapReport::default();
+        };
+        let pid = child.id();
+        let _ = child.kill();
+        let deadline = Instant::now() + REAP_DEADLINE;
+        let mut reaped = false;
+        while Instant::now() < deadline {
+            match child.try_wait() {
+                Ok(Some(_)) => {
+                    reaped = true;
+                    break;
+                }
+                Ok(None) => std::thread::sleep(Duration::from_millis(2)),
+                Err(_) => break,
+            }
+        }
+        if !reaped {
+            // SIGKILL cannot be ignored, so this is the guaranteed reap even
+            // when the event loop never observes the exit within the deadline.
+            reaped = child.wait().is_ok();
+        }
+        ReapReport {
+            pid: Some(pid),
+            reaped,
+        }
+    }
+
     fn failed(&self, reason: ScreenObservationReason) {
         let mut state = self.state.lock().unwrap();
         if matches!(
@@ -135,11 +241,19 @@ impl Inner {
         }
         state.status.state = ScreenObservationState::Degraded;
         state.status.reason = Some(reason);
-        log::warn!(
-            "[screen-observer] degraded reason={reason:?} captured_seq={} applied_seq={}",
-            state.status.captured_seq,
-            state.status.applied_seq
-        );
+        if matches!(reason, ScreenObservationReason::Exited) {
+            log::info!(
+                "[screen-observer] stable_code=OBSERVER_CLOSED reason={reason:?} captured_seq={} applied_seq={}",
+                state.status.captured_seq,
+                state.status.applied_seq
+            );
+        } else {
+            log::warn!(
+                "[screen-observer] degraded reason={reason:?} captured_seq={} applied_seq={}",
+                state.status.captured_seq,
+                state.status.applied_seq
+            );
+        }
         state.outstanding.clear();
         state.bytes = 0;
         if let Some(read) = state.read.take() {
@@ -254,14 +368,29 @@ pub struct ScreenObserver {
 }
 impl ScreenObserver {
     pub fn start(cols: u16, rows: u16) -> Self {
-        // Only the explicit native acceptance test can replace its test-harness
-        // executable with the separately built production host. Never compiled
-        // into a runtime, so production cannot accept a PATH/env helper override.
+        let (build, executable, test_args) = Self::launch_config();
+        Self::start_with_slot(None, cols, rows, build, executable, test_args)
+    }
+
+    /// One observer per PTY. `terminal_id` is the ownership slot: starting a
+    /// second observer for the same slot kills and reaps the first child, so a
+    /// respawn cannot leave two observers running for one terminal.
+    pub fn start_for_terminal(terminal_id: &str, cols: u16, rows: u16) -> Self {
+        let (build, executable, test_args) = Self::launch_config();
+        Self::start_with_slot(Some(terminal_id), cols, rows, build, executable, test_args)
+    }
+
+    /// Only the explicit native acceptance test can replace its test-harness
+    /// executable with the separately built production host. Never compiled
+    /// into a runtime, so production cannot accept a PATH/env helper override.
+    fn launch_config() -> (
+        Option<String>,
+        Option<std::path::PathBuf>,
+        Option<Vec<String>>,
+    ) {
         #[cfg(test)]
         if let Some(binary) = std::env::var_os("SE_TEST_OBSERVER_BINARY") {
-            return Self::start_with(
-                cols,
-                rows,
+            return (
                 Some(
                     std::env::var("SE_TEST_OBSERVER_BUILD_ID").expect("native test build identity"),
                 ),
@@ -269,15 +398,25 @@ impl ScreenObserver {
                 None,
             );
         }
-        Self::start_with(
-            cols,
-            rows,
+        (
             CONFIG.get().cloned().flatten(),
             std::env::current_exe().ok(),
             None,
         )
     }
+
     fn start_with(
+        cols: u16,
+        rows: u16,
+        build: Option<String>,
+        executable: Option<std::path::PathBuf>,
+        test_args: Option<Vec<String>>,
+    ) -> Self {
+        Self::start_with_slot(None, cols, rows, build, executable, test_args)
+    }
+
+    fn start_with_slot(
+        slot: Option<&str>,
         cols: u16,
         rows: u16,
         build: Option<String>,
@@ -297,6 +436,7 @@ impl ScreenObserver {
             }),
             child: Mutex::new(None),
             expected_build_id: build.clone().unwrap_or_default(),
+            slot: slot.map(str::to_owned),
         });
         let mut observer = Self {
             inner: inner.clone(),
@@ -321,6 +461,12 @@ impl ScreenObserver {
         {
             inner.failed(ScreenObservationReason::Overflow);
             return observer;
+        }
+        if let Some(slot) = slot {
+            // Kill and reap a previous observer for this terminal before the
+            // replacement exists. Runs after the checks above so a doomed
+            // spawn does not evict a working observer.
+            replace_slot_owner(slot);
         }
         let child = executable.ok_or(()).and_then(|executable| {
             let mut command = Command::new(executable);
@@ -372,6 +518,14 @@ impl ScreenObserver {
         let mut input = child.stdin.take().unwrap();
         let mut output = child.stdout.take().unwrap();
         *inner.child.lock().unwrap() = Some(child);
+        if let Some(slot) = slot {
+            register_slot_owner(slot, &inner);
+        }
+        log::info!(
+            "[screen-observer] stable_code=OBSERVER_SPAWN slot={} pid={}",
+            slot.unwrap_or("-"),
+            inner.child_pid().map(i64::from).unwrap_or(-1)
+        );
         let (tx, rx) = sync_channel(MAX_QUEUE_FRAMES);
         // Init is queued before this observer is published / reader is started.
         tx.try_send(Request::Init { cols, rows }).unwrap();
@@ -442,12 +596,14 @@ impl ScreenObserver {
                 if exited && !degraded {
                     inner.failed(ScreenObservationReason::Crash);
                 }
-                if let Some(mut child) = inner.child.lock().unwrap().take() {
-                    let _ = child.kill();
-                    let deadline = Instant::now() + Duration::from_millis(200);
-                    while child.try_wait().ok().flatten().is_none() && Instant::now() < deadline {
-                        std::thread::sleep(Duration::from_millis(5));
-                    }
+                let report = inner.terminate_child();
+                if report.pid.is_some() {
+                    log::info!(
+                        "[screen-observer] stable_code=OBSERVER_REAP slot={} pid={} reaped={}",
+                        inner.slot.as_deref().unwrap_or("-"),
+                        report.pid.map(i64::from).unwrap_or(-1),
+                        report.reaped
+                    );
                 }
                 HELPERS.fetch_sub(1, Ordering::SeqCst);
                 break;
@@ -562,12 +718,44 @@ impl ScreenObserver {
             }
         }
     }
+    /// Stop observation and synchronously kill+reap the child. Idempotent:
+    /// the first caller reaps, later callers find no child.
     pub fn stop(&self) {
         self.inner.failed(ScreenObservationReason::Crash);
+        let report = self.inner.terminate_child();
+        if let Some(pid) = report.pid {
+            log::info!(
+                "[screen-observer] stable_code=OBSERVER_STOP slot={} pid={pid} reaped={}",
+                self.inner.slot.as_deref().unwrap_or("-"),
+                report.reaped
+            );
+        }
+    }
+
+    /// The PTY session is over (reader EOF/error): there is no screen left to
+    /// observe. Without this the child outlives its PTY for as long as the
+    /// terminal record is retained, which is unbounded for a protected tab
+    /// nobody closes and for a GUI that never receives the Exit event.
+    pub fn stop_on_pty_exit(&self, terminal_id: &str) {
+        self.inner.failed(ScreenObservationReason::Exited);
+        let report = self.inner.terminate_child();
+        log::info!(
+            "[screen-observer] stable_code=OBSERVER_STOP_PTY_EXIT terminal_id={terminal_id} slot={} pid={} reaped={}",
+            self.inner.slot.as_deref().unwrap_or("-"),
+            report.pid.map(i64::from).unwrap_or(-1),
+            report.reaped
+        );
+    }
+
+    pub fn child_pid(&self) -> Option<u32> {
+        self.inner.child_pid()
     }
 }
 impl Drop for ScreenObserver {
     fn drop(&mut self) {
+        if let Some(slot) = self.inner.slot.as_deref() {
+            unregister_slot_owner(slot, &self.inner);
+        }
         self.stop();
     }
 }
@@ -610,6 +798,21 @@ while True:
             Some("/usr/bin/python3".into()),
             Some(vec!["-u".into(), "-c".into(), FIXTURE.into(), mode.into()]),
         ))
+    }
+    fn slot_fixture(slot: &str, mode: &str) -> Arc<ScreenObserver> {
+        Arc::new(ScreenObserver::start_with_slot(
+            Some(slot),
+            80,
+            24,
+            Some("fixture".into()),
+            Some("/usr/bin/python3".into()),
+            Some(vec!["-u".into(), "-c".into(), FIXTURE.into(), mode.into()]),
+        ))
+    }
+    /// True for a signalable process. A reaped child is gone, so this also
+    /// asserts the reap half of kill+reap (a zombie still answers signal 0).
+    fn process_alive(pid: u32) -> bool {
+        unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
     }
     async fn until(observer: &ScreenObserver, expected: ScreenObservationState) {
         let deadline = Instant::now() + Duration::from_secs(4);
@@ -724,6 +927,61 @@ while True:
         let reply = task.await.unwrap().unwrap();
         assert!(reply.text.is_none());
         until(&observer, ScreenObservationState::Ready).await;
+    }
+
+    /// A dropped owner must not leave a live observer behind: no watchdog
+    /// thread is required for the kill+reap to happen.
+    #[tokio::test]
+    async fn dropping_a_live_observer_kills_and_reaps_its_child() {
+        let observer = fixture("stall");
+        until(&observer, ScreenObservationState::Ready).await;
+        let pid = observer.child_pid().expect("observer child");
+        assert!(process_alive(pid));
+        drop(observer);
+        assert!(
+            !process_alive(pid),
+            "observer child {pid} survived owner drop"
+        );
+    }
+
+    /// Regression: a replacement for the same terminal slot must kill and reap
+    /// the previous child before returning, and the replaced owner must not
+    /// claw the slot back when it is finally dropped.
+    #[tokio::test]
+    async fn replacing_a_slot_kills_and_reaps_the_previous_child() {
+        let first = slot_fixture("terminal-slot", "normal");
+        until(&first, ScreenObservationState::Ready).await;
+        let first_pid = first.child_pid().expect("first child");
+        assert!(process_alive(first_pid));
+
+        let second = slot_fixture("terminal-slot", "normal");
+        assert!(
+            !process_alive(first_pid),
+            "previous observer child {first_pid} outlived its replacement"
+        );
+        until(&second, ScreenObservationState::Ready).await;
+        let second_pid = second.child_pid().expect("second child");
+
+        // The replaced owner's drop is a no-op for the slot's new owner.
+        drop(first);
+        assert!(process_alive(second_pid));
+        assert_eq!(second.status().state, ScreenObservationState::Ready);
+        drop(second);
+        assert!(!process_alive(second_pid));
+    }
+
+    /// Regression: PTY end stops observation even though the terminal record
+    /// may stay retained (protected tab / disconnected GUI).
+    #[tokio::test]
+    async fn pty_exit_stop_reaps_the_child_and_is_idempotent() {
+        let observer = fixture("normal");
+        until(&observer, ScreenObservationState::Ready).await;
+        let pid = observer.child_pid().expect("observer child");
+        observer.stop_on_pty_exit("terminal-under-test");
+        assert!(!process_alive(pid));
+        assert!(observer.child_pid().is_none());
+        observer.stop();
+        assert_eq!(observer.status().state, ScreenObservationState::Degraded);
     }
 
     /// The acceptance harness builds the real host first, then runs this test

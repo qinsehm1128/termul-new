@@ -16,3 +16,6 @@ required-features = ["ghostty-vt"]
 se-screen-protocol = { path = "../se-screen-protocol" }
 se-ghostty-vt = { path = "../se-ghostty-vt", default-features = false }
 base64 = "0.22"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

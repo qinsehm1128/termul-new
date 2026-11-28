@@ -2501,7 +2501,11 @@ impl PtyManager {
                 terminal_screen_engine: options.terminal_screen_engine,
                 screen_observer: (options.terminal_screen_engine
                     == crate::screen::TerminalScreenEngine::GhosttyVt)
-                    .then(|| Arc::new(crate::screen::ScreenObserver::start(cols, rows))),
+                    .then(|| {
+                        Arc::new(crate::screen::ScreenObserver::start_for_terminal(
+                            &id, cols, rows,
+                        ))
+                    }),
                 child: Arc::new(AsyncMutex::new(Some(Box::new(child)))),
                 master: Arc::new(AsyncMutex::new(None)), // No master for ConPTY
                 writer: Arc::new(AsyncMutex::new(Some(queued_input(&id, writer)?))),
@@ -2721,7 +2725,11 @@ impl PtyManager {
                 terminal_screen_engine: options.terminal_screen_engine,
                 screen_observer: (options.terminal_screen_engine
                     == crate::screen::TerminalScreenEngine::GhosttyVt)
-                    .then(|| Arc::new(crate::screen::ScreenObserver::start(cols, rows))),
+                    .then(|| {
+                        Arc::new(crate::screen::ScreenObserver::start_for_terminal(
+                            &id, cols, rows,
+                        ))
+                    }),
                 child: Arc::new(AsyncMutex::new(Some(child))),
                 master: Arc::new(AsyncMutex::new(Some(pty_pair.master))),
                 writer: Arc::new(AsyncMutex::new(Some(queued_input(&id, writer)?))),
@@ -2990,6 +2998,16 @@ impl PtyManager {
 
         // Signal flusher that reader is done
         done_flag.store(true, Ordering::Release);
+
+        // The PTY session itself is over (EOF, read error, or cleanup stop),
+        // so screen observation has nothing left to observe. This must not be
+        // left to `terminate` alone: a protected terminal record can outlive
+        // its PTY indefinitely (a tab nobody closes, or a GUI that never
+        // receives Exit), and the observer child would then stay alive with a
+        // control pipe its owner keeps open. Stop is idempotent.
+        if let Some(observer) = &instance.screen_observer {
+            observer.stop_on_pty_exit(&id);
+        }
 
         // Get real child exit status where possible.
         //
