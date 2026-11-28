@@ -146,6 +146,10 @@ final class ChatStore {
     var onTurnSettled: (() -> Void)?
     var onAttentionNeeded: ((_ title: String, _ body: String) -> Void)?
     var isSending = false
+    /// True while any transcript message is still streaming. Kept as a Bool so
+    /// surfaces that only show the working indicator do not read the transcript
+    /// and get invalidated for every token.
+    private(set) var isStreaming = false
     var isLoading = false
     var isSwitchingAgent = false
     var switchingStatus: String?
@@ -160,6 +164,17 @@ final class ChatStore {
     var models: SessionModelState?
     var configOptions: [SessionConfigOption] = []
     var showAgentSheet = false
+
+    /// A conversation transcript is visible history, not a growing log. Past
+    /// these bounds the oldest settled turns are dropped: without a bound both
+    /// the per-render cost and the retained memory grow for the whole life of a
+    /// long-running session, which is exactly the "slow after a while" shape.
+    nonisolated static let maximumTranscriptMessages = 800
+    nonisolated static let maximumTranscriptTools = 400
+    nonisolated static let maximumTranscriptBytes = 8 * 1024 * 1024
+    /// One 60 Hz frame plus slack: merges a token burst without making the
+    /// reply visibly arrive in steps.
+    nonisolated static let chunkFlushMilliseconds = 40
 
     var agentLabel: String {
         if let mode = modes?.availableModes?.first(where: { $0.id == modes?.currentModeId }) {
@@ -191,8 +206,20 @@ final class ChatStore {
         !messages.isEmpty || !tools.isEmpty
     }
 
+    /// Coarse "the agent is working" flag for surfaces that must not observe
+    /// the transcript text (the shell, the conversation list).
+    var isAgentWorking: Bool {
+        isSending || isStreaming || tools.contains { $0.isBusy }
+    }
+
     private weak var socket: AcpSocket?
     private var persistTask: Task<Void, Never>?
+    /// Streaming text held for at most one frame budget. Applying one chunk per
+    /// token made SwiftUI re-diff the transcript and re-parse the growing
+    /// bubble's Markdown for every token, so a reply got more expensive as it
+    /// grew. See `ChatChunkAccumulator`.
+    @ObservationIgnored private var pendingChunks = ChatChunkAccumulator()
+    @ObservationIgnored private var chunkFlushTask: Task<Void, Never>?
     var onHostConversationsChanged: (@MainActor () -> Void)?
 
     func attach(socket: AcpSocket) {
@@ -252,7 +279,7 @@ final class ChatStore {
         let switchingConversation = boundConversationId != conversation.id
         let switchingSession = binding?.agentSessionId != nil && binding?.agentSessionId != activeSessionId
         if switchingConversation {
-            persistCurrentTranscript()
+            persistCurrentTranscript(immediately: true)
         }
         boundConversationId = conversation.id
         currentBinding = binding
@@ -308,11 +335,11 @@ final class ChatStore {
             return
         }
         HostLog.session.info("Conversation has no current ACP binding")
-        persistCurrentTranscript()
+        persistCurrentTranscript(immediately: true)
     }
 
     func leave() {
-        persistCurrentTranscript()
+        persistCurrentTranscript(immediately: true)
         persistTask?.cancel()
         resetTranscript()
         boundConversationId = nil
@@ -423,7 +450,7 @@ final class ChatStore {
             errorMessage = String(localized: "Open a session before switching agents.")
             return
         }
-        persistCurrentTranscript()
+        persistCurrentTranscript(immediately: true)
         isSwitchingAgent = true
         switchingStatus = String(localized: "Starting the agent on the Mac. First launch can take a few minutes.")
         errorMessage = nil
@@ -692,6 +719,9 @@ final class ChatStore {
     }
 
     private func resetTranscript() {
+        // Buffered chunks belong to the transcript being replaced.
+        discardPendingChunks()
+        isStreaming = false
         messages = []
         tools = []
         permissions = []
@@ -888,7 +918,7 @@ final class ChatStore {
         do {
             await syncFromWatermark(sessionId: session.sessionId)
             try await subscribe(sessionId: session.sessionId, lastSeq: subscribeCursor(for: session.sessionId))
-            persistCurrentTranscript()
+            persistCurrentTranscript(immediately: true)
             await refreshLiveComposerSnapshot()
             HostLog.session.info("Conversation transcript attached")
         } catch {
@@ -914,6 +944,9 @@ final class ChatStore {
                 cached.watermark,
                 ChatTranscriptCache.watermark(from: messages, tools: tools)
             )
+            // A cache written by an older build may exceed the current bound.
+            boundTranscript()
+            isStreaming = false
             HostLog.session.info("Hydrated conversation chat from cache")
             return
         }
@@ -997,9 +1030,15 @@ final class ChatStore {
     }
 
     private func settleHistoricalTranscript() {
+        // History pages and a live turn both end here; text still in the
+        // coalescing window belongs to the transcript being settled, or it
+        // would land as a fresh streaming message after the settle.
+        flushPendingChunks()
         messages = ChatTranscriptCache.compactMessages(Self.settled(messages))
         tools = ChatTranscriptCache.compactTools(Self.settled(tools))
+        boundTranscript()
         isSending = false
+        isStreaming = false
         if let sessionId = activeSessionId {
             lastSeq[sessionId] = max(
                 lastSeq[sessionId] ?? 0,
@@ -1029,25 +1068,33 @@ final class ChatStore {
         }
     }
 
-    private func persistCurrentTranscript() {
+    private func persistCurrentTranscript(immediately: Bool = false) {
+        // Never persist a transcript that is missing text still waiting in the
+        // coalescing window.
+        flushPendingChunks()
         guard let conversationId = boundConversationId, let sessionId = activeSessionId else { return }
         let compactMessages = ChatTranscriptCache.compactMessages(Self.settled(messages))
         let compactTools = ChatTranscriptCache.compactTools(Self.settled(tools))
-        ChatTranscriptCache.save(
-            CachedTranscript(
-                schemaVersion: ChatTranscriptCache.schemaVersion,
-                conversationId: conversationId,
-                sessionId: sessionId,
-                agentId: activeAgentId,
-                cwd: activeCwd,
-                watermark: max(
-                    lastSeq[sessionId] ?? 0,
-                    ChatTranscriptCache.watermark(from: compactMessages, tools: compactTools)
-                ),
-                messages: compactMessages,
-                tools: compactTools
-            )
+        let snapshot = CachedTranscript(
+            schemaVersion: ChatTranscriptCache.schemaVersion,
+            conversationId: conversationId,
+            sessionId: sessionId,
+            agentId: activeAgentId,
+            cwd: activeCwd,
+            watermark: max(
+                lastSeq[sessionId] ?? 0,
+                ChatTranscriptCache.watermark(from: compactMessages, tools: compactTools)
+            ),
+            messages: compactMessages,
+            tools: compactTools
         )
+        if immediately {
+            ChatTranscriptCache.save(snapshot)
+        } else {
+            // Encoding a multi-megabyte transcript and writing it atomically on
+            // the main thread drops frames exactly when a turn settles.
+            ChatTranscriptCache.saveInBackground(snapshot)
+        }
     }
 
     private func schedulePersist() {
@@ -1155,6 +1202,12 @@ final class ChatStore {
         if let sid, seq > 0 {
             lastSeq[sid] = max(lastSeq[sid] ?? 0, seq)
         }
+        // Every event other than a chunk is a transcript-visible ordering
+        // boundary: text still waiting in the coalescing window belongs before
+        // it, so it can never be reordered behind a tool call or a settle.
+        if type != "message_chunk" {
+            flushPendingChunks()
+        }
         switch type {
         case "user_prompt":
             if let event = try? JSONDecoder().decode(UserPromptEvent.self, from: payload) {
@@ -1178,11 +1231,13 @@ final class ChatStore {
                 } else {
                     messages.append(ChatMessage(id: id, role: .user, text: text, streaming: false, seq: seq))
                 }
+                refreshStreamingFlag()
             }
         case "message_chunk":
             if let event = try? JSONDecoder().decode(MessageChunkEvent.self, from: payload) {
                 markLatestSendingAccepted()
-                appendChunk(event, seq: seq)
+                pendingChunks.append(role: event.role, text: event.content.text ?? "", seq: seq)
+                scheduleChunkFlush()
             }
         case "tool_call":
             if let event = try? JSONDecoder().decode(ToolCallEvent.self, from: payload) {
@@ -1257,14 +1312,58 @@ final class ChatStore {
         default:
             break
         }
-        if ["user_prompt", "message_chunk", "tool_call", "tool_call_update", "prompt_complete"].contains(type) {
+        if ["user_prompt", "tool_call", "tool_call_update", "prompt_complete"].contains(type) {
             schedulePersist()
         }
     }
 
-    private func appendChunk(_ event: MessageChunkEvent, seq: UInt64) {
-        let role = ChatRole(rawValue: event.role) ?? .agent
-        let text = event.content.text ?? ""
+    // MARK: - Streaming coalescing
+
+    /// Apply buffered streaming text now, in arrival order. Safe to call when
+    /// nothing is pending; the periodic flush is cancelled first so the same
+    /// bytes can never be applied twice.
+    func flushPendingChunks() {
+        chunkFlushTask?.cancel()
+        chunkFlushTask = nil
+        applyPendingChunks()
+    }
+
+    private func scheduleChunkFlush() {
+        guard chunkFlushTask == nil else { return }
+        chunkFlushTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(Self.chunkFlushMilliseconds))
+            guard let self, !Task.isCancelled else { return }
+            self.chunkFlushTask = nil
+            self.applyPendingChunks()
+        }
+    }
+
+    private func discardPendingChunks() {
+        chunkFlushTask?.cancel()
+        chunkFlushTask = nil
+        pendingChunks.discard()
+    }
+
+    /// Keep the coarse flag in step without making it a derived read of the
+    /// transcript (a derived read would observe every token).
+    private func refreshStreamingFlag() {
+        let streaming = messages.contains { $0.streaming }
+        if isStreaming != streaming { isStreaming = streaming }
+    }
+
+    private func applyPendingChunks() {
+        let segments = pendingChunks.drain()
+        guard !segments.isEmpty else { return }
+        for segment in segments {
+            appendChunk(role: segment.role, text: segment.text, seq: segment.seq)
+        }
+        refreshStreamingFlag()
+        // One persist per flush, not one per token.
+        schedulePersist()
+    }
+
+    private func appendChunk(role rawRole: String, text: String, seq: UInt64) {
+        let role = ChatRole(rawValue: rawRole) ?? .agent
         if let last = messages.last, last.role == role, last.streaming {
             messages[messages.count - 1].text += text
             messages[messages.count - 1].seq = seq
@@ -1278,6 +1377,25 @@ final class ChatStore {
                 streaming: true,
                 seq: seq
             )
+        )
+    }
+
+    // MARK: - Transcript bound
+
+    /// Keep the newest turns inside the memory budget. Trimming only ever drops
+    /// from the front, so the streaming message and the newest turn survive.
+    private func boundTranscript() {
+        messages = TranscriptBudget.keepingNewest(
+            messages,
+            maxCount: Self.maximumTranscriptMessages,
+            maxBytes: Self.maximumTranscriptBytes,
+            size: { $0.text.utf8.count + $0.id.utf8.count + 64 }
+        )
+        tools = TranscriptBudget.keepingNewest(
+            tools,
+            maxCount: Self.maximumTranscriptTools,
+            maxBytes: Self.maximumTranscriptBytes / 8,
+            size: { $0.id.utf8.count + $0.title.utf8.count + $0.status.utf8.count + 64 }
         )
     }
 

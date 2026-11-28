@@ -55,6 +55,21 @@ enum ChatTranscriptCache {
         }
     }
 
+    /// Serial queue for the debounced writes, so a snapshot encoded earlier can
+    /// never land after a newer one for the same conversation.
+    private static let writeQueue = DispatchQueue(
+        label: "\(HostLog.subsystem).chat-cache",
+        qos: .utility
+    )
+
+    /// Encode and write off the main actor. A long conversation is megabytes of
+    /// text; encoding it and writing it atomically on the main thread dropped
+    /// frames exactly when a turn settled. Navigation paths keep using `save`
+    /// so leaving a conversation is durable before the view goes away.
+    static func saveInBackground(_ snapshot: CachedTranscript) {
+        writeQueue.async { save(snapshot) }
+    }
+
     static func afterSeq(cachedWatermark: UInt64, hostWatermark: UInt64) -> UInt64? {
         if hostWatermark <= cachedWatermark {
             return nil

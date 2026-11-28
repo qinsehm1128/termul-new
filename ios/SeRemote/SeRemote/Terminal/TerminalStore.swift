@@ -44,10 +44,22 @@ final class TerminalStore {
     /// Terminal whose canvas owns `onFeed`. A feed installed for A must not
     /// swallow B's bytes: those wait in `pendingOutput` until B installs.
     private var feedTerminalId: String?
+    /// Which mount installed the current feed. A teardown carries the owner it
+    /// installed under, so a removal that races a newer mount cannot clear the
+    /// live canvas's feed.
+    private var feedOwner: TerminalCanvasOwner?
+    /// Least-recently-touched order for the aggregate pending-output budget.
+    @ObservationIgnored private var pendingTouchSerial = 0
+    @ObservationIgnored private var pendingTouchedAt: [String: Int] = [:]
     /// One terminal's queued output must not grow without bound while its
     /// canvas is away (a tab switch, a cover, a slow remount). Oldest bytes are
     /// dropped first; a reset flag then marks the truncated stream.
     static let pendingOutputLimit = 4 * 1024 * 1024
+    /// Sum of every terminal's backlog. Only one PTY is watched at a time, so a
+    /// stale buffer belongs to a terminal that will be re-watched (and replayed
+    /// from the start) when it is reopened; past this budget the least recently
+    /// touched stale buffers are dropped.
+    static let pendingOutputTotalLimit = 8 * 1024 * 1024
     var errorMessage: String?
     var isConnecting = false
     var isRefreshingScreenObservation = false
@@ -226,6 +238,14 @@ final class TerminalStore {
             self.watchedSeq.removeValue(forKey: terminalId)
             self.lastPushed.removeValue(forKey: terminalId)
             self.pendingWrites.removeValue(forKey: terminalId)
+            self.pendingTouchedAt.removeValue(forKey: terminalId)
+            if self.feedTerminalId == terminalId {
+                // The canvas must not keep receiving a dead stream, and the
+                // store must not keep it alive through the feed closure.
+                self.onFeed = nil
+                self.feedTerminalId = nil
+                self.feedOwner = nil
+            }
             if let viewer = self.viewers[terminalId]?.viewer {
                 viewer.markExited()
             }
@@ -344,6 +364,9 @@ final class TerminalStore {
             let ownedById = Dictionary(uniqueKeysWithValues: terminals.filter(\.owned).map { ($0.id, $0) })
             let previousActive = activeId
             terminals = Self.liveTerminals(from: listed, ownedById: ownedById)
+            // A project switch replaces the catalog; backlogs for shells that
+            // left it are dead weight (reopening re-watches and replays them).
+            prunePendingOutput(listedIDs: Set(terminals.map(\.id)))
             activeId = Self.activeAfterRefresh(previousActive: previousActive, listedIDs: terminals.map(\.id))
             errorMessage = nil
             // A scope change (project switch) followed by an explicit open must
@@ -919,6 +942,47 @@ final class TerminalStore {
             pendingReset.insert(terminalId)
         }
         pendingOutput[terminalId] = buffered
+        pendingTouchSerial &+= 1
+        pendingTouchedAt[terminalId] = pendingTouchSerial
+        enforcePendingOutputBudget()
+    }
+
+    /// Keep the sum of per-terminal backlogs inside one budget. The live feed
+    /// and the watched PTY are never dropped.
+    private func enforcePendingOutputBudget() {
+        let protected = Set([feedTerminalId, watchedId].compactMap { $0 })
+        let order = pendingOutput.keys.sorted {
+            (pendingTouchedAt[$0] ?? 0) < (pendingTouchedAt[$1] ?? 0)
+        }
+        let evicted = TerminalOutputBudget.evictedIDs(
+            buffers: pendingOutput,
+            limit: Self.pendingOutputTotalLimit,
+            protecting: protected,
+            order: order
+        )
+        guard !evicted.isEmpty else { return }
+        for id in evicted {
+            pendingOutput.removeValue(forKey: id)
+            pendingReset.remove(id)
+            pendingTouchedAt.removeValue(forKey: id)
+        }
+        HostLog.session.info("Dropped \(evicted.count, privacy: .public) stale terminal backlogs")
+    }
+
+    /// Backlogs for terminals the host no longer lists. The live feed and the
+    /// watched PTY stay even during a mid-refresh catalog gap.
+    private func prunePendingOutput(listedIDs: Set<String>) {
+        let protected = Set([feedTerminalId, watchedId].compactMap { $0 })
+        let stale = TerminalOutputBudget.staleIDs(
+            buffers: pendingOutput,
+            listed: listedIDs,
+            protecting: protected
+        )
+        for id in stale {
+            pendingOutput.removeValue(forKey: id)
+            pendingReset.remove(id)
+            pendingTouchedAt.removeValue(forKey: id)
+        }
     }
 
     /// Install the mounted canvas for `terminalId` as the destination for its
@@ -926,7 +990,18 @@ final class TerminalStore {
     /// buffered while that canvas did not exist. Splitting the two would let
     /// output that arrives in between land in the buffer and be lost.
     func installFeed(for terminalId: String, _ feed: @escaping @MainActor (Data, Bool) -> Void) {
+        installFeed(for: terminalId, owner: nil, feed)
+    }
+
+    /// Install the mounted canvas's feed and remember which mount owns it.
+    /// `owner` is what lets a SwiftUI teardown release exactly this feed.
+    func installFeed(
+        for terminalId: String,
+        owner: TerminalCanvasOwner?,
+        _ feed: @escaping @MainActor (Data, Bool) -> Void
+    ) {
         feedTerminalId = terminalId
+        feedOwner = owner
         onFeed = { incomingId, data, reset in
             guard incomingId == terminalId else { return }
             feed(data, reset)
@@ -934,6 +1009,16 @@ final class TerminalStore {
         if let buffered = consumeOutput(for: terminalId) {
             feed(buffered.data, buffered.needsReset)
         }
+    }
+
+    /// Release the feed installed by `owner`. A stale teardown (an older mount
+    /// removed after a newer one installed) is a no-op, so it can never cut the
+    /// live canvas off from host output.
+    func uninstallFeed(owner: TerminalCanvasOwner) {
+        guard feedOwner == owner else { return }
+        onFeed = nil
+        feedTerminalId = nil
+        feedOwner = nil
     }
 
     func consumeOutput(for terminalId: String) -> (data: Data, needsReset: Bool)? {

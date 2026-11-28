@@ -38,9 +38,11 @@ struct TerminalWorkbenchMountTests {
         var canvasReplayGrid: TerminalReplayGrid? { nil }
         var canvasLocksToHostCols: Bool { false }
 
-        func installCanvasFeed(_ feed: @escaping @MainActor (Data, Bool) -> Void) {
+        func installCanvasFeed(_ feed: @escaping @MainActor (Data, Bool) -> Void, owner: TerminalCanvasOwner) {
             installs += 1
         }
+
+        func uninstallCanvasFeed(owner: TerminalCanvasOwner) {}
 
         func sendCanvasInput(_ text: String) {}
         func canvasResized(cols: Int, rows: Int) {}

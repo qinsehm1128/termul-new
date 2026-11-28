@@ -179,6 +179,11 @@ struct MessageBubble: View {
 struct MessageBubbleContent: View, Equatable {
     @Environment(\.sePalette) private var palette
     let message: ChatMessage
+    /// Markdown parsed off the main thread, once per text value. Parsing inside
+    /// `body` re-parsed the whole bubble for every streaming token, on the main
+    /// thread: `AttributedString(markdown:)` measures ~1 ms at 1 KB, ~7 ms at
+    /// 12 KB and ~20 ms at 32 KB, so a long reply turned into dropped frames.
+    @State private var attributed: AttributedString?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.message.id == rhs.message.id
@@ -192,6 +197,12 @@ struct MessageBubbleContent: View, Equatable {
     }
 
     var body: some View {
+        content
+            .task(id: message.text) { await updateAttributed() }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         if message.role == .user {
             VStack(alignment: .trailing, spacing: 8) {
                 if let image = message.image, let uiImage = UIImage(data: image.data) {
@@ -203,7 +214,7 @@ struct MessageBubbleContent: View, Equatable {
                         .accessibilityLabel(Text("Desktop screenshot"))
                 }
                 if !message.text.isEmpty {
-                    Text(attributed)
+                    Text(attributed ?? AttributedString(message.text))
                         .font(.system(size: 13))
                         .lineSpacing(3)
                         .foregroundStyle(palette.surface)
@@ -221,7 +232,7 @@ struct MessageBubbleContent: View, Equatable {
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
         } else {
-            Text(attributed)
+            Text(attributed ?? AttributedString(message.text))
                 .font(.system(size: 13))
                 .lineSpacing(4)
                 .foregroundStyle(palette.ink)
@@ -230,12 +241,27 @@ struct MessageBubbleContent: View, Equatable {
         }
     }
 
-    private var attributed: AttributedString {
+    private func updateAttributed() async {
+        // While streaming, wait one frame budget so a burst of chunks produces
+        // one parse; the next text change cancels this task and starts over.
+        if message.streaming {
+            try? await Task.sleep(for: .milliseconds(60))
+            guard !Task.isCancelled else { return }
+        }
+        let text = message.text
+        let parsed = await Task.detached(priority: .userInitiated) {
+            Self.markdown(text)
+        }.value
+        guard !Task.isCancelled else { return }
+        attributed = parsed
+    }
+
+    nonisolated private static func markdown(_ text: String) -> AttributedString {
         var options = AttributedString.MarkdownParsingOptions()
         options.interpretedSyntax = .full
         options.failurePolicy = .returnPartiallyParsedIfPossible
-        return (try? AttributedString(markdown: message.text, options: options))
-            ?? AttributedString(message.text)
+        return (try? AttributedString(markdown: text, options: options))
+            ?? AttributedString(text)
     }
 }
 

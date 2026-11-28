@@ -54,7 +54,7 @@ struct ChatView: View {
             connected: session.acp.state == .connected,
             permissions: session.chat.permissions.count,
             questions: session.chat.questions.count,
-            streaming: session.chat.messages.contains(where: \.streaming)
+            streaming: session.chat.isStreaming
         )
     }
 

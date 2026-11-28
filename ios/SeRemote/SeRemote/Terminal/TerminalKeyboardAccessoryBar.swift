@@ -203,6 +203,9 @@ struct TerminalKeyButton: View {
         .accessibilityHint(Text(accessibilityHint ?? ""))
         .terminalAccessibilityIdentifier(accessibilityIdentifier)
         .accessibilityAddTraits(isActive ? .isSelected : [])
+        // A press that never reports its release (the keyboard row is removed
+        // mid-hold) must not leave a 70 ms repeat loop running forever.
+        .onDisappear { stopRepeat() }
     }
 
     private func startRepeat() {

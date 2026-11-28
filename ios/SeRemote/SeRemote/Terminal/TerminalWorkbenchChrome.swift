@@ -770,6 +770,9 @@ private struct TerminalFloatingRepeatButton: View {
         })
         .accessibilityLabel(Text(accessibilityLabel))
         .accessibilityIdentifier(accessibilityIdentifier)
+        // The press-release callback is lost when the chrome is removed while
+        // held; without this the 110 ms repeat loop never ends.
+        .onDisappear { stopRepeat() }
     }
 
     private func startRepeat() {

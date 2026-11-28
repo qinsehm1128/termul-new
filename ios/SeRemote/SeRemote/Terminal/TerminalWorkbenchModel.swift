@@ -487,8 +487,17 @@ protocol TerminalSurfaceCanvasHost: AnyObject {
     var canvasLocksToHostCols: Bool { get }
     /// `feed(data, needsReset)`: `needsReset` is true when the buffered stream
     /// starts mid-sequence (a gapped host replay) and the canvas must reset
-    /// the emulator before painting it.
-    func installCanvasFeed(_ feed: @escaping @MainActor (Data, Bool) -> Void)
+    /// the emulator before painting it. `owner` identifies the exact mount.
+    func installCanvasFeed(_ feed: @escaping @MainActor (Data, Bool) -> Void, owner: TerminalCanvasOwner)
+    /// SwiftUI dismantled the canvas that installed its feed under `owner`. The
+    /// surface must stop routing bytes into it and stop retaining it.
+    func uninstallCanvasFeed(owner: TerminalCanvasOwner)
     func sendCanvasInput(_ text: String)
     func canvasResized(cols: Int, rows: Int)
+}
+
+extension TerminalSurfaceCanvasHost {
+    /// Backends that never install a feed (test doubles) have nothing to
+    /// release.
+    func uninstallCanvasFeed(owner: TerminalCanvasOwner) {}
 }

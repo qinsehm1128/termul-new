@@ -274,8 +274,11 @@ struct TerminalWorkbenchScreen: View {
                 onResize: { cols, rows in
                     host.canvasResized(cols: cols, rows: rows)
                 },
-                onReady: { feed in
-                    host.installCanvasFeed(feed)
+                onReady: { owner, feed in
+                    host.installCanvasFeed(feed, owner: owner)
+                },
+                onTeardown: { owner in
+                    host.uninstallCanvasFeed(owner: owner)
                 },
                 onTextScaleChange: { scale, settled in
                     textScale = scale

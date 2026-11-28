@@ -38,6 +38,13 @@ nonisolated enum TerminalsHubPresentation {
 
     static var otherGroupName: String { String(localized: "Other") }
 
+    /// Whether the 15 s hub poll may spend a host request. A backgrounded app
+    /// has no visible hub and iOS suspends the socket anyway, so a tick there
+    /// only queues work for the resume; an offline session has nothing to list.
+    static func shouldPoll(isConnected: Bool, isBackgrounded: Bool) -> Bool {
+        isConnected && !isBackgrounded
+    }
+
     /// Map a host summary. `title` is the host's cwd-basename (or shell)
     /// fallback; when an older host omits it, the cwd tail is used instead.
     static func terminal(

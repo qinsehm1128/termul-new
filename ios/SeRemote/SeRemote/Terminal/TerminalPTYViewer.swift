@@ -46,6 +46,8 @@ final class TerminalPTYViewer {
     /// The backlog starts mid-stream; the canvas must reset before it.
     @ObservationIgnored private var backlogNeedsReset = false
     @ObservationIgnored private var feed: (@MainActor (Data, Bool) -> Void)?
+    /// Mount that installed `feed`, so only its own teardown can release it.
+    @ObservationIgnored private var feedOwner: TerminalCanvasOwner?
     @ObservationIgnored private var refitTask: Task<Void, Never>?
     @ObservationIgnored private var pendingSend = ""
     @ObservationIgnored private var isDrainingSend = false
@@ -173,14 +175,30 @@ final class TerminalPTYViewer {
     /// with the backlog so the canvas can clear before painting a gapped
     /// replay; if the reset arrived without bytes it is still delivered.
     func install(_ feed: @escaping @MainActor (Data, Bool) -> Void) {
+        install(feed, owner: nil)
+    }
+
+    func install(
+        _ feed: @escaping @MainActor (Data, Bool) -> Void,
+        owner: TerminalCanvasOwner?
+    ) {
         guard !isClosed, !hasExited else { return }
         self.feed = feed
+        feedOwner = owner
         let needsReset = backlogNeedsReset
         backlogNeedsReset = false
         let pending = backlog
         backlog.removeAll(keepingCapacity: false)
         if pending.isEmpty && !needsReset { return }
         feed(pending, needsReset)
+    }
+
+    /// The canvas that owned this feed was dismantled. A stale teardown (an
+    /// older mount removed after a newer one installed) is a no-op.
+    func uninstall(owner: TerminalCanvasOwner) {
+        guard feedOwner == owner else { return }
+        feed = nil
+        feedOwner = nil
     }
 
     func send(_ text: String) {
@@ -281,6 +299,7 @@ final class TerminalPTYViewer {
     func markExited() {
         hasExited = true
         feed = nil
+        feedOwner = nil
         pendingSend.removeAll(keepingCapacity: false)
         refitTask?.cancel()
         refitTask = nil
@@ -295,6 +314,7 @@ final class TerminalPTYViewer {
         refitTask?.cancel()
         refitTask = nil
         feed = nil
+        feedOwner = nil
         backlog.removeAll(keepingCapacity: false)
         guard isAttached, !hasExited else { return }
         if !locksToHostCols {

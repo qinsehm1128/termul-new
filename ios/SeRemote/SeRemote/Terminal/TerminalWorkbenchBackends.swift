@@ -79,9 +79,15 @@ final class WorkspaceTerminalBackend: TerminalSurfaceBackend, TerminalSurfaceCan
     /// and replay whatever the store buffered while no feed for this terminal
     /// existed, in one synchronous step. A feed installed for the previous tab
     /// cannot swallow this terminal's bytes: the store buffers by id.
-    func installCanvasFeed(_ feed: @escaping @MainActor (Data, Bool) -> Void) {
+    func installCanvasFeed(_ feed: @escaping @MainActor (Data, Bool) -> Void, owner: TerminalCanvasOwner) {
         guard let id = session.terminals.activeId else { return }
-        session.terminals.installFeed(for: id, feed)
+        session.terminals.installFeed(for: id, owner: owner, feed)
+    }
+
+    /// The canvas that owned this feed is gone. This never touches the watch or
+    /// the PTY: output waits in the store until a canvas mounts again.
+    func uninstallCanvasFeed(owner: TerminalCanvasOwner) {
+        session.terminals.uninstallFeed(owner: owner)
     }
 
     func sendCanvasInput(_ text: String) {
@@ -183,8 +189,12 @@ final class StandaloneTerminalBackend: TerminalSurfaceBackend, TerminalSurfaceCa
 
     var canvasLocksToHostCols: Bool { viewer?.locksToHostCols ?? false }
 
-    func installCanvasFeed(_ feed: @escaping @MainActor (Data, Bool) -> Void) {
-        viewer?.install(feed)
+    func installCanvasFeed(_ feed: @escaping @MainActor (Data, Bool) -> Void, owner: TerminalCanvasOwner) {
+        viewer?.install(feed, owner: owner)
+    }
+
+    func uninstallCanvasFeed(owner: TerminalCanvasOwner) {
+        viewer?.uninstall(owner: owner)
     }
 
     func sendCanvasInput(_ text: String) {

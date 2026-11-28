@@ -111,3 +111,17 @@ nonisolated struct TerminalRoute: Equatable, Sendable {
     let hostID: String?
     let terminalID: String
 }
+
+/// Identity of one mounted terminal canvas.
+///
+/// The store keeps the owner of the feed it installed so a SwiftUI teardown can
+/// release exactly that mount's feed. A teardown that races a newer mount
+/// carries the older owner and is ignored, instead of silently cutting the live
+/// canvas off from host output.
+nonisolated struct TerminalCanvasOwner: Equatable, Hashable, Sendable {
+    private let id: ObjectIdentifier
+
+    init(_ object: AnyObject) {
+        id = ObjectIdentifier(object)
+    }
+}

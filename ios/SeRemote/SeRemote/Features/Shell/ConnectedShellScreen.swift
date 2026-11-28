@@ -85,9 +85,7 @@ struct ConnectedShellScreen: View {
             session.conversations.conversations,
             activeConversationID: session.workspace == .conversation ? session.conversations.active?.id : nil,
             agent: session.chat.activeAgentId,
-            isRunning: LivePresentation.isRunning(isSending: session.chat.isSending,
-                                                  messages: session.chat.messages,
-                                                  tools: session.chat.tools),
+            isRunning: session.chat.isAgentWorking,
             needsAttention: !needs.isEmpty
         )
     }
@@ -979,13 +977,18 @@ struct ConnectedShellScreen: View {
     }
 
     /// 15 s cadence for the rail and T1; the first tick is skipped because the
-    /// bootstrap already refreshed. Cancelled with the shell.
+    /// bootstrap already refreshed. Cancelled with the shell. A backgrounded or
+    /// offline session never spends a tick on a request the hub cannot show.
     private func startHubPolling() {
         hubRefreshTask?.cancel()
         hubRefreshTask = Task { @MainActor in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(15))
                 guard !Task.isCancelled else { return }
+                guard TerminalsHubPresentation.shouldPoll(
+                    isConnected: session.phase == .connected,
+                    isBackgrounded: session.isBackgrounded
+                ) else { continue }
                 await refreshHub()
             }
         }
@@ -996,7 +999,10 @@ struct ConnectedShellScreen: View {
     /// project groups, and a shell spawned on the host or by `open` must be
     /// picked up by the same poll (and by the manual refresh button).
     private func refreshHub() async {
-        guard session.phase == .connected else { return }
+        // A manual refresh, a poll tick and a deep-link route can overlap; one
+        // in-flight list already owns the result, and a second would double the
+        // host traffic for the same fifteen seconds.
+        guard session.phase == .connected, !refreshingHub else { return }
         refreshingHub = true
         await session.quickTerminals.refresh()
         await hub.refresh(projects: session.projects.projects)

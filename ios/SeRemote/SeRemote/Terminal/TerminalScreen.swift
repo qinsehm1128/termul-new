@@ -16,7 +16,13 @@ struct TerminalScreen: UIViewRepresentable {
     var textScale: CGFloat
     var onSend: (String) -> Void
     var onResize: (Int, Int) -> Void
-    var onReady: (@escaping @MainActor (Data, Bool) -> Void) -> Void
+    /// Installs the store's feed for this canvas. The owner identifies this
+    /// exact mount, so a teardown that races a newer mount can never clear the
+    /// newer feed.
+    var onReady: (@MainActor (TerminalCanvasOwner, @escaping @MainActor (Data, Bool) -> Void) -> Void)
+    /// Called when SwiftUI dismantles this canvas: the store must stop routing
+    /// host output into a view that no longer exists.
+    var onTeardown: (@MainActor (TerminalCanvasOwner) -> Void)? = nil
     var onTextScaleChange: (CGFloat, Bool) -> Void
     var focusToken: UInt64 = 0
     var blurToken: UInt64 = 0
@@ -54,6 +60,7 @@ struct TerminalScreen: UIViewRepresentable {
         }
         context.coordinator.attach(view)
         context.coordinator.replayGrid = replayGrid
+        context.coordinator.onTeardown = onTeardown
         // Buffered output is not replayed here: `onReady` installs the feed and
         // drains the backlog in the same synchronous step, so no byte can fall
         // between the snapshot this struct captured and the installed feed.
@@ -61,10 +68,24 @@ struct TerminalScreen: UIViewRepresentable {
         // own grid: this view was created at a zero size, so SwiftTerm still
         // owns its 80x25 startup grid, and a takeover replay painted there
         // outlives the shrink inside the alternate buffer.
-        onReady { data, reset in
+        onReady(TerminalCanvasOwner(context.coordinator)) { data, reset in
             context.coordinator.receive(data, reset: reset, into: view)
         }
         return view
+    }
+
+    /// SwiftUI removed this canvas. Drop the bytes held for a layout pass, the
+    /// keyboard accessory enclosure and the feed itself: an unmounted emulator
+    /// must not keep receiving host output, and the store must not retain it
+    /// through the feed closure.
+    static func dismantleUIView(_ uiView: PhoneTerminalView, coordinator: Coordinator) {
+        uiView.terminalDelegate = nil
+        uiView.onSendRawInput = nil
+        uiView.onTextScaleChange = nil
+        uiView.cancelMomentumScroll()
+        coordinator.teardown()
+        coordinator.onTeardown?(TerminalCanvasOwner(coordinator))
+        coordinator.onTeardown = nil
     }
 
     /// SwiftTerm paints its own opaque surface (black / grey by default), so the
@@ -150,6 +171,9 @@ struct TerminalScreen: UIViewRepresentable {
         var lastScrollToken: UInt64 = 0
         private var lastScrolledBack: Bool?
         var appliedThemeMode: SeThemeMode?
+        /// Set by `makeUIView`; the static dismantle hook has only the
+        /// coordinator, not the representable struct.
+        var onTeardown: (@MainActor (TerminalCanvasOwner) -> Void)?
         private var lastCols = 0
         private var lastRows = 0
         /// Grid the host replay was authored at, supplied by the surface.
@@ -194,6 +218,15 @@ struct TerminalScreen: UIViewRepresentable {
             // that report is the only thing that arms the takeover push.
             lastCols = 0
             lastRows = 0
+        }
+
+        /// Release everything this canvas held for a replay that will now never
+        /// be painted, and the accessory hosting controller.
+        func teardown() {
+            pendingFeed = Data()
+            pendingFeedNeedsReset = false
+            didApplyReplay = false
+            accessoryHost = nil
         }
 
         /// Host output for this canvas. Everything before the canvas owns a
@@ -571,7 +604,7 @@ final class PhoneTerminalView: TerminalView {
         tuiScrollGesture = pan
     }
 
-    private func cancelMomentumScroll() {
+    func cancelMomentumScroll() {
         momentumTask?.cancel()
         momentumTask = nil
     }
